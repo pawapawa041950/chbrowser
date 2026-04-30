@@ -25,20 +25,51 @@ namespace ChBrowser.Services.Shortcuts;
 public sealed class ShortcutManager
 {
     private readonly Window _mainWindow;
+    private Window? _viewerWindow;
+    private ShortcutSettings? _lastSettings;
     private readonly Dictionary<string, Action<object?>> _handlers;
-    private readonly List<KeyBinding> _appliedKeyBindings = new();
-    // マウス操作 / ジェスチャーは (発生位置のペインカテゴリ, 操作/ジェスチャー文字列) → action Id でスコープ。
-    // 例: ("スレ一覧のタブ領域", "ホイールアップ") → "thread_list.prev_tab"、
-    //     ("スレッドタブ表示領域", "ホイールアップ") → "thread.prev_tab"
-    // のように同じ操作文字列を別カテゴリに同時割当できる。発生位置 (= 開始位置) で振り分けるため、
-    // 「タブ A がアクティブの状態でタブ B 上でホイール」のような操作も B が属するカテゴリで dispatch される。
-    private readonly Dictionary<string, Dictionary<string, string>> _mouseByCategory   = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Dictionary<string, string>> _gestureByCategory = new(StringComparer.Ordinal);
+    // KeyBinding は Window 単位に登録し再 Apply 時にクリーンアップする。
+    // ビューアウィンドウ用の KeyBinding は viewer 専用 Window へ、それ以外は MainWindow へ登録する。
+    private readonly Dictionary<Window, List<KeyBinding>> _appliedKeyBindingsByWindow = new();
+
+    // (発生位置のペインカテゴリ, 入力 descriptor) → action Id の統一マップ。
+    // descriptor はキーボード ("Ctrl+L") / マウス操作 ("Ctrl+左クリック" / "ダブルクリック" / "ホイールアップ" /
+    // "右クリック+中ボタン" 等) / ジェスチャー ("↓→") の各種文字列を区別なく格納する。
+    // フォーマットが互いに重複しない (キーは英数主体、マウスは Japanese 名+「+」、ジェスチャーは Unicode 矢印) ため、
+    // 1 つの dictionary で Webview ↔ WPF / キーボード ↔ マウス ↔ ジェスチャー を共通にディスパッチできる。
+    private readonly Dictionary<string, Dictionary<string, string>> _inputsByCategory = new(StringComparer.Ordinal);
+
+    /// <summary>Apply() 完了時に呼ばれる callback (Phase 16+)。
+    /// 各カテゴリ (= ペイン) ごとの「ユーザが bind 済の descriptor → action Id マップ」を配信し、
+    /// WebView2 内 JS ブリッジ等が「どの入力を suppress / dispatch するか」を判定するために使う。
+    /// gesture descriptor も含める。</summary>
+    public Action<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>>? OnBindingsApplied { get; set; }
+
+    /// <summary>ジェスチャー進捗通知 (Phase 16+)。
+    /// (category, gesture) — 入力中なら category と現在の方向列、終了なら (null, null)。
+    /// WPF の <see cref="GestureRecognizer"/> および各 WebView の JS ブリッジ両方からこれが呼ばれる。
+    /// MainViewModel.GestureStatus を更新してステータスバーに表示する用途で使う。</summary>
+    public Action<string?, string?>? OnGestureProgress { get; set; }
+
+    /// <summary>外部 (WPF GestureRecognizer / WebView WebMessageReceived) から呼ばれる、進捗の中継。</summary>
+    public void NotifyGestureProgress(string? category, string? gesture)
+        => OnGestureProgress?.Invoke(category, gesture);
+
+    /// <summary>指定カテゴリの descriptor → actionId マップを返す (Phase 16)。
+    /// WebView 内 JS ブリッジが bridgeReady で C# に「初期化完了」を通知してきたとき、
+    /// 該当 WebView だけに direct push し直すために使う。</summary>
+    public IReadOnlyDictionary<string, string> GetBindingsForCategory(string category)
+    {
+        if (_inputsByCategory.TryGetValue(category, out var inner))
+            return inner;
+        return new Dictionary<string, string>(StringComparer.Ordinal);
+    }
 
     public ShortcutManager(Window mainWindow, Dictionary<string, Action<object?>> handlers)
     {
         _mainWindow = mainWindow;
         _handlers   = handlers;
+        _appliedKeyBindingsByWindow[mainWindow] = new();
 
         // マウス操作はバインドが空のときも一度だけ subscribe (= 再 Apply で着脱しない、ディスパッチ時に dictionary lookup)。
         // PreviewMouseDown は左右中すべてのボタン押下、PreviewMouseUp は右ボタンのチョード状態解除、
@@ -48,15 +79,35 @@ public sealed class ShortcutManager
         _mainWindow.PreviewMouseWheel += OnPreviewMouseWheel;
     }
 
+    /// <summary>ビューアウィンドウ (= 別 Window) を ShortcutManager に登録 (Phase 16+)。
+    /// "ビューアウィンドウ" カテゴリの KeyBinding がここへ登録される。
+    /// マウス系は viewer の WebView 内 JS bridge → WebMessageReceived 経由で dispatch するため、
+    /// ここでは event subscribe しない。viewer ウィンドウの chrome 上のマウス操作はサポートしない。</summary>
+    public void AttachViewerWindow(Window viewerWindow)
+    {
+        if (ReferenceEquals(_viewerWindow, viewerWindow)) return;
+        _viewerWindow = viewerWindow;
+        if (!_appliedKeyBindingsByWindow.ContainsKey(viewerWindow))
+            _appliedKeyBindingsByWindow[viewerWindow] = new();
+        // 既に Apply 済なら viewer 用 KeyBinding を再生成
+        if (_lastSettings is not null) Apply(_lastSettings);
+    }
+
+    private Window? GetWindowForCategory(string category)
+        => category == "ビューアウィンドウ" ? _viewerWindow : _mainWindow;
+
     /// <summary>設定を反映: 古い <see cref="KeyBinding"/> を削除して、現在の bindings を新たに登録。
     /// マウス / ジェスチャーマップも再構築する。</summary>
     public void Apply(ShortcutSettings settings)
     {
-        foreach (var kb in _appliedKeyBindings)
-            _mainWindow.InputBindings.Remove(kb);
-        _appliedKeyBindings.Clear();
-        _mouseByCategory.Clear();
-        _gestureByCategory.Clear();
+        _lastSettings = settings;
+        // 全ウィンドウから既存 KeyBinding を撤去
+        foreach (var (window, kbs) in _appliedKeyBindingsByWindow)
+        {
+            foreach (var kb in kbs) window.InputBindings.Remove(kb);
+            kbs.Clear();
+        }
+        _inputsByCategory.Clear();
 
         foreach (var action in ShortcutRegistry.Actions)
         {
@@ -66,29 +117,47 @@ public sealed class ShortcutManager
 
             if (!string.IsNullOrEmpty(shortcut) && TryParseShortcut(shortcut, out var key, out var mods))
             {
-                // ショートカット (キーボード) はマウス source 無し。null を渡すとハンドラ側で SelectedTab フォールバック。
-                var kb = new KeyBinding { Key = key, Modifiers = mods, Command = new RelayCommand(() => handler(null)) };
-                _mainWindow.InputBindings.Add(kb);
-                _appliedKeyBindings.Add(kb);
-            }
-            if (!string.IsNullOrEmpty(mouse))
-            {
-                if (!_mouseByCategory.TryGetValue(action.Category, out var mInner))
+                var targetWindow = GetWindowForCategory(action.Category);
+                if (targetWindow is not null)
                 {
-                    mInner = new Dictionary<string, string>(StringComparer.Ordinal);
-                    _mouseByCategory[action.Category] = mInner;
+                    if (!_appliedKeyBindingsByWindow.TryGetValue(targetWindow, out var kbs))
+                    {
+                        kbs = new List<KeyBinding>();
+                        _appliedKeyBindingsByWindow[targetWindow] = kbs;
+                    }
+                    var kb = new KeyBinding { Key = key, Modifiers = mods, Command = new RelayCommand(() => handler(null)) };
+                    targetWindow.InputBindings.Add(kb);
+                    kbs.Add(kb);
                 }
-                mInner[mouse] = action.Id;
             }
-            if (!string.IsNullOrEmpty(gesture))
+
+            // descriptor 系 (shortcut/mouse/gesture) は全て同じ category 内に格納。
+            // shortcut もここに入れる理由: WebView 内 JS ブリッジから keyboard descriptor を Dispatch する経路で同じマップを使うため。
+            void AddTo(string descriptor)
             {
-                if (!_gestureByCategory.TryGetValue(action.Category, out var gInner))
+                if (string.IsNullOrEmpty(descriptor)) return;
+                if (!_inputsByCategory.TryGetValue(action.Category, out var inner))
                 {
-                    gInner = new Dictionary<string, string>(StringComparer.Ordinal);
-                    _gestureByCategory[action.Category] = gInner;
+                    inner = new Dictionary<string, string>(StringComparer.Ordinal);
+                    _inputsByCategory[action.Category] = inner;
                 }
-                gInner[gesture] = action.Id;
+                inner[descriptor] = action.Id;
             }
+            AddTo(shortcut);
+            AddTo(mouse);
+            AddTo(gesture);
+        }
+
+        // JS ブリッジ等の購読者へバインディング一覧を push (descriptor → actionId のマップで配信)。
+        // JS 側はこのマップで「入力の descriptor → どの actionId か」を解決し、
+        // local handler が定義されている actionId なら C# 経由せず処理 (= scroll 等)、
+        // それ以外は C# に shortcut/gesture メッセージを送信する。
+        if (OnBindingsApplied is { } cb)
+        {
+            var snapshot = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+            foreach (var (cat, inner) in _inputsByCategory)
+                snapshot[cat] = new Dictionary<string, string>(inner, StringComparer.Ordinal);
+            cb(snapshot);
         }
     }
 
@@ -97,7 +166,13 @@ public sealed class ShortcutManager
     /// <paramref name="source"/> は開始時の <c>e.OriginalSource</c> (= 開始位置にあったタブを解決するため)。
     /// 開始ペインに該当バインドが無ければ何もしない (= グローバルフォールバックは無し)。</summary>
     public bool DispatchGesture(string startCategory, string gesture, object? source)
-        => DispatchScoped(_gestureByCategory, startCategory, gesture, source);
+        => DispatchScoped(_inputsByCategory, startCategory, gesture, source);
+
+    /// <summary>WebView 内 JS ブリッジから呼ばれる汎用ディスパッチ。
+    /// descriptor は キーボード ("Ctrl+L") / マウス ("Ctrl+左クリック" 等) / ジェスチャー ("↓→") いずれの形式でも OK。
+    /// 該当 category にバインドが無ければ false。source は WebView 由来なので null 固定 (= タブ解決はせず SelectedTab フォールバック)。</summary>
+    public bool Dispatch(string category, string descriptor)
+        => DispatchScoped(_inputsByCategory, category, descriptor, source: null);
 
     private bool DispatchScoped(Dictionary<string, Dictionary<string, string>> byCategory, string category, string key, object? source)
     {
@@ -131,10 +206,12 @@ public sealed class ShortcutManager
 
         var category = CategoryResolver.Resolve(e.OriginalSource as DependencyObject);
 
-        // 右ホールド中 + 中ボタン → チョード
-        if (_rightHeld && btn == MouseButton.Middle)
+        // 右ボタン押下中の検出: 自分が観測した down 以外に、現在の Mouse.RightButton 状態も見る。
+        // WebView 内で右下げ → タブストリップで中クリック、のような境界跨ぎでも成立するように。
+        var rightActive = _rightHeld || Mouse.RightButton == MouseButtonState.Pressed;
+        if (rightActive && btn == MouseButton.Middle)
         {
-            if (DispatchScoped(_mouseByCategory, category, "右クリック+中ボタン", e.OriginalSource)) { e.Handled = true; return; }
+            if (DispatchScoped(_inputsByCategory, category, "右クリック+中ボタン", e.OriginalSource)) { e.Handled = true; return; }
             // 未割当ならフォールスルー (= 通常の中クリック処理を試す)
         }
 
@@ -152,7 +229,7 @@ public sealed class ShortcutManager
         if (name is null) return;
 
         var key = BuildModifiedKey(Keyboard.Modifiers, name);
-        if (DispatchScoped(_mouseByCategory, category, key, e.OriginalSource)) e.Handled = true;
+        if (DispatchScoped(_inputsByCategory, category, key, e.OriginalSource)) e.Handled = true;
     }
 
     private void OnPreviewMouseUp(object sender, MouseButtonEventArgs e)
@@ -169,13 +246,15 @@ public sealed class ShortcutManager
         var dir = e.Delta > 0 ? "ホイールアップ" : "ホイールダウン";
         var category = CategoryResolver.Resolve(e.OriginalSource as DependencyObject);
 
-        if (_rightHeld)
+        // 右ボタン押下中の検出は OnPreviewMouseDown と同じ補強。
+        var rightActive = _rightHeld || Mouse.RightButton == MouseButtonState.Pressed;
+        if (rightActive)
         {
-            if (DispatchScoped(_mouseByCategory, category, "右クリック+" + dir, e.OriginalSource)) { e.Handled = true; return; }
+            if (DispatchScoped(_inputsByCategory, category, "右クリック+" + dir, e.OriginalSource)) { e.Handled = true; return; }
         }
 
         var key = BuildModifiedKey(Keyboard.Modifiers, dir);
-        if (DispatchScoped(_mouseByCategory, category, key, e.OriginalSource)) e.Handled = true;
+        if (DispatchScoped(_inputsByCategory, category, key, e.OriginalSource)) e.Handled = true;
     }
 
     /// <summary>"Ctrl+Alt+Shift+左クリック" 等の文字列を組み立てる。修飾キー部分は <see cref="ShortcutEditDialog"/> /

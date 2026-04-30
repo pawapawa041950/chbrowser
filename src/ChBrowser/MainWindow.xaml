@@ -196,6 +196,13 @@
                 <TextBlock x:Name="StatusThreadSize" Text="-- KB" />
             </StatusBarItem>
             <Separator />
+            <!-- マウスジェスチャー入力中のリアルタイム表示 (Phase 16+)。空文字なら何も出ない。 -->
+            <StatusBarItem>
+                <TextBlock Text="{Binding GestureStatus}"
+                           Foreground="#1E88E5"
+                           FontWeight="SemiBold" />
+            </StatusBarItem>
+            <Separator />
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Text="{Binding DonguriStatus}" ToolTip="acorn (どんぐり) Cookie の経過時間と推定 Lv (5 分で 1 上昇 / 約 3 時間で失効)" />
             </StatusBarItem>
@@ -238,6 +245,7 @@
                     <wv2:WebView2 x:Name="FavoritesWebView"
                                   ctrl:WebView2Helper.Html="{Binding FavoritesHtml}"
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding FavoritesConfigJson}"
+                                  ctrl:WebView2Helper.PaneShortcutsJson="{Binding FavoritesShortcutsJson}"
                                   WebMessageReceived="FavoritesWebView_WebMessageReceived" />
                 </DockPanel>
 
@@ -260,6 +268,7 @@
                     <wv2:WebView2 x:Name="BoardListWebView"
                                   ctrl:WebView2Helper.Html="{Binding BoardListHtml}"
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding BoardListConfigJson}"
+                                  ctrl:WebView2Helper.PaneShortcutsJson="{Binding BoardListShortcutsJson}"
                                   WebMessageReceived="BoardListWebView_WebMessageReceived" />
                 </DockPanel>
             </Grid>
@@ -278,49 +287,72 @@
                     <RowDefinition x:Name="RowThreadView" Height="*"   MinHeight="200" />
                 </Grid.RowDefinitions>
 
-                <!-- 右上: スレ一覧タブ (1 タブ = 1 板) -->
-                <TabControl Grid.Row="0"
-                            x:Name="ThreadListPane"
-                            ItemsSource="{Binding ThreadListTabs}"
-                            SelectedItem="{Binding SelectedThreadListTab}"
-                            BorderThickness="0"
-                            GotKeyboardFocus="ThreadListPane_GotKeyboardFocus"
-                            PreviewMouseLeftButtonDown="ThreadListPane_PreviewMouseLeftButtonDown">
-                    <TabControl.ItemContainerStyle>
-                        <!-- Phase 11c: タブ動作 (中クリック / 装飾付き左クリック / 左ダブルクリック) を捕捉。
-                             子要素の Button (×) クリックは code-behind で除外する。 -->
-                        <Style TargetType="TabItem">
-                            <EventSetter Event="PreviewMouseDown"  Handler="ThreadListTabItem_PreviewMouseDown" />
-                            <EventSetter Event="MouseDoubleClick"  Handler="ThreadListTabItem_MouseDoubleClick" />
-                        </Style>
-                    </TabControl.ItemContainerStyle>
-                    <TabControl.ItemTemplate>
-                        <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right"
-                                        Content="×"
-                                        Command="{Binding CloseCommand}"
-                                        Width="16" Height="16"
-                                        Margin="6,0,0,0"
-                                        Padding="0"
-                                        FontSize="10"
-                                        Background="Transparent"
-                                        BorderThickness="0"
-                                        Cursor="Hand"
-                                        ToolTip="閉じる" />
-                                <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
-                            </DockPanel>
-                        </DataTemplate>
-                    </TabControl.ItemTemplate>
-                    <TabControl.ContentTemplate>
-                        <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
-                            <wv2:WebView2 ctrl:WebView2Helper.Html="{Binding Html}"
-                                          ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
-                                          ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=Window}}"
-                                          WebMessageReceived="ThreadListWebView_WebMessageReceived" />
-                        </DataTemplate>
-                    </TabControl.ContentTemplate>
-                </TabControl>
+                <!-- 右上: スレ一覧タブ。Phase 16+ で「全 WebView を ItemsControl で並列保持し Visibility 切替」構成に変更。
+                     旧 ContentTemplate 構成だとタブ切替で WebView が再生成されホワイトフラッシュが出るため、
+                     スレッド表示と同じ瞬時切替パターンに統一。 -->
+                <Grid Grid.Row="0" x:Name="ThreadListPane"
+                      GotKeyboardFocus="ThreadListPane_GotKeyboardFocus"
+                      PreviewMouseLeftButtonDown="ThreadListPane_PreviewMouseLeftButtonDown">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TabControl Grid.Row="0"
+                                ItemsSource="{Binding ThreadListTabs}"
+                                SelectedItem="{Binding SelectedThreadListTab}"
+                                BorderThickness="0">
+                        <TabControl.Template>
+                            <ControlTemplate TargetType="TabControl">
+                                <TabPanel IsItemsHost="True"
+                                          Background="{x:Static SystemColors.ControlBrush}" />
+                            </ControlTemplate>
+                        </TabControl.Template>
+                        <TabControl.ItemContainerStyle>
+                            <!-- Phase 11c: タブ動作 -->
+                            <Style TargetType="TabItem">
+                                <EventSetter Event="PreviewMouseDown"  Handler="ThreadListTabItem_PreviewMouseDown" />
+                                <EventSetter Event="MouseDoubleClick"  Handler="ThreadListTabItem_MouseDoubleClick" />
+                            </Style>
+                        </TabControl.ItemContainerStyle>
+                        <TabControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right"
+                                            Content="×"
+                                            Command="{Binding CloseCommand}"
+                                            Width="16" Height="16"
+                                            Margin="6,0,0,0"
+                                            Padding="0"
+                                            FontSize="10"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Cursor="Hand"
+                                            ToolTip="閉じる" />
+                                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+                                </DockPanel>
+                            </DataTemplate>
+                        </TabControl.ItemTemplate>
+                    </TabControl>
+
+                    <ItemsControl Grid.Row="1" ItemsSource="{Binding ThreadListTabs}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <Grid />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
+                                <wv2:WebView2 ctrl:WebView2Helper.Html="{Binding Html}"
+                                              ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
+                                              ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              WebMessageReceived="ThreadListWebView_WebMessageReceived"
+                                              Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
 
                 <GridSplitter Grid.Row="1"
                               HorizontalAlignment="Stretch"
@@ -588,6 +620,7 @@
                                 <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
                                               ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
                                               ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=Window}}"
                                               WebMessageReceived="ThreadViewWebView_WebMessageReceived"
                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
                             </DataTemplate>

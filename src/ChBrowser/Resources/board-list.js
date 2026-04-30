@@ -6,11 +6,17 @@
 //   { type: 'openBoard', host, directoryName, name }       — 板クリック or ダブルクリック (設定による)
 //   { type: 'setCategoryExpanded', categoryName, expanded } — カテゴリの開閉トグル
 //   { type: 'contextMenu', target: 'board', host, directoryName, name } — 板右クリック
+//   { type: 'shortcut'|'gesture', descriptor }              — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
 //   { type: 'setConfig', openOnSingleClick: bool }         — Phase 11b: クリック動作の設定
+//   { type: 'setShortcutBindings', bindings: {...} }        — Phase 16
 
 (function () {
     'use strict';
+
+    // Phase 16: ショートカット / マウス操作 / マウスジェスチャーブリッジを初期化。
+    // 左ペインなのでアドレスバー連動は不要 → paneActivated は送らない。
+    var Shortcut = window.createShortcutBridge({ localActions: {}, sendPaneActivated: false });
 
     var root = document.getElementById('board-list');
     if (!root) return;
@@ -52,14 +58,17 @@
         if (!openOnSingleClick) openLi(li);
     });
 
-    // C# からの setConfig 受信 (Phase 11b)
+    // C# からの setConfig / setShortcutBindings 受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             var msg = e.data;
-            if (!msg || msg.type !== 'setConfig') return;
-            if (typeof msg.openOnSingleClick === 'boolean') {
-                openOnSingleClick = msg.openOnSingleClick;
+            if (!msg || !msg.type) return;
+            if (msg.type === 'setConfig') {
+                if (typeof msg.openOnSingleClick === 'boolean') {
+                    openOnSingleClick = msg.openOnSingleClick;
+                }
             }
+            // setShortcutBindings は shortcut-bridge.js 内で受信。
         });
     }
 

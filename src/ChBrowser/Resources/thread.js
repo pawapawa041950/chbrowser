@@ -5,11 +5,14 @@
 //   window.setViewMode(mode)                 — 'flat' | 'tree' | 'dedupTree'
 // 受信メッセージ:
 //   { type: 'setConfig', popularThreshold?, imageSizeThresholdMb? } — Phase 11 設定の即時反映
+//   { type: 'setShortcutBindings', bindings: [...] }                 — Phase 16 ショートカット bind 一覧の同期
 // Messages sent to host (C#) via window.chrome.webview.postMessage:
 //   { type: 'ready' }                       — JS が初期化完了したことを通知
 //   { type: 'openUrl', url }                — 外部 URL クリック
 //   { type: 'scrollPosition', postNumber }  — viewport 上端のレス番号 (debounced)
 //   { type: 'paneActivated' }               — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
+//   { type: 'shortcut', descriptor }        — Phase 16: ショートカット/マウス操作のディスパッチ要求
+//   { type: 'gesture',  descriptor }        — Phase 16: マウスジェスチャー認識結果のディスパッチ要求
 //
 // 各タブが専属 WebView2 を持つので、タブ切替で DOM が再構築されることはない。
 // scroll target の同梱と tryScrollToTarget は「初回ロード時 (idx.json からの位置復元)」用。
@@ -18,13 +21,17 @@
 (function () {
     'use strict';
 
-    // Phase 14: pane の任意のクリックで C# にアクティブ化通知 (= アドレスバー切替)。
-    // capture phase に登録して内部 click ハンドラより先に拾う。
-    document.addEventListener('mousedown', function() {
-        if (window.chrome && window.chrome.webview) {
-            window.chrome.webview.postMessage({ type: 'paneActivated' });
-        }
-    }, true);
+    // ============================================================
+    // Phase 16: ショートカット / マウス操作 / マウスジェスチャー JS ブリッジ
+    // 共通実装は shortcut-bridge.js (window.createShortcutBridge) にあり。
+    // 当ペイン用の localActions のみ渡して factory で初期化する。
+    // ============================================================
+    const Shortcut = window.createShortcutBridge({
+        localActions: {
+            'thread.scroll_top':    function() { window.chScrollPage(false); },
+            'thread.scroll_bottom': function() { window.chScrollPage(true);  },
+        },
+    });
 
     let allPosts = [];
     let postsByNumber = new Map();
@@ -1393,6 +1400,7 @@
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();
                     break;
+                // setShortcutBindings は shortcut-bridge.js 内で直接受信するためここでは扱わない。
                 case 'imageMeta':
                     // C# が HEAD で取った Content-Length / キャッシュ参照 / 非同期 URL 展開の結果を返してきた。
                     //   resolvedUrl → 非同期展開 (x.com/pixiv) で求まった実体画像 URL (slot の data-src を上書き)

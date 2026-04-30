@@ -7,11 +7,17 @@
 //   { type: 'setFolderExpanded', id, expanded }                     — フォルダ <details> トグル
 //   { type: 'moveFavorite',     sourceId, targetId, position }      — D&D で移動
 //   { type: 'contextMenu',      target, id }
+//   { type: 'shortcut'|'gesture', descriptor }                      — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
 //   { type: 'setConfig', openOnSingleClick: bool }                  — Phase 11b: クリック動作の設定
+//   { type: 'setShortcutBindings', bindings: {...} }                 — Phase 16
 
 (function () {
     'use strict';
+
+    // Phase 16: ショートカット / マウス操作 / マウスジェスチャーブリッジを初期化。
+    // 左ペインなのでアドレスバー連動は不要 → paneActivated は送らない。
+    var Shortcut = window.createShortcutBridge({ localActions: {}, sendPaneActivated: false });
 
     var root = document.getElementById('favorites-root');
     if (!root) return;
@@ -57,14 +63,17 @@
         e.preventDefault();
     });
 
-    // ---- C# からの setConfig 受信 (Phase 11b) ----
+    // ---- C# からの setConfig / setShortcutBindings 受信 ----
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             var msg = e.data;
-            if (!msg || msg.type !== 'setConfig') return;
-            if (typeof msg.openOnSingleClick === 'boolean') {
-                openOnSingleClick = msg.openOnSingleClick;
+            if (!msg || !msg.type) return;
+            if (msg.type === 'setConfig') {
+                if (typeof msg.openOnSingleClick === 'boolean') {
+                    openOnSingleClick = msg.openOnSingleClick;
+                }
             }
+            // setShortcutBindings は shortcut-bridge.js 内で受信。
         });
     }
 

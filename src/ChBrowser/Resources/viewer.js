@@ -1,18 +1,22 @@
-// ChBrowser ビューア (Phase 10)
+// ChBrowser ビューア (Phase 10、Phase 16+ でショートカット/ジェスチャーブリッジ統合)
 //
-// 操作:
-//   ホイール        → タブ切替 (postMessage で C# に通知)
-//   Ctrl+ホイール   → ズーム (カーソル位置を原点)
-//   ドラッグ        → パン
-//   Escape          → 現在タブ閉じる (Phase 10b で予定)
+// 操作 (デフォルト):
+//   ホイール          → 次/前のタブ
+//   Ctrl+ホイール     → 拡大/縮小 (カーソル位置を原点)
+//   ドラッグ          → パン
+// ショートカット:
+//   バインディングは shortcuts.json で管理。zoom_in/out, rotate_right/left は JS ローカル即時実行。
+//   close, save, next_image, prev_image は C# 側で処理。
 //
 // C# → JS:
-//   { type: 'setImage', url } — このタブの画像を切替 (= 添付プロパティ ImageUrl の変更で送られる)
+//   { type: 'setImage', url }
+//   { type: 'setShortcutBindings', bindings: {...} } — ブリッジ用 (shortcut-bridge.js が直接受信)
 //
 // JS → C#:
-//   { type: 'wheelTab', direction: 'next'|'prev' }     — 通常ホイール
-//   { type: 'imageReady'|'imageError' }                — 画像ロード結果通知 (status 用)
-//   { type: 'contextMenu' }                            — 右クリック (Phase 10b)
+//   { type: 'wheelTab', direction: 'next'|'prev' }
+//   { type: 'imageReady'|'imageError' }
+//   { type: 'contextMenu' }
+//   { type: 'shortcut'|'gesture'|'gestureProgress'|'gestureEnd'|'bridgeReady' }  — ブリッジ経由
 
 (function () {
     'use strict';
@@ -24,18 +28,72 @@
     var zoom = 1.0;
     var panX = 0;
     var panY = 0;
+    var rotation = 0; // 度 (90 単位)
 
     function applyTransform() {
-        // translate(-50%, -50%) でセンタリング → translate(panX, panY) で移動 → scale でズーム
-        img.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ')';
+        // translate(-50%, -50%) でセンタリング → translate(panX, panY) で移動 → scale でズーム → rotate で回転
+        img.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
     }
 
     function resetView() {
         zoom = 1.0;
         panX = 0;
         panY = 0;
+        rotation = 0;
         applyTransform();
     }
+
+    // カーソル位置基準のズーム (Ctrl+wheel 等)。
+    function zoomAt(clientX, clientY, factor) {
+        var rect = stage.getBoundingClientRect();
+        var cx   = clientX - rect.left - rect.width  / 2;
+        var cy   = clientY - rect.top  - rect.height / 2;
+        var prev = zoom;
+        zoom = Math.max(0.05, Math.min(20, zoom * factor));
+        var ratio = zoom / prev;
+        panX = cx - (cx - panX) * ratio;
+        panY = cy - (cy - panY) * ratio;
+        applyTransform();
+        flashStatus(Math.round(zoom * 100) + ' %');
+    }
+    // 中心基準のズーム (キーボード由来等、カーソル位置不明時)
+    function zoomBy(factor) {
+        var prev = zoom;
+        zoom = Math.max(0.05, Math.min(20, zoom * factor));
+        var ratio = zoom / prev;
+        panX = panX * ratio;
+        panY = panY * ratio;
+        applyTransform();
+        flashStatus(Math.round(zoom * 100) + ' %');
+    }
+
+    function rotateBy(deg) {
+        rotation = ((rotation + deg) % 360 + 360) % 360;
+        applyTransform();
+        flashStatus(rotation + '°');
+    }
+
+    // ============================================================
+    // Phase 16+: ショートカット / マウス操作 / ジェスチャーブリッジ初期化
+    // 共通実装は shortcut-bridge.js。viewer 固有の局所アクションを localActions で渡す。
+    // sendPaneActivated はビューア向けなので false (アドレスバー追跡は無関係)。
+    // ============================================================
+    var Shortcut = window.createShortcutBridge({
+        sendPaneActivated: false,
+        localActions: {
+            // wheel 等で event.clientX/Y が取れるならカーソル位置基準、それ以外 (keyboard) は中心基準
+            'viewer.zoom_in':      function(e) {
+                if (e && typeof e.clientX === 'number') zoomAt(e.clientX, e.clientY, 1.15);
+                else                                    zoomBy(1.15);
+            },
+            'viewer.zoom_out':     function(e) {
+                if (e && typeof e.clientX === 'number') zoomAt(e.clientX, e.clientY, 1 / 1.15);
+                else                                    zoomBy(1 / 1.15);
+            },
+            'viewer.rotate_right': function() { rotateBy( 90); },
+            'viewer.rotate_left':  function() { rotateBy(-90); },
+        },
+    });
 
     function flashStatus(text) {
         statusEl.textContent = text;

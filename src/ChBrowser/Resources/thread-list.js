@@ -9,13 +9,15 @@
 (function() {
     'use strict';
 
-    // Phase 14: pane の任意のクリックで C# にアクティブ化通知 (= アドレスバー切替)。
-    // capture phase に登録して、内部の click/dblclick ハンドラよりも先に拾う (= preventDefault を呼ぶ要素があっても取りこぼさない)。
-    document.addEventListener('mousedown', function() {
-        if (window.chrome && window.chrome.webview) {
-            window.chrome.webview.postMessage({ type: 'paneActivated' });
-        }
-    }, true);
+    // Phase 16: ショートカット / マウス操作 / マウスジェスチャーブリッジを初期化。
+    // 共通実装は shortcut-bridge.js の window.createShortcutBridge にある。
+    // mousedown 時の paneActivated もここで送信される (Phase 14 アドレスバー対応統合)。
+    var Shortcut = window.createShortcutBridge({
+        localActions: {
+            'thread_list.scroll_top':    function() { window.chScrollPage(false); },
+            'thread_list.scroll_bottom': function() { window.chScrollPage(true);  },
+        },
+    });
 
     var selected = null;
     var tbody = document.querySelector('tbody');
@@ -106,6 +108,7 @@
                     openOnSingleClick = msg.openOnSingleClick;
                 }
             }
+            // setShortcutBindings は shortcut-bridge.js 内で直接受信して処理する。
         });
     }
 })();

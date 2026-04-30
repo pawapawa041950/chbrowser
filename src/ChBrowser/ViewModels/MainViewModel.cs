@@ -56,6 +56,33 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _threadConfigJson = "";
 
+    /// <summary>スレ表示 WebView へ push するショートカット bind 一覧 (Phase 16)。
+    /// JS 側ブリッジが受信して suppress 対象を更新するための setShortcutBindings メッセージ JSON。</summary>
+    [ObservableProperty]
+    private string _threadShortcutsJson = "";
+
+    [ObservableProperty] private string _threadListShortcutsJson = "";
+    [ObservableProperty] private string _favoritesShortcutsJson  = "";
+    [ObservableProperty] private string _boardListShortcutsJson  = "";
+
+    /// <summary>マウスジェスチャー入力中のリアルタイム表示 (Phase 16+)。
+    /// 入力中は "ジェスチャー [&lt;カテゴリ&gt;] ↓→" の形式、未入力時は空文字。</summary>
+    [ObservableProperty]
+    private string _gestureStatus = "";
+
+    /// <summary>WPF / WebView ブリッジ両方から呼ばれる。category=null で表示クリア。</summary>
+    public void UpdateGestureStatus(string? category, string? gesture)
+    {
+        if (string.IsNullOrEmpty(category))
+        {
+            GestureStatus = "";
+            return;
+        }
+        GestureStatus = string.IsNullOrEmpty(gesture)
+            ? $"ジェスチャー [{category}]"
+            : $"ジェスチャー [{category}] {gesture}";
+    }
+
     // Phase 11b: 3 ペインの 1 クリック設定。各ペイン用に個別の JSON を持ち、
     // それぞれ別の WebView2 (favorites / board-list / thread-list) に PaneConfigJson 添付プロパティで配信。
     [ObservableProperty] private string _favoritesConfigJson  = "";
@@ -88,6 +115,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnSelectedThreadListTabChanged(ThreadListTabViewModel? value)
     {
+        // 各 WebView は ItemsControl で並列保持し Visibility 切替で表示制御するため、IsSelected を更新。
+        // (旧 ContentTemplate 構成だとタブ切替で WebView が再生成されホワイトフラッシュが出ていた)
+        foreach (var t in ThreadListTabs) t.IsSelected = ReferenceEquals(t, value);
         // アドレスバーは last-activated wins (Phase 14)
         if (value is not null) _lastActivePane = ActivePane.ThreadList;
         RefreshAddressBarUrl();
@@ -874,7 +904,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>スレ表示タブのゴミ箱アイコンから呼ばれる。dat 削除 + タブ close + スレ一覧の青丸を消す。</summary>
-    private void DeleteThreadLog(ThreadTabViewModel tab)
+    public void DeleteThreadLog(ThreadTabViewModel tab)
     {
         try
         {

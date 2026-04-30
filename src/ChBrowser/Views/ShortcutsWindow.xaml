@@ -92,6 +92,33 @@
             </Grid>
         </Border>
 
+        <!-- 列ヘッダ (操作 / キーボード入力 / マウス入力 / マウスジェスチャー) -->
+        <Border DockPanel.Dock="Top"
+                Padding="20,6"
+                Background="#F0F4F8"
+                BorderBrush="#D8DEE3"
+                BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="操作"
+                           FontWeight="SemiBold" Foreground="#333" />
+                <TextBlock Grid.Column="1" Text="キーボード入力"
+                           FontWeight="SemiBold" Foreground="#333"
+                           Width="120" Margin="8,0,4,0" TextAlignment="Left" />
+                <TextBlock Grid.Column="2" Text="マウス入力"
+                           FontWeight="SemiBold" Foreground="#333"
+                           Width="120" Margin="4,0,4,0" TextAlignment="Left" />
+                <TextBlock Grid.Column="3" Text="マウスジェスチャー"
+                           FontWeight="SemiBold" Foreground="#333"
+                           Width="120" Margin="4,0,0,0" TextAlignment="Left" />
+            </Grid>
+        </Border>
+
         <!-- メイン: カテゴリでグルーピングした ListView -->
         <ListView ItemsSource="{Binding ItemsView}"
                   BorderThickness="0"

@@ -53,6 +53,43 @@ public partial class ImageViewerWindow : Window
             using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
             var type = root.TryGetProperty("type", out var tp) ? tp.GetString() : null;
+
+            // Phase 16+: ブリッジから shortcut / gesture / bridgeReady / gestureProgress を受信。
+            // category は "ビューアウィンドウ" 固定。
+            if (type == "shortcut" || type == "gesture")
+            {
+                if (Application.Current is App app && app.ShortcutManager is { } mgr)
+                {
+                    var descriptor = root.TryGetProperty("descriptor", out var dp) ? dp.GetString() : null;
+                    if (!string.IsNullOrEmpty(descriptor)) mgr.Dispatch("ビューアウィンドウ", descriptor);
+                }
+                return;
+            }
+            if (type == "gestureProgress" || type == "gestureEnd")
+            {
+                if (Application.Current is App app && app.ShortcutManager is { } mgr)
+                {
+                    if (type == "gestureEnd") mgr.NotifyGestureProgress(null, null);
+                    else
+                    {
+                        var value = root.TryGetProperty("value", out var vp) ? vp.GetString() : "";
+                        mgr.NotifyGestureProgress("ビューアウィンドウ", value ?? "");
+                    }
+                }
+                return;
+            }
+            if (type == "bridgeReady")
+            {
+                if (Application.Current is App app && app.ShortcutManager is { } mgr
+                    && sender is Microsoft.Web.WebView2.Wpf.WebView2 wv && wv.CoreWebView2 is { } core)
+                {
+                    var map = mgr.GetBindingsForCategory("ビューアウィンドウ");
+                    var json = JsonSerializer.Serialize(new { type = "setShortcutBindings", bindings = map });
+                    try { core.PostWebMessageAsJson(json); } catch (Exception ex) { Debug.WriteLine($"[ImageViewer] PushBindings failed: {ex.Message}"); }
+                }
+                return;
+            }
+
             switch (type)
             {
                 case "wheelTab":

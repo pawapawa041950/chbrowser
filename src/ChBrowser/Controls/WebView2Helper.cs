@@ -460,6 +460,77 @@ public static class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ThreadShortcutsJson (Phase 16: スレ表示 WebView 内のショートカット/マウス操作/ジェスチャー対応)
+    //
+    // ShortcutManager.OnBindingsApplied 経由で MainViewModel.ThreadShortcutsJson が更新されると、
+    // 各スレ表示 WebView2 に setShortcutBindings メッセージとして push される。
+    // JS 側ブリッジは bindings リストを受け取り、合致する入力を preventDefault + 通知する。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ThreadShortcutsJsonProperty =
+        DependencyProperty.RegisterAttached(
+            "ThreadShortcutsJson",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnThreadShortcutsJsonChanged));
+
+    public static string? GetThreadShortcutsJson(DependencyObject d) => (string?)d.GetValue(ThreadShortcutsJsonProperty);
+    public static void    SetThreadShortcutsJson(DependencyObject d, string? value) => d.SetValue(ThreadShortcutsJsonProperty, value);
+
+    private static async void OnThreadShortcutsJsonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not string json || string.IsNullOrEmpty(json)) return;
+
+        var state = ShellStates.GetValue(wv, _ => new ShellState());
+        try
+        {
+            await EnsureCoreAsync(wv).ConfigureAwait(true);
+            state.NavigationTask ??= NavigateToShellAsync(wv);
+            await state.NavigationTask.ConfigureAwait(true);
+            wv.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WebView2Helper] ThreadShortcutsJson push failed: {ex.Message}");
+        }
+    }
+
+    // ------------------------------------------------------------
+    // PaneShortcutsJson (Phase 16: スレ一覧 / お気に入り / 板一覧 ペイン用のショートカット bind 一覧 push)
+    //
+    // ThreadShortcutsJson のペイン版。Html 添付プロパティで NavStates 完了済みの WebView2 へ setShortcutBindings を送る。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty PaneShortcutsJsonProperty =
+        DependencyProperty.RegisterAttached(
+            "PaneShortcutsJson",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnPaneShortcutsJsonChanged));
+
+    public static string? GetPaneShortcutsJson(DependencyObject d) => (string?)d.GetValue(PaneShortcutsJsonProperty);
+    public static void    SetPaneShortcutsJson(DependencyObject d, string? value) => d.SetValue(PaneShortcutsJsonProperty, value);
+
+    private static async void OnPaneShortcutsJsonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not string json || string.IsNullOrEmpty(json)) return;
+
+        try
+        {
+            await EnsureCoreAsync(wv).ConfigureAwait(true);
+            var state = HtmlNavStates.GetValue(wv, _ => new HtmlNavState());
+            if (state.CurrentNav is { } nav) await nav.Task.ConfigureAwait(true);
+            wv.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WebView2Helper] PaneShortcutsJson push failed: {ex.Message}");
+        }
+    }
+
+    // ------------------------------------------------------------
     // PaneConfigJson (Phase 11b: お気に入り / 板一覧 / スレッド一覧 ペイン共通)
     //
     // 3 ペイン用の WebView2 (Html 添付プロパティで navigated 済みのもの) に setConfig メッセージを送る。
@@ -566,13 +637,15 @@ public static class WebView2Helper
         lock (ViewerShellLock)
         {
             if (_viewerShellHtmlCache is not null) return _viewerShellHtmlCache;
-            var asm  = typeof(WebView2Helper).Assembly;
-            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.html");
-            var css  = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.css");
-            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.js");
+            var asm    = typeof(WebView2Helper).Assembly;
+            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.html");
+            var css    = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.css");
+            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.js");
+            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
             _viewerShellHtmlCache = html
-                .Replace("/*{{CSS}}*/", css)
-                .Replace("/*{{JS}}*/",  js);
+                .Replace("/*{{CSS}}*/",             css)
+                .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
+                .Replace("/*{{JS}}*/",              js);
             return _viewerShellHtmlCache;
         }
     }
@@ -600,10 +673,11 @@ public static class WebView2Helper
         lock (ShellLock)
         {
             if (_shellHtmlCache is not null) return _shellHtmlCache;
-            var asm  = typeof(WebView2Helper).Assembly;
-            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.html");
-            var css  = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.css");
-            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.js");
+            var asm    = typeof(WebView2Helper).Assembly;
+            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.html");
+            var css    = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.css");
+            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.js");
+            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
 
             // テーマ (post.html テンプレ + post.css) を注入。テーマ未登録時は埋め込み既定を使う。
             var theme        = _themeService?.LoadActiveTheme();
@@ -612,6 +686,7 @@ public static class WebView2Helper
 
             _shellHtmlCache = html
                 .Replace("/*{{CSS}}*/",                css + "\n" + postCss)
+                .Replace("/*{{SHORTCUT_BRIDGE}}*/",    bridge)
                 .Replace("/*{{JS}}*/",                 js)
                 .Replace("<!--{{POST_TEMPLATE}}-->",   postTemplate);
             return _shellHtmlCache;

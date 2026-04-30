@@ -30,6 +30,9 @@ public partial class App : Application
     private ChBrowser.Services.Ng.NgService? _ngService;
     private ChBrowser.Services.Storage.ShortcutStorage? _shortcutStorage;
     private ChBrowser.Services.Shortcuts.ShortcutManager? _shortcutManager;
+
+    /// <summary>WebView 内 JS ブリッジが受信したショートカット/マウス/ジェスチャーを dispatch するために公開 (Phase 16)。</summary>
+    public ChBrowser.Services.Shortcuts.ShortcutManager? ShortcutManager => _shortcutManager;
     private AppConfig          _currentConfig = new();
     private ChBrowser.Views.NgWindow? _ngWindow;
     private ChBrowser.Views.ShortcutsWindow? _shortcutsWindow;
@@ -58,6 +61,9 @@ public partial class App : Application
             {
                 Owner = MainWindow,
             };
+            // Phase 16+: ビューアウィンドウを ShortcutManager に attach。
+            // "ビューアウィンドウ" カテゴリの KeyBinding がここへ登録される。
+            _shortcutManager?.AttachViewerWindow(_imageViewerWindow);
         }
         _imageViewerWindow!.OpenAndShow(url);
     }
@@ -151,7 +157,17 @@ public partial class App : Application
 
         // ショートカット & マウスジェスチャー (Phase 15) — MainWindow 作成後に setup
         _shortcutStorage = new ChBrowser.Services.Storage.ShortcutStorage(paths);
-        _shortcutManager = new ChBrowser.Services.Shortcuts.ShortcutManager(window, BuildShortcutHandlers(window, mainVm));
+        _shortcutManager = new ChBrowser.Services.Shortcuts.ShortcutManager(window, BuildShortcutHandlers(window, mainVm, () => _imageViewerVm));
+        // Apply 時に各カテゴリの bind 一覧を WebView 内 JS ブリッジへ push する callback を配線。
+        _shortcutManager.OnBindingsApplied = byCategory =>
+        {
+            PushCategoryBindings(mainVm, byCategory, "スレッド表示領域",   json => mainVm.ThreadShortcutsJson     = json);
+            PushCategoryBindings(mainVm, byCategory, "スレ一覧表示領域",   json => mainVm.ThreadListShortcutsJson = json);
+            PushCategoryBindings(mainVm, byCategory, "お気に入りペイン",   json => mainVm.FavoritesShortcutsJson  = json);
+            PushCategoryBindings(mainVm, byCategory, "板一覧ペイン",       json => mainVm.BoardListShortcutsJson  = json);
+        };
+        // ジェスチャー進捗の表示更新 (= MainViewModel.GestureStatus → ステータスバー)
+        _shortcutManager.OnGestureProgress = (cat, gs) => mainVm.UpdateGestureStatus(cat, gs);
         _shortcutManager.Apply(_shortcutStorage.Load());
         _ = new ChBrowser.Services.Shortcuts.GestureRecognizer(window, _shortcutManager);
 
@@ -166,7 +182,7 @@ public partial class App : Application
     /// (= クリック対象の WPF visual)、キーボードショートカット由来の場合は null。
     /// タブ操作系は source から対象タブ VM を解決し、解決できなければ SelectedTab フォールバック。
     /// 未実装機能 (戻る/進む 履歴 等) は登録しない (= ShortcutManager 側で skip される)。</summary>
-    private static System.Collections.Generic.Dictionary<string, System.Action<object?>> BuildShortcutHandlers(MainWindow window, MainViewModel vm)
+    private static System.Collections.Generic.Dictionary<string, System.Action<object?>> BuildShortcutHandlers(MainWindow window, MainViewModel vm, System.Func<ImageViewerViewModel?> getViewerVm)
     {
         return new System.Collections.Generic.Dictionary<string, System.Action<object?>>
         {
@@ -174,33 +190,62 @@ public partial class App : Application
             ["main.refresh_board_list"]  = _ => { if (vm.RefreshBoardListCommand.CanExecute(null)) vm.RefreshBoardListCommand.Execute(null); },
             ["main.exit"]                = _ => Current.Shutdown(),
 
-            ["thread_list.refresh"]       = src =>
-            {
-                var t = ResolveTargetThreadListTab(src, vm);
-                if (t?.Board is { } b) _ = vm.LoadThreadListAsync(new BoardViewModel(b));
-            },
-            ["thread_list.close_current"] = src =>
-            {
-                ResolveTargetThreadListTab(src, vm)?.CloseCommand?.Execute(null);
-            },
-            ["thread_list.next_tab"]      = _ => CycleThreadListTab(vm, +1),
-            ["thread_list.prev_tab"]      = _ => CycleThreadListTab(vm, -1),
+            // ----- スレ一覧 -----
+            ["thread_list.refresh"]                 = RefreshThreadList,
+            ["thread_list.refresh_in_tab"]          = RefreshThreadList,
+            ["thread_list.close_current"]           = CloseThreadListTab,
+            ["thread_list.close_current_in_body"]   = CloseThreadListTab,
+            ["thread_list.next_tab"]                = _ => CycleThreadListTab(vm, +1),
+            ["thread_list.next_tab_in_body"]        = _ => CycleThreadListTab(vm, +1),
+            ["thread_list.prev_tab"]                = _ => CycleThreadListTab(vm, -1),
+            ["thread_list.prev_tab_in_body"]        = _ => CycleThreadListTab(vm, -1),
 
-            ["thread.refresh"]            = src =>
-            {
-                if (ResolveTargetThreadTab(src, vm) is { } t) _ = vm.RefreshThreadAsync(t);
-            },
-            ["thread.close_current"]      = src =>
-            {
-                ResolveTargetThreadTab(src, vm)?.CloseCommand?.Execute(null);
-            },
-            ["thread.next_tab"]           = _ => CycleThreadTab(vm, +1),
-            ["thread.prev_tab"]           = _ => CycleThreadTab(vm, -1),
-            ["thread.new_thread"]         = _ =>
+            // ----- スレッド -----
+            ["thread.refresh"]                      = RefreshThread,
+            ["thread.refresh_in_tab"]               = RefreshThread,
+            ["thread.close_current"]                = CloseThread,
+            ["thread.close_current_in_body"]        = CloseThread,
+            ["thread.next_tab"]                     = _ => CycleThreadTab(vm, +1),
+            ["thread.next_tab_in_body"]             = _ => CycleThreadTab(vm, +1),
+            ["thread.prev_tab"]                     = _ => CycleThreadTab(vm, -1),
+            ["thread.prev_tab_in_body"]             = _ => CycleThreadTab(vm, -1),
+            ["thread.new_thread"]                   = _ =>
             {
                 if (vm.SelectedThreadListTab is { IsBoardTab: true }) vm.OpenNewThreadDialog();
             },
+            ["thread.delete_log"]                   = src =>
+            {
+                if (ResolveTargetThreadTab(src, vm) is { } t) vm.DeleteThreadLog(t);
+            },
+            // scroll_top / scroll_bottom は WebView 内の document.scrollTo を JS ローカルで処理するため、
+            // C# 側の handler はバインディング一覧への登録目的の no-op (= JS には setShortcutBindings で descriptor が
+            // push される。JS ブリッジは local actionId table を持って C# 経由なしで実行する)。
+            ["thread.scroll_top"]                   = _ => { },
+            ["thread.scroll_bottom"]                = _ => { },
+            ["thread_list.scroll_top"]              = _ => { },
+            ["thread_list.scroll_bottom"]           = _ => { },
+
+            // ----- ビューアウィンドウ -----
+            // close / save / next / prev は VM の Command 経由で実行 (= 既存の Esc/Ctrl+S/←→ と同等)。
+            // zoom_in/out / rotate_right/left は viewer.js の localActions で処理されるので C# 側は no-op。
+            ["viewer.close"]      = _ => { var v = getViewerVm(); if (v?.CloseCurrentTabCommand.CanExecute(null) == true) v.CloseCurrentTabCommand.Execute(null); },
+            ["viewer.save"]       = _ => { var v = getViewerVm(); if (v?.SaveCurrentTabCommand .CanExecute(null) == true) v.SaveCurrentTabCommand .Execute(null); },
+            ["viewer.next_image"] = _ => { var v = getViewerVm(); if (v?.NextTabCommand        .CanExecute(null) == true) v.NextTabCommand        .Execute(null); },
+            ["viewer.prev_image"] = _ => { var v = getViewerVm(); if (v?.PrevTabCommand        .CanExecute(null) == true) v.PrevTabCommand        .Execute(null); },
+            ["viewer.zoom_in"]      = _ => { },
+            ["viewer.zoom_out"]     = _ => { },
+            ["viewer.rotate_right"] = _ => { },
+            ["viewer.rotate_left"]  = _ => { },
         };
+
+        void RefreshThreadList(object? src)
+        {
+            var t = ResolveTargetThreadListTab(src, vm);
+            if (t?.Board is { } b) _ = vm.LoadThreadListAsync(new BoardViewModel(b));
+        }
+        void CloseThreadListTab(object? src) => ResolveTargetThreadListTab(src, vm)?.CloseCommand?.Execute(null);
+        void RefreshThread(object? src) { if (ResolveTargetThreadTab(src, vm) is { } t) _ = vm.RefreshThreadAsync(t); }
+        void CloseThread(object? src) => ResolveTargetThreadTab(src, vm)?.CloseCommand?.Execute(null);
     }
 
     /// <summary>マウス由来の操作 (source != null) なら、source から該当 <see cref="ThreadTabViewModel"/> を解決して返す
@@ -245,6 +290,25 @@ public partial class App : Application
         if (idx < 0) idx = 0;
         idx = (idx + step + vm.ThreadTabs.Count) % vm.ThreadTabs.Count;
         vm.SelectedThreadTab = vm.ThreadTabs[idx];
+    }
+
+    /// <summary>OnBindingsApplied callback の本体。指定カテゴリの descriptor → actionId マップを JSON 化して
+    /// setShortcutBindings として push。JS 側ブリッジは descriptor → actionId で local action 判定 (scroll 等) と
+    /// suppress/dispatch をする。</summary>
+    private static void PushCategoryBindings(
+        MainViewModel vm,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> byCategory,
+        string category,
+        Action<string> setter)
+    {
+        var map = byCategory.TryGetValue(category, out var b) ? b
+                                                              : (IReadOnlyDictionary<string, string>)new Dictionary<string, string>();
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type     = "setShortcutBindings",
+            bindings = map,
+        });
+        setter(json);
     }
 
     private static void CycleThreadListTab(MainViewModel vm, int step)

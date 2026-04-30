@@ -43,6 +43,8 @@ public sealed class GestureRecognizer
         _directions.Clear();
         _startSource     = e.OriginalSource as DependencyObject;
         _startCategory   = CategoryResolver.Resolve(_startSource);
+        // ステータスバー: ジェスチャー入力開始を通知 (= 空の方向列)
+        _manager.NotifyGestureProgress(_startCategory, "");
     }
 
     private void OnMove(object sender, MouseEventArgs e)
@@ -59,7 +61,11 @@ public sealed class GestureRecognizer
             ? (dx > 0 ? '→' : '←')
             : (dy > 0 ? '↓' : '↑');
         if (_directions.Count == 0 || _directions[^1] != dir)
+        {
             _directions.Add(dir);
+            // ステータスバー: 現在の方向列を通知
+            _manager.NotifyGestureProgress(_startCategory, new string(_directions.ToArray()));
+        }
         _lastSamplePoint = p;
     }
 
@@ -67,6 +73,8 @@ public sealed class GestureRecognizer
     {
         if (!_tracking) return;
         _tracking = false;
+        // ステータスバー: ジェスチャー終了通知 (= 表示クリア)
+        _manager.NotifyGestureProgress(null, null);
 
         if (_directions.Count == 0) return; // 移動なし → 通常の右クリック扱い
 

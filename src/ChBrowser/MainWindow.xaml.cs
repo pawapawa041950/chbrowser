@@ -224,6 +224,24 @@ public partial class MainWindow : Window
         if (DataContext is not MainViewModel main) return;
 
         var (type, payload) = TryParseMessage(e);
+
+        // Phase 16: ブリッジから shortcut / gesture を受けたら ShortcutManager にディスパッチ
+        if (type == "shortcut" || type == "gesture")
+        {
+            DispatchFromWebView(payload, "板一覧ペイン");
+            return;
+        }
+        if (type == "gestureProgress" || type == "gestureEnd")
+        {
+            RouteGestureProgress(payload, type, "板一覧ペイン");
+            return;
+        }
+        if (type == "bridgeReady")
+        {
+            PushBindingsTo(sender, "板一覧ペイン");
+            return;
+        }
+
         switch (type)
         {
             case "openBoard":
@@ -288,6 +306,23 @@ public partial class MainWindow : Window
         if (type == "paneActivated")
         {
             main.MarkThreadListPaneActive();
+            return;
+        }
+
+        // Phase 16: ブリッジから shortcut / gesture を受けたら ShortcutManager にディスパッチ
+        if (type == "shortcut" || type == "gesture")
+        {
+            DispatchFromWebView(payload, "スレ一覧表示領域");
+            return;
+        }
+        if (type == "gestureProgress" || type == "gestureEnd")
+        {
+            RouteGestureProgress(payload, type, "スレ一覧表示領域");
+            return;
+        }
+        if (type == "bridgeReady")
+        {
+            PushBindingsTo(sender, "スレ一覧表示領域");
             return;
         }
 
@@ -434,6 +469,46 @@ public partial class MainWindow : Window
         if (Application.Current is App app) app.ShowShortcutsWindow();
     }
 
+    /// <summary>WebView の JS ブリッジから受信した shortcut / gesture メッセージを ShortcutManager にルーティング (Phase 16)。
+    /// category は呼び出し元 (= どの WebView の WebMessageReceived か) で固定する。</summary>
+    private static void DispatchFromWebView(System.Text.Json.JsonElement payload, string category)
+    {
+        if (Application.Current is not App app || app.ShortcutManager is not { } mgr) return;
+        var descriptor = payload.TryGetProperty("descriptor", out var dp) ? dp.GetString() : null;
+        if (!string.IsNullOrEmpty(descriptor)) mgr.Dispatch(category, descriptor);
+    }
+
+    /// <summary>WebView の JS ブリッジから受信したジェスチャー進捗 (gestureProgress / gestureEnd) をルーティング。
+    /// type=gestureProgress は payload.value に方向列が入っている、 type=gestureEnd は category=null 扱いでクリア。</summary>
+    private static void RouteGestureProgress(System.Text.Json.JsonElement payload, string type, string category)
+    {
+        if (Application.Current is not App app || app.ShortcutManager is not { } mgr) return;
+        if (type == "gestureEnd")
+        {
+            mgr.NotifyGestureProgress(null, null);
+            return;
+        }
+        var value = payload.TryGetProperty("value", out var vp) ? vp.GetString() : "";
+        mgr.NotifyGestureProgress(category, value ?? "");
+    }
+
+    /// <summary>bridgeReady 受信時に、その WebView だけに setShortcutBindings を direct push する。
+    /// PaneShortcutsJson は値変化が無いとき再 push されないため、bridge 側 (= 新規 navigation 後の JS) が
+    /// 「初期化完了したよ」と通知してきたら必ずここで補完する。</summary>
+    private static void PushBindingsTo(object? sender, string category)
+    {
+        if (Application.Current is not App app || app.ShortcutManager is not { } mgr) return;
+        if (sender is not Microsoft.Web.WebView2.Wpf.WebView2 wv || wv.CoreWebView2 is null) return;
+        var map = mgr.GetBindingsForCategory(category);
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type     = "setShortcutBindings",
+            bindings = map,
+        });
+        try { wv.CoreWebView2.PostWebMessageAsJson(json); }
+        catch (Exception ex) { Debug.WriteLine($"[MainWindow] PushBindingsTo failed: {ex.Message}"); }
+    }
+
     /// <summary>板一覧 WebView の右クリックメニュー「お気に入りに追加」。
     /// 親 ContextMenu の Tag に BoardRef が入っている (= ShowBoardContextMenu でセット)。</summary>
     private void AddBoardToFavorites_Click(object sender, RoutedEventArgs e)
@@ -473,6 +548,24 @@ public partial class MainWindow : Window
         if (DataContext is not MainViewModel main) return;
 
         var (type, payload) = TryParseMessage(e);
+
+        // Phase 16: ブリッジから shortcut / gesture を受けたら ShortcutManager にディスパッチ
+        if (type == "shortcut" || type == "gesture")
+        {
+            DispatchFromWebView(payload, "お気に入りペイン");
+            return;
+        }
+        if (type == "gestureProgress" || type == "gestureEnd")
+        {
+            RouteGestureProgress(payload, type, "お気に入りペイン");
+            return;
+        }
+        if (type == "bridgeReady")
+        {
+            PushBindingsTo(sender, "お気に入りペイン");
+            return;
+        }
+
         switch (type)
         {
             case "openFavorite":
@@ -601,6 +694,23 @@ public partial class MainWindow : Window
         if (type == "paneActivated")
         {
             if (DataContext is MainViewModel main) main.MarkThreadPaneActive();
+            return;
+        }
+
+        // Phase 16: ブリッジから shortcut / gesture を受けたら ShortcutManager にディスパッチ
+        if (type == "shortcut" || type == "gesture")
+        {
+            DispatchFromWebView(payload, "スレッド表示領域");
+            return;
+        }
+        if (type == "gestureProgress" || type == "gestureEnd")
+        {
+            RouteGestureProgress(payload, type, "スレッド表示領域");
+            return;
+        }
+        if (type == "bridgeReady")
+        {
+            PushBindingsTo(sender, "スレッド表示領域");
             return;
         }
 

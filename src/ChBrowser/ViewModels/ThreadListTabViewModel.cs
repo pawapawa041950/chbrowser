@@ -60,6 +60,12 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
     [ObservableProperty]
     private LogMarkPatch? _logMarkUpdate;
 
+    /// <summary>このタブが現在 TabControl で選択されているか。各タブが専有する WebView2 の
+    /// Visibility をこれに bind する (= 選択タブだけ可視、他は Collapsed)。
+    /// MainViewModel が SelectedThreadListTab 変更時に全タブの IsSelected を更新する。</summary>
+    [ObservableProperty]
+    private bool _isSelected;
+
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)
     {

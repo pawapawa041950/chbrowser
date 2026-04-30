@@ -26,13 +26,8 @@
         </ContextMenu>
     </Window.Resources>
 
-    <Window.InputBindings>
-        <KeyBinding Key="Left"  Command="{Binding PrevTabCommand}" />
-        <KeyBinding Key="Right" Command="{Binding NextTabCommand}" />
-        <KeyBinding Key="Escape" Command="{Binding CloseCurrentTabCommand}" />
-        <KeyBinding Modifiers="Control" Key="W" Command="{Binding CloseCurrentTabCommand}" />
-        <KeyBinding Modifiers="Control" Key="S" Command="{Binding SaveCurrentTabCommand}" />
-    </Window.InputBindings>
+    <!-- Phase 16+: 旧 KeyBindings は ShortcutManager に統合した (shortcuts.json で管理)。
+         デフォルトでは Esc=閉じる / Ctrl+S=保存 / ←=前 / →=次 を ShortcutRegistry に既定値として設定。 -->
 
     <DockPanel LastChildFill="True">
 

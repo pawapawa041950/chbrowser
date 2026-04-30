@@ -95,16 +95,18 @@ public static class ThreadListHtmlBuilder
         lock (Lock)
         {
             if (_shellHtmlCache is not null) return _shellHtmlCache;
-            var asm  = typeof(ThreadListHtmlBuilder).Assembly;
-            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.html");
+            var asm    = typeof(ThreadListHtmlBuilder).Assembly;
+            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.html");
             // Phase 11d: テーマサービスがあれば disk 優先で CSS を取得 (= ユーザ編集を反映)。
             // 未登録時は埋め込み既定にフォールバック。
-            var css  = ChBrowser.Services.Theme.ThemeService.CurrentInstance?.LoadCss("thread-list.css")
-                       ?? ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.css");
-            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.js");
+            var css    = ChBrowser.Services.Theme.ThemeService.CurrentInstance?.LoadCss("thread-list.css")
+                         ?? ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.css");
+            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.js");
+            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
             _shellHtmlCache = html
-                .Replace("/*{{CSS}}*/", css)
-                .Replace("/*{{JS}}*/",  js);
+                .Replace("/*{{CSS}}*/",             css)
+                .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
+                .Replace("/*{{JS}}*/",              js);
             return _shellHtmlCache;
         }
     }

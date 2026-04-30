@@ -98,15 +98,17 @@ public static class FavoritesHtmlBuilder
         lock (Lock)
         {
             if (_shellHtmlCache is not null) return _shellHtmlCache;
-            var asm  = typeof(FavoritesHtmlBuilder).Assembly;
-            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.html");
+            var asm    = typeof(FavoritesHtmlBuilder).Assembly;
+            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.html");
             // Phase 11d: ThemeService 経由で disk-first CSS を取得
-            var css  = ChBrowser.Services.Theme.ThemeService.CurrentInstance?.LoadCss("favorites.css")
-                       ?? ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.css");
-            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.js");
+            var css    = ChBrowser.Services.Theme.ThemeService.CurrentInstance?.LoadCss("favorites.css")
+                         ?? ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.css");
+            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.favorites.js");
+            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
             _shellHtmlCache = html
-                .Replace("/*{{CSS}}*/", css)
-                .Replace("/*{{JS}}*/",  js);
+                .Replace("/*{{CSS}}*/",             css)
+                .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
+                .Replace("/*{{JS}}*/",              js);
             return _shellHtmlCache;
         }
     }
