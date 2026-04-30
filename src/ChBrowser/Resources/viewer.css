@@ -1,0 +1,56 @@
+/* ChBrowser ビューア (Phase 10) */
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1e1e1e;
+    color: #ddd;
+    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif;
+    font-size: 12px;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#stage {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+}
+
+#stage.panning {
+    cursor: grabbing;
+}
+
+#image {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform-origin: center center;
+    /* JS で transform: translate(-50%, -50%) translate(panX, panY) scale(zoom) を都度組み立てる */
+    max-width: none;
+    max-height: none;
+    user-drag: none;
+    -webkit-user-drag: none;
+    pointer-events: none; /* 画像自身に drag を捕まれないようにし、stage 全体で wheel/drag を扱う */
+}
+
+#status {
+    position: absolute;
+    right: 8px;
+    bottom: 6px;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+#status.visible {
+    opacity: 1;
+}

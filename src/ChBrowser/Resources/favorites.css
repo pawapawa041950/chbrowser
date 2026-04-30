@@ -1,0 +1,149 @@
+/* ChBrowser お気に入りペイン (Phase 14b) */
+
+html { height: 100%; }
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: auto;
+    background: #fff;
+    color: #000;
+    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif;
+    font-size: 12px;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* min-height:100% に padding を含めて、コンテンツが空でも余分にはみ出さないようにする
+   (= padding 分の overflow による「常時スクロールバー」を避ける)。
+   D&D の空エリアドロップは body 全体で受けたいので、root は viewport を埋める。 */
+#favorites-root {
+    padding: 4px 0;
+    min-height: 100%;
+    box-sizing: border-box;
+}
+
+ul.fav-root, ul.children {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+ul.children {
+    /* details 内なのでインデント分は children の padding で */
+    padding-left: 14px;
+}
+
+li.fav-item {
+    line-height: 18px;
+}
+
+/* ---- フォルダ ---- */
+details.folder {
+    margin: 0;
+}
+
+details.folder > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 1px 6px 1px 18px;
+    position: relative;
+    font-weight: 600;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+details.folder > summary::-webkit-details-marker { display: none; }
+
+details.folder > summary::before {
+    content: '▶';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 8px;
+    color: #888;
+}
+
+details.folder[open] > summary::before {
+    transform: translateY(-50%) rotate(90deg);
+}
+
+details.folder > summary:hover { background: #f0f0f0; }
+
+/* ---- 板 / スレ 共通行 ---- */
+li.board-row, li.thread-row {
+    cursor: pointer;
+    padding: 1px 6px 1px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+li.board-row:hover,
+li.thread-row:hover {
+    background: #eaf3ff;
+}
+
+li.fav-item.selected > .label,
+li.fav-item.selected > details > summary,
+li.fav-item.selected > details > summary > .label,
+li.fav-item.selected.board-row,
+li.fav-item.selected.thread-row {
+    background: #cce5ff;
+}
+
+/* ---- アイコン ---- */
+.icon {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.icon-folder {
+    /* タブ付き矩形 (黄色) */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'><path d='M 1 4 L 5 4 L 7 5.5 L 13 5.5 L 13 12 L 1 12 Z' fill='%23E0B040' stroke='%23A88830' stroke-width='0.8'/></svg>");
+}
+
+.icon-board {
+    /* 横線 3 本 (青) */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'><path d='M 2 4 L 12 4 M 2 7.5 L 12 7.5 M 2 11 L 12 11' stroke='%233070B0' stroke-width='1.4' stroke-linecap='round'/></svg>");
+}
+
+li.thread-row {
+    color: #444;
+    padding-left: 22px;       /* 板/フォルダのアイコン分インデント */
+}
+
+/* ---- D&D インジケータ ---- */
+li.fav-item.drag-source {
+    opacity: 0.5;
+}
+
+li.fav-item.drop-target-into > details > summary,
+li.fav-item.drop-target-into.board-row,
+li.fav-item.drop-target-into.thread-row {
+    background: #ffe9b3;
+}
+
+/* inset shadow: 正 Y は上端から内側、負 Y は下端から内側に描画される */
+li.fav-item.drop-target-before {
+    box-shadow: 0 2px 0 0 #2196f3 inset;
+}
+
+li.fav-item.drop-target-after {
+    box-shadow: 0 -2px 0 0 #2196f3 inset;
+}
+
+/* ---- スクロールバー ---- */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-thumb { background: #c0c0c0; }
+::-webkit-scrollbar-thumb:hover { background: #a0a0a0; }

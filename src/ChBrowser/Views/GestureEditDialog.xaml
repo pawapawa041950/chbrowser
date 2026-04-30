@@ -1,0 +1,87 @@
+<Window x:Class="ChBrowser.Views.GestureEditDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="マウスジェスチャーの設定"
+        Width="520" Height="440"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel LastChildFill="True" Margin="14">
+
+        <!-- 上部: 操作名 -->
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Run Text="操作: " Foreground="#666" />
+            <Run Text="{Binding ActionName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, FallbackValue='(未指定)'}"
+                 FontWeight="SemiBold" />
+        </TextBlock>
+
+        <!-- 下部: ボタン群 -->
+        <Border DockPanel.Dock="Bottom" Padding="0,12,0,0">
+            <DockPanel LastChildFill="False">
+                <Button DockPanel.Dock="Left"
+                        Content="クリア"
+                        Width="90"
+                        Click="ClearButton_Click"
+                        ToolTip="このジェスチャーを未設定にする" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="キャンセル"
+                            Width="90"
+                            IsCancel="True"
+                            Margin="0,0,8,0" />
+                    <Button Content="OK"
+                            Width="90"
+                            IsDefault="True"
+                            Click="OkButton_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- 中央: 描画領域 + 認識結果 + 現在の割り当て -->
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    BorderBrush="#1E88E5"
+                    BorderThickness="2"
+                    Background="#F5F8FC">
+                <Grid>
+                    <Canvas x:Name="DrawCanvas"
+                            Background="Transparent"
+                            ClipToBounds="True"
+                            MouseRightButtonDown="DrawCanvas_MouseRightButtonDown"
+                            MouseMove="DrawCanvas_MouseMove"
+                            MouseRightButtonUp="DrawCanvas_MouseRightButtonUp" />
+                    <TextBlock x:Name="HintText"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Foreground="#666"
+                               IsHitTestVisible="False">
+                        <Run Text="この領域で右ドラッグでジェスチャーを描いてください" />
+                        <LineBreak />
+                        <Run Text="(↑↓←→ の組合せで認識します)" FontSize="11" Foreground="#999" />
+                    </TextBlock>
+                </Grid>
+            </Border>
+
+            <TextBlock Grid.Row="1" Margin="0,10,0,0">
+                <Run Text="認識結果: " Foreground="#666" />
+                <Run x:Name="LiveGestureRun" Text="(未入力)" FontWeight="SemiBold" Foreground="#1E88E5" />
+            </TextBlock>
+
+            <TextBlock Grid.Row="2" Margin="0,4,0,0">
+                <Run Text="現在の割り当て: " Foreground="#666" />
+                <Run x:Name="CurrentBindingRun" Text="(未設定)" FontWeight="SemiBold" />
+            </TextBlock>
+        </Grid>
+
+    </DockPanel>
+</Window>

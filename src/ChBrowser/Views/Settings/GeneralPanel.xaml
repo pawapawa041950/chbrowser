@@ -1,0 +1,23 @@
+<UserControl x:Class="ChBrowser.Views.Settings.GeneralPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+        <TextBlock Text="HiDPI モード" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="高 DPI ディスプレイ用のスケーリング設定。変更には再起動が必要です。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,8" />
+        <ComboBox SelectedValue="{Binding HiDpiMode, Mode=TwoWay}"
+                  SelectedValuePath="Tag"
+                  Width="260"
+                  HorizontalAlignment="Left">
+            <ComboBoxItem Content="スケールしない (Unaware) — 既定" Tag="Unaware" />
+            <ComboBoxItem Content="モニタごとに自動 (Per-Monitor V2)"   Tag="PerMonitorV2" />
+        </ComboBox>
+    </StackPanel>
+</UserControl>

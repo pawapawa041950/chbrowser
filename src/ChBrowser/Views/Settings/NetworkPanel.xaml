@@ -1,0 +1,31 @@
+<UserControl x:Class="ChBrowser.Views.Settings.NetworkPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+
+        <TextBlock Text="User-Agent (上書き)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="HTTP リクエストの User-Agent ヘッダ。空欄なら既定 (Monazilla/1.00 ChBrowser/...) を使う。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <TextBox Text="{Binding UserAgentOverride, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="500"
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,16" />
+
+        <TextBlock Text="HTTP タイムアウト (秒)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="サーバ応答待ちの上限。変更には再起動が必要です。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <TextBox Text="{Binding TimeoutSec, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="100"
+                 HorizontalAlignment="Left" />
+
+    </StackPanel>
+</UserControl>

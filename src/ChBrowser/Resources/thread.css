@@ -1,0 +1,301 @@
+/*
+ * 注意: html/body には height/overflow を指定しない。
+ * 両方に overflow:auto + body height:100% を入れると body の内部スクロールになり、
+ * window の 'scroll' イベントが発火しなくなる (= スクロール位置保存が動かない)。
+ * 何も指定しないことで html を document scrolling element のままにし、
+ * window.scroll / window.scrollY が標準どおりに動く。
+ */
+html, body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'MS Pゴシック', 'MS PGothic', monospace;
+    font-size: 16px;
+    color: #000;
+    background: #fff;
+    padding-right: 24px;  /* リッチスクロールバー専用領域を確保 (本文と被らないように) */
+}
+
+/* スレ表示内のフォーカスは一切使わない (テキスト選択は user-select で別途許可される)。
+   フォーカスインジケータも全て非表示にし、focus 由来の auto-scroll を起こさせない。 */
+*:focus, *:focus-visible {
+    outline: none;
+}
+
+/*
+ * 注意: .post / .post-no / .post-name / .post-meta / .post-body / .post-reply-count /
+ *       .post.embedded のスタイルは post.css (テーマ) 側で定義している。
+ *       こちら (thread.css) はあくまで scaffold (リッチスクロールバー / リンク / 画像スロット
+ *       / 動画スロット等) のみを扱う。テーマ切替で見た目を変えたいレス本体は post.css を編集する。
+ */
+
+/*
+ * <a> 要素は href を意図的に付けない (focusable にしないことで
+ * Chromium の auto focus → auto scroll 経路を遮断するため)。
+ * href なしの <a> はデフォルトカーソルが text になるので、
+ * cursor: pointer を明示する。
+ */
+a {
+    color: #0066cc;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+a:hover {
+    color: #003a7a;
+}
+
+a.anchor.missing {
+    color: #999;
+    text-decoration: line-through;
+    cursor: default;
+}
+
+.link-disabled {
+    color: #0066cc;
+}
+
+/* ---- インライン画像サムネイル ----
+ * 画像は <span class="image-slot">…</span> でラップし、
+ * HEAD でサイズ確認後 (≤ 5MB) に内部に <img class="inline-image"> を生成して読み込む。
+ * しきい値超過時はテキスト「X.X MB - クリックで読み込む」を中央に表示。
+ *
+ * width / height は slot で固定。これにより遅延読み込み中でもレイアウトが揺れず、
+ * リッチスクロールバーのマーカー位置が動かない。
+ */
+.image-slot {
+    display: block;
+    width: 240px;
+    height: 240px;
+    margin: 4px 0;
+    cursor: pointer;
+    border: 1px solid #ddd;
+    background: #f9f9f9;
+    position: relative;
+    overflow: hidden;
+}
+.image-slot:hover {
+    border-color: #888;
+}
+
+/* HEAD 待ち / 結果待ちのスロット (空) は無地の灰色枠 */
+.image-slot.deferred {
+    background: #f9f9f9;
+}
+
+/* HEAD でしきい値超過と判定された場合、薄いストライプ + 中央テキスト */
+.image-slot.over-threshold {
+    background: repeating-linear-gradient(
+        45deg,
+        #fafafa,
+        #fafafa 8px,
+        #ececec 8px,
+        #ececec 16px);
+}
+
+/* x.com / pixiv 等の非同期展開に失敗 (媒体なし / login 要 / API ダウン) */
+.image-slot.expand-failed {
+    background: #fafafa;
+    cursor: default;
+}
+.image-slot.expand-failed:hover {
+    border-color: #ddd;
+}
+
+/* ---- 動画 / YouTube スロット ----
+ * 画像 (240×240) より少し横長の 16:9 比率を使う。サムネ・iframe・<video> いずれも 16:9 が標準。
+ */
+.image-slot.video,
+.image-slot.youtube {
+    width: 320px;
+    height: 180px;
+}
+
+/* 直リンク動画 (.mp4 等): HEAD は走らせず最初から「クリックで再生」placeholder */
+.image-slot.video {
+    background: repeating-linear-gradient(
+        45deg,
+        #fafafa,
+        #fafafa 8px,
+        #ececec 8px,
+        #ececec 16px);
+}
+.image-slot.video .image-placeholder-text {
+    /* 真ん中ではなく下端にずらして再生アイコンと被らないように */
+    top: auto;
+    bottom: 8px;
+    transform: none;
+    color: #444;
+}
+
+/* YouTube サムネイル: deferred 中はアイコン非表示、loaded で重ねる */
+.image-slot.youtube.deferred .media-play-icon {
+    display: none;
+}
+
+/* スロット内の <video> / <iframe> は (materialize 直後 / 再生中 を問わず) スロット全体を埋める */
+.image-slot video,
+.image-slot iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #000;
+}
+
+/* 再生中はスロットのカーソルを default に戻す (再生制御は内部の <video controls> に委ねる) */
+.image-slot.playing {
+    cursor: default;
+    border-color: #ccc;
+}
+
+/* materialized (first frame サムネ表示中) のときはストライプ背景を消して video の上に直接 ▶ を重ねる */
+.image-slot.video.materialized {
+    background: #000;
+}
+
+/* 中央に重ねる ▶ アイコン (黒丸 + 白い三角) */
+.media-play-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 56px;
+    height: 56px;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.media-play-icon::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 56%;
+    transform: translate(-50%, -50%);
+    width: 0;
+    height: 0;
+    border-left: 18px solid #fff;
+    border-top: 12px solid transparent;
+    border-bottom: 12px solid transparent;
+}
+
+.image-slot .image-placeholder-text {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    text-align: center;
+    color: #555;
+    font-size: 12px;
+    pointer-events: none;
+}
+
+/* スロット内に挿入される実画像 */
+.image-slot .inline-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #fff;
+}
+
+/* ---- ツリー表示 (重複あり / 重複なし) でレス直下に出すインライン展開 ---- */
+/* インデントなどコンテナ周りのスタイルは scaffold 側で持つ。.post.embedded 自体の
+   背景色や枠線は post.css (テーマ) 側で定義する。 */
+.inline-expansion {
+    margin: 2px 0 2px 8px;
+}
+.inline-expansion.reverse-more {
+    color: #888;
+    font-size: 11px;
+    padding: 2px 8px;
+}
+
+/* anchor popup */
+.anchor-popup {
+    position: absolute;
+    background: #fff;
+    border: 1px solid #888;
+    box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.25);
+    z-index: 100;
+    max-width: 720px;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.anchor-popup .post {
+    background: #fffff0;
+}
+
+.anchor-popup .anchor-missing {
+    padding: 4px 8px;
+    color: #999;
+}
+
+/* loading state */
+.loading {
+    padding: 12px;
+    color: #888;
+    font-style: italic;
+}
+
+/* デフォルトスクロールバーは非表示。スクロールはリッチスクロールバーで行う。 */
+::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    background: transparent;
+}
+
+/* ---- リッチスクロールバー (本格スクロールバーとして機能) ---- */
+#richScrollbar {
+    position: fixed;
+    top: 0;
+    right: 0;             /* デフォルトスクロールバーが無いので右端まで */
+    bottom: 0;
+    width: 24px;
+    display: flex;
+    flex-direction: row;
+    z-index: 50;
+    background: rgba(245, 245, 245, 0.95);
+    border-left: 1px solid #ccc;  /* 本文との境界線 */
+}
+
+#richScrollbar .track {
+    flex: 1;
+    position: relative;   /* marker の絶対配置 anchor */
+    height: 100%;
+    cursor: pointer;
+}
+
+#richScrollbar .track:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+#richScrollbar .marker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    pointer-events: none;  /* クリックは下の track に通す */
+}
+
+.track-popular .marker { background: #d32f2f; }
+.track-url     .marker { background: #2e7d32; }
+.track-image   .marker { background: #f57c00; }
+.track-video   .marker { background: #7b1fa2; }
+
+/* ---- スクロールサム (現在の表示範囲、ドラッグで移動) ---- */
+#scrollThumb {
+    position: absolute;
+    left: 0;
+    right: 0;
+    min-height: 20px;
+    background: rgba(80, 80, 80, 0.4);
+    cursor: grab;
+    z-index: 10;          /* track / marker より上に */
+}
+#scrollThumb:hover    { background: rgba(80, 80, 80, 0.55); }
+#scrollThumb.dragging { background: rgba(80, 80, 80, 0.7); cursor: grabbing; }

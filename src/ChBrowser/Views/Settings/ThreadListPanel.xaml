@@ -1,0 +1,17 @@
+<UserControl x:Class="ChBrowser.Views.Settings.ThreadListPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+        <CheckBox IsChecked="{Binding ThreadListOpenOnSingleClick, Mode=TwoWay}"
+                  Content="1 クリックで開く"
+                  Margin="0,0,0,4" />
+        <TextBlock Text="OFF にするとダブルクリックで開く動作になります。"
+                   Foreground="#666"
+                   TextWrapping="Wrap" />
+    </StackPanel>
+</UserControl>

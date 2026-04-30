@@ -1,0 +1,81 @@
+using System;
+using System.IO;
+
+namespace ChBrowser.Services.Storage;
+
+/// <summary>
+/// アプリのデータルートと、その配下の標準ディレクトリ/ファイルパスを解決する。
+/// **ポータブルアプリ**: 既定では exe と同じディレクトリ配下の <c>data/</c> を使う
+/// (= exe ディレクトリごと別マシンに持っていけばそのまま動く)。設計書 §4.1 参照。
+/// 環境変数 <c>CHBROWSER_DATA_DIR</c> を設定すると差し替え可能(開発時のテスト用)。
+///
+/// 5ch.io / bbspink.com は内部に多数のサブドメイン (hayabusa9.5ch.io 等) を持ち、
+/// 板はそれぞれ異なる host にホストされる。このため板ディレクトリは
+/// <c>data/&lt;rootDomain&gt;/&lt;directory_name&gt;/</c> 形式で配置する。
+/// </summary>
+public sealed class DataPaths
+{
+    public string Root { get; }
+
+    public DataPaths(string? rootOverride = null)
+    {
+        Root = rootOverride
+               ?? Environment.GetEnvironmentVariable("CHBROWSER_DATA_DIR")
+               ?? Path.Combine(AppContext.BaseDirectory, "data");
+    }
+
+    public string AppDir          => EnsureDir(Path.Combine(Root, "app"));
+    public string NgDir           => EnsureDir(Path.Combine(Root, "ng"));
+    public string NgByBoardDir    => EnsureDir(Path.Combine(NgDir, "by_board"));
+    public string DonguriDir      => EnsureDir(Path.Combine(Root, "donguri"));
+    public string CacheImagesDir  => EnsureDir(Path.Combine(Root, "cache", "images"));
+    public string ThemesDir       => EnsureDir(Path.Combine(Root, "themes"));
+
+    public string Root5chIo       => EnsureDir(Path.Combine(Root, "5ch.io"));
+    public string RootBbspink     => EnsureDir(Path.Combine(Root, "bbspink.com"));
+
+    public string BbsmenuJsonPath   => Path.Combine(Root5chIo, "bbsmenu.json");
+    public string LayoutJsonPath    => Path.Combine(AppDir, "layout.json");
+    public string FavoritesJsonPath => Path.Combine(AppDir, "favorites.json");
+
+    /// <summary>アプリ全体設定 (Phase 11)。<see cref="ChBrowser.Models.AppConfig"/> の保存先。</summary>
+    public string ConfigJsonPath    => Path.Combine(AppDir, "config.json");
+
+    // NG ルールは Phase 13e で `data/ng/rules.json` の単一ファイルに統合 (= NgStorage 内で組み立て)。
+    // 旧 `global.json` + `by_board/*.json` は NgStorage.LoadAndMigrate が自動で吸収 + 削除する。
+
+    /// <summary>どんぐり/MonaTicket Cookie の永続化先 (Netscape 形式)。Phase 8。</summary>
+    public string DonguriCookiesPath => Path.Combine(DonguriDir, "cookies.txt");
+
+    /// <summary>どんぐりの推定 Lv・最終取得時刻などのメタを置く JSON。Phase 8。</summary>
+    public string DonguriStateJsonPath => Path.Combine(DonguriDir, "state.json");
+
+    /// <summary>板の保存ディレクトリ。host から root domain を判定。</summary>
+    public string BoardDir(string host, string directoryName)
+    {
+        var domain = ExtractRootDomain(host);
+        return EnsureDir(Path.Combine(Root, domain, directoryName));
+    }
+
+    public string SubjectTxtPath(string host, string directoryName)
+        => Path.Combine(BoardDir(host, directoryName), "_subject.txt");
+
+    public string DatPath(string host, string directoryName, string threadKey)
+        => Path.Combine(BoardDir(host, directoryName), threadKey + ".dat");
+
+    public string IdxJsonPath(string host, string directoryName, string threadKey)
+        => Path.Combine(BoardDir(host, directoryName), threadKey + ".idx.json");
+
+    /// <summary>"hayabusa9.5ch.io" → "5ch.io"、"mercury.bbspink.com" → "bbspink.com"。</summary>
+    public static string ExtractRootDomain(string host)
+    {
+        var parts = host.Split('.');
+        return parts.Length >= 2 ? $"{parts[^2]}.{parts[^1]}" : host;
+    }
+
+    private static string EnsureDir(string path)
+    {
+        Directory.CreateDirectory(path);
+        return path;
+    }
+}

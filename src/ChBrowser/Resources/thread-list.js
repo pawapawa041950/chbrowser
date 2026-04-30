@@ -1,0 +1,111 @@
+// ChBrowser スレ一覧 (Phase 14a で WebView 化、Phase 11d で外出し)。
+// JS → C#:
+//   { type: 'openThread', host, directoryName, key, title, logState }   — クリック or ダブルクリックで開く
+//   { type: 'paneActivated' }                                            — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
+// C# → JS:
+//   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
+//   { type: 'setConfig', openOnSingleClick: bool }                       — Phase 11b: クリック動作の設定
+
+(function() {
+    'use strict';
+
+    // Phase 14: pane の任意のクリックで C# にアクティブ化通知 (= アドレスバー切替)。
+    // capture phase に登録して、内部の click/dblclick ハンドラよりも先に拾う (= preventDefault を呼ぶ要素があっても取りこぼさない)。
+    document.addEventListener('mousedown', function() {
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'paneActivated' });
+        }
+    }, true);
+
+    var selected = null;
+    var tbody = document.querySelector('tbody');
+    if (!tbody) return;
+    var collator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+
+    // Phase 11b: デフォルト ON (= 1 クリックで開く)。setConfig で C# から上書きされる。
+    var openOnSingleClick = true;
+
+    function sortBy(key, type, dir) {
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+        rows.sort(function(a, b) {
+            var av = a.dataset[key];
+            var bv = b.dataset[key];
+            var cmp;
+            if (type === 'num') {
+                cmp = parseFloat(av) - parseFloat(bv);
+            } else {
+                cmp = collator.compare(av || '', bv || '');
+            }
+            return cmp * dir;
+        });
+        var frag = document.createDocumentFragment();
+        rows.forEach(function(r) { frag.appendChild(r); });
+        tbody.appendChild(frag);
+    }
+
+    document.querySelectorAll('thead th.sortable').forEach(function(th) {
+        th.addEventListener('click', function() {
+            var isAsc = th.classList.contains('sort-asc');
+            var dir   = isAsc ? -1 : 1;
+            document.querySelectorAll('thead th.sortable').forEach(function(o) {
+                o.classList.remove('sort-asc', 'sort-desc');
+            });
+            th.classList.add(dir === 1 ? 'sort-asc' : 'sort-desc');
+            sortBy(th.dataset.sort, th.dataset.sortType, dir);
+        });
+    });
+
+    function openTr(tr) {
+        if (!window.chrome || !window.chrome.webview) return;
+        // host/dir/key/title を全部送る (C# 側で Board と ThreadInfo を再構築するため、
+        // 出元板に依存しないお気に入りディレクトリ表示でも動くようにする)
+        window.chrome.webview.postMessage({
+            type:          'openThread',
+            host:          tr.dataset.host,
+            directoryName: tr.dataset.dir,
+            key:           tr.dataset.key,
+            title:         tr.dataset.title,
+            logState:      parseInt(tr.dataset.log, 10) || 0,
+        });
+    }
+
+    tbody.addEventListener('click', function(e) {
+        var tr = e.target.closest && e.target.closest('tr');
+        if (!tr) return;
+        if (selected) selected.classList.remove('selected');
+        tr.classList.add('selected');
+        selected = tr;
+        if (openOnSingleClick) openTr(tr);
+    });
+
+    tbody.addEventListener('dblclick', function(e) {
+        var tr = e.target.closest && e.target.closest('tr');
+        if (!tr) return;
+        if (!openOnSingleClick) openTr(tr);
+    });
+
+    // C# からの増分通知 (LogMarkUpdate / setConfig) を受信
+    if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.addEventListener('message', function(e) {
+            var msg = e.data;
+            if (!msg || !msg.type) return;
+            if (msg.type === 'updateLogMarks' && msg.value) {
+                var changes = msg.value.changes || [];
+                changes.forEach(function(change) {
+                    var tr = tbody.querySelector('tr[data-key="' + change.key + '"]');
+                    if (!tr) return;
+                    tr.classList.remove('has-log', 'has-update', 'has-dropped');
+                    var sortVal = 0;
+                    if      (change.state === 'cached')  { tr.classList.add('has-log');     sortVal = 1; }
+                    else if (change.state === 'updated') { tr.classList.add('has-update');  sortVal = 2; }
+                    else if (change.state === 'dropped') { tr.classList.add('has-dropped'); sortVal = 3; }
+                    tr.dataset.log = String(sortVal);
+                });
+            } else if (msg.type === 'setConfig') {
+                if (typeof msg.openOnSingleClick === 'boolean') {
+                    openOnSingleClick = msg.openOnSingleClick;
+                }
+            }
+        });
+    }
+})();

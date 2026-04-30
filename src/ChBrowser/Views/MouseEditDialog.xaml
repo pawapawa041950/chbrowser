@@ -1,0 +1,60 @@
+<Window x:Class="ChBrowser.Views.MouseEditDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="マウス操作の設定"
+        Width="460" Height="260"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel LastChildFill="True" Margin="14">
+
+        <!-- 上部: 操作名 -->
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,12">
+            <Run Text="操作: " Foreground="#666" />
+            <Run Text="{Binding ActionName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, FallbackValue='(未指定)'}"
+                 FontWeight="SemiBold" />
+        </TextBlock>
+
+        <!-- 下部: ボタン群 -->
+        <Border DockPanel.Dock="Bottom" Padding="0,12,0,0">
+            <DockPanel LastChildFill="False">
+                <Button DockPanel.Dock="Left"
+                        Content="クリア"
+                        Width="90"
+                        Click="ClearButton_Click"
+                        ToolTip="このマウス操作を未設定にする" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="キャンセル"
+                            Width="90"
+                            IsCancel="True"
+                            Margin="0,0,8,0" />
+                    <Button Content="OK"
+                            Width="90"
+                            IsDefault="True"
+                            Click="OkButton_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- 中央: ドロップダウン + 現在の割り当て -->
+        <StackPanel>
+            <TextBlock Text="マウス操作"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,4" />
+            <ComboBox x:Name="OperationCombo"
+                      DisplayMemberPath="Label"
+                      SelectedValuePath="Value"
+                      Padding="4,3" />
+            <TextBlock Margin="0,16,0,0">
+                <Run Text="現在の割り当て: " Foreground="#666" />
+                <Run x:Name="CurrentBindingRun" Text="(未設定)" FontWeight="SemiBold" />
+            </TextBlock>
+        </StackPanel>
+
+    </DockPanel>
+</Window>

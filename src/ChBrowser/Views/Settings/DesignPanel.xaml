@@ -1,0 +1,81 @@
+<UserControl x:Class="ChBrowser.Views.Settings.DesignPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+
+        <TextBlock Text="CSS ファイルをエディタで開く" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,8"
+                   Text="関連付けられているアプリで CSS ファイルを開きます。ディスクに未配置のファイルは「既定 CSS を生成」で出してから編集してください。" />
+
+        <StackPanel Orientation="Vertical" Margin="0,0,0,16">
+            <Button Content="お気に入りペイン (favorites.css)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="favorites.css" />
+            <Button Content="板一覧ペイン (board-list.css)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="board-list.css" />
+            <Button Content="スレッド一覧 (thread-list.css)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="thread-list.css" />
+            <Button Content="スレッド表示の枠まわり (thread.css)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="thread.css" />
+            <Button Content="レス 1 件分の見た目 (post.css)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="post.css" />
+        </StackPanel>
+
+        <TextBlock Text="操作" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+            <Button Content="すべての CSS を再読み込み"
+                    Padding="10,4"
+                    Margin="0,0,8,0"
+                    Command="{Binding ReloadAllCssCommand}" />
+            <Button Content="テーマフォルダを開く"
+                    Padding="10,4"
+                    Margin="0,0,8,0"
+                    Command="{Binding OpenThemeFolderCommand}" />
+            <Button Content="既定 CSS を生成"
+                    Padding="10,4"
+                    Command="{Binding ExtractDefaultCssCommand}" />
+        </StackPanel>
+
+        <Border Background="#FFF8DC" BorderBrush="#E6C660" BorderThickness="1" Padding="10" CornerRadius="3">
+            <TextBlock TextWrapping="Wrap" Foreground="#665522">
+                <Run Text="注意: " FontWeight="SemiBold" />
+                <Run Text="「すべての CSS を再読み込み」はお気に入り / 板一覧 / スレッド一覧 の 3 ペインのみ即時反映されます。スレッド表示タブとビューアウィンドウは閉じて開き直してください。" />
+            </TextBlock>
+        </Border>
+
+    </StackPanel>
+</UserControl>

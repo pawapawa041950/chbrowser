@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>ChBrowser</RootNamespace>
+    <AssemblyName>ChBrowser</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon></ApplicationIcon>
+    <NeutralLanguage>ja-JP</NeutralLanguage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\thread.html" />
+    <EmbeddedResource Include="Resources\thread.css" />
+    <EmbeddedResource Include="Resources\thread.js" />
+    <EmbeddedResource Include="Resources\post.html" />
+    <EmbeddedResource Include="Resources\post.css" />
+    <EmbeddedResource Include="Resources\board-list.html" />
+    <EmbeddedResource Include="Resources\board-list.css" />
+    <EmbeddedResource Include="Resources\board-list.js" />
+    <EmbeddedResource Include="Resources\favorites.html" />
+    <EmbeddedResource Include="Resources\favorites.css" />
+    <EmbeddedResource Include="Resources\favorites.js" />
+    <EmbeddedResource Include="Resources\thread-list.html" />
+    <EmbeddedResource Include="Resources\thread-list.css" />
+    <EmbeddedResource Include="Resources\thread-list.js" />
+    <EmbeddedResource Include="Resources\viewer.html" />
+    <EmbeddedResource Include="Resources\viewer.css" />
+    <EmbeddedResource Include="Resources\viewer.js" />
+  </ItemGroup>
+
+</Project>

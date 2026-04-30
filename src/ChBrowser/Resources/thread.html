@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ChBrowser thread view</title>
+<style>
+/*{{CSS}}*/
+</style>
+</head>
+<body>
+<div id="posts"></div>
+
+<!--
+  リッチスクロールバー (デフォルトのスクロールバー機能を兼ねる)。
+  body に padding-right: 24px を入れて専用領域を確保。
+  - track-* : 各種マーカー (赤=人気レス / 緑=URL / 橙=画像 / 紫=動画)
+  - scrollThumb : 現在のビューポート位置を示す半透明の thumb (ドラッグでスクロール)
+  ※ 旧 track-readline (現在位置マーカー) は scrollThumb と冗長なため撤去。
+    将来「最深既読位置」を独立に追跡する場合はその時点で再導入する。
+-->
+<div id="richScrollbar">
+    <div class="track track-popular"></div>
+    <div class="track track-url"></div>
+    <div class="track track-image"></div>
+    <div class="track track-video"></div>
+    <div id="scrollThumb"></div>
+</div>
+
+<!--
+  1 レス分の HTML テンプレ (テーマファイル post.html の内容)。
+  thread.js の renderPost() がこの textContent を読み、{{var}} と {{#if}}{{/if}} を解釈して
+  各レスをレンダリングする。type="text/template" にしておけばブラウザは実行も解釈もしない。
+  注意: テンプレ中に文字列 "</script" が現れると script タグの終端と誤認されるので使えない。
+-->
+<script type="text/template" id="post-template">
+<!--{{POST_TEMPLATE}}-->
+</script>
+<script>
+/*{{JS}}*/
+</script>
+</body>
+</html>

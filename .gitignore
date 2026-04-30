@@ -1,0 +1,68 @@
+# --- Build outputs ---
+bin/
+obj/
+[Bb]uild/
+[Bb]uilds/
+[Dd]ebug/
+[Rr]elease/
+out/
+publish/
+
+# --- Visual Studio / VS Code ---
+.vs/
+.vscode/
+*.user
+*.suo
+*.userprefs
+*.userosscache
+*.sln.docstates
+*.lock.json
+*.csproj.Backup.tmp
+*.Backup.tmp
+
+# --- ReSharper / Rider ---
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+.idea/
+
+# --- NuGet ---
+packages/
+*.nupkg
+*.snupkg
+
+# --- Test results ---
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+TestResults/
+
+# --- Logs / temp ---
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+[Tt]humbs.db
+[Dd]esktop.ini
+
+# --- WebView2 user data folder ---
+# 各 exe 横に "<exe>.WebView2/" として作られる Edge プロファイル一式
+*.WebView2/
+
+# --- ChBrowser ランタイムデータ ---
+# bin/ 配下に展開される `data/` フォルダはユーザのキャッシュ・設定・dat 等を含む。
+# bin/ 自体を ignore しているので大半はこれでカバーされるが、念のため明示。
+data/
+src/ChBrowser/data/
+
+# --- 設計書 / ドキュメント関連の編集中ファイル ---
+~$*
+
+# --- macOS / その他 ---
+.DS_Store
+
+# --- Claude Code の作業ファイル (任意で commit したくない場合) ---
+# .claude/ はプロジェクト固有の Claude Code 状態が入る。チームで共有しない場合は ignore 推奨。
+.claude/

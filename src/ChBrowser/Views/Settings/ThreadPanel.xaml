@@ -1,0 +1,46 @@
+<UserControl x:Class="ChBrowser.Views.Settings.ThreadPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+
+        <TextBlock Text="人気レス閾値" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="このレス番号以上の被アンカー数を集めたレスをスクロールバーに赤マーカー表示する。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <TextBox Text="{Binding PopularThreshold, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="80"
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,16" />
+
+        <TextBlock Text="標準の表示モード" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="新しくスレを開いたときの表示モード。タブごとに後から切替可能。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <ComboBox SelectedValue="{Binding DefaultThreadViewMode, Mode=TwoWay}"
+                  SelectedValuePath="Tag"
+                  Width="220"
+                  HorizontalAlignment="Left"
+                  Margin="0,0,0,16">
+            <ComboBoxItem Content="レス順 (Flat)"             Tag="Flat" />
+            <ComboBoxItem Content="ツリー (重複あり)"          Tag="Tree" />
+            <ComboBoxItem Content="ツリー (重複なし)" Tag="DedupTree" />
+        </ComboBox>
+
+        <TextBlock Text="自動取得する画像サイズの上限 (MB)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="この値以下の画像は自動でロード。これを超える画像はクリックされるまで取得しない。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <TextBox Text="{Binding ImageSizeThresholdMb, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="80"
+                 HorizontalAlignment="Left" />
+
+    </StackPanel>
+</UserControl>

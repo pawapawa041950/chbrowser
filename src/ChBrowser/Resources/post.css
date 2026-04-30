@@ -1,0 +1,91 @@
+/*
+ * ChBrowser スレ表示用 post 系スタイル。
+ * %LOCALAPPDATA%/ChBrowser/themes/default/post.css に初回起動時にコピーされ、ユーザーが
+ * 自由に編集できる (再起動で反映)。
+ *
+ * 「通常レス」と「埋め込みレス (ツリー表示の親/子)」は同じ HTML 構造で、
+ *   .post              … 通常レス
+ *   .post.embedded     … ツリー展開で他レスの直下に埋め込まれているレス
+ * の class 違いだけで区別している。色・余白・枠線などをここで分岐させればよい。
+ *
+ * 動画 / 画像スロット / リッチスクロールバー / リンク等のスタイルは scaffold 側
+ * (thread.css) で定義している。post.css ではレス本体の見た目だけを扱う方針。
+ */
+
+.post {
+    padding: 4px 8px;
+    padding-bottom: 16px;
+    /*border-bottom: 1px solid #e0e0e0;*/
+}
+
+.post-no {
+    color: #006400;
+    font-weight: bold;
+}
+
+/* レス番号の色: 自分宛の返信があるレスを目立たせる。
+ *   has-replies-few  … 1-2 件 → 薄いピンク (赤との差を出すため淡い色)
+ *   has-replies-many … 3 件以上 → 赤 (テンプレ側で 1 つだけ排他的に付くようになっている)
+ */
+.post-no.has-replies-few  { color: #ff8888; }
+.post-no.has-replies-many { color: #aa0000; }
+
+.post-name {
+    color: #006400;
+}
+
+.post-meta {
+    color: #666;
+}
+
+.post-body {
+    margin-top: 3px;
+    margin-left: 25px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.25;
+}
+
+/* post-body の下にレス内画像/動画スロットを横並びで配置するエリア (Jane Xeno 風)。
+ * 本文中に画像/動画 URL が無いレスでは {{media}} が空 → :empty で非表示になり、
+ * 余白も発生しない。 */
+.post-media {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+    margin-left: 25px;
+}
+.post-media:empty {
+    display: none;
+}
+
+/* 返信数バッジ。テンプレで span は常に DOM に出すようになっており、0 件のときは中身が空。
+ * :empty で非表示にすることで「件数があるときだけ見える」挙動を実現する。
+ * data-replies にカンマ区切りのレス番号が入り、ホバーすると返信元レスをポップアップする。 */
+.post-reply-count {
+    color: #006400;
+    font-size: 11px;
+    margin-left: 8px;
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+.post-reply-count:empty {
+    display: none;
+}
+.post-reply-count:hover {
+    color: #003300;
+}
+
+/* ツリー表示で他レス直下に埋め込まれた時の枠線 + 余白 */
+.post.embedded {
+    border: 1px solid #e3e3e3;
+    border-radius: 2px;
+    margin: 2px 0;
+    padding: 3px 0px 0px 6px;
+}
+
+/* ツリー (重複あり / 重複なし) の forward (親) / reverse (子) 別の色 */
+.inline-expansion.forward .post.embedded { background: #f7faff; border-color: #e0e8f5; }
+.inline-expansion.reverse .post.embedded { background: #f7fff8; border-color: #e0f0e4; }

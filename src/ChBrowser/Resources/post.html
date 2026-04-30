@@ -1,0 +1,47 @@
+<!--
+  ChBrowser スレ表示用 1 レス分のテンプレート (HTML)。
+  %LOCALAPPDATA%/ChBrowser/themes/default/post.html に初回起動時にコピーされ、ユーザーが
+  自由に編集できる。編集すると次回スレ表示から反映される (ホットリロードはなし、要再起動)。
+
+  ===== 変数 =====
+    {{number}}         レス番号 (整数)
+    {{name}}           名前 (HTML 既処理: <b>...</b> 等を含むことがある)         ※ raw 挿入
+    {{date}}           投稿日時 (例: "2026/04/27(月) 12:34:56.78")               ※ HTML エスケープ
+    {{id}}             投稿者 ID (例: "abc1234")。空のときは {{#if id}} ブロックをスキップ
+    {{body}}           本文 (HTML 既処理: アンカー含む。画像/動画スロットは {{media}} に分離されているのでここには出ない) ※ raw 挿入
+    {{media}}          本文中に出てきた画像/動画/YouTube のスロット HTML 群。横並び表示用に
+                       post-body と分離してある。post-media コンテナで包んで CSS で flex-wrap 横並びに  ※ raw 挿入
+    {{replyCount}}     自分宛の返信件数 (整数)。0 のときは {{#if replyCount}} ブロックをスキップ
+    {{replyNumbers}}   返信元のレス番号カンマ区切り (例: "3,7,12")。data-replies 用
+    {{hasFewReplies}}  返信 1-2 件のときだけ true。post-no をピンクにするのに使う
+    {{hasManyReplies}} 返信 3 件以上のときだけ true。post-no を赤にするのに使う
+    {{children}}       ツリー表示時に直下に展開する子レスの HTML                ※ raw 挿入
+    {{isEmbedded}}     ツリー表示の埋め込みレスかどうか (true/false)
+    {{domId}}          要素に id="r{{number}}" を付けるか (true/false)。重複 ID を避けるため
+                       ツリー (重複あり) モードの埋め込みレスは false になる
+
+  ===== 構文 =====
+    {{var}}            変数を展開
+    {{#if var}}...{{/if}}   var が truthy なら展開 (ネスト不可)
+
+  ===== 必須コントラクト =====
+    JS のクリック / スクロール / ホバー処理が依存しているため以下は維持すること:
+      - 最外要素に class="post" がある (find topmost / NG 対象判定で使用)
+      - {{#if domId}} 経由で id="r{{number}}" を付ける
+      - {{body}} を raw のまま 1 箇所に入れる (中の <a class="anchor"> や .image-slot に
+        JS のイベントハンドラが取り付くため)
+      - 返信件数バッジは <span class="post-reply-count" data-replies="{{replyNumbers}}"> ... </span>
+        の形で 「常に DOM に出す」(span 自体を {{#if replyCount}} で囲まない)。中身だけ if で
+        囲むこと。理由: streaming 中に新着レスが既存レスを参照すると返信件数が増えるが、
+        その時 JS は既存の span のテキストを書き換えるだけにしている。span 自体が無いと
+        位置が分からないので JS が末尾に append してしまい、テンプレで指定した位置と
+        ずれる。post.css の `.post-reply-count:empty { display: none; }` で 0 件時は隠れる。
+    壊した場合は %LOCALAPPDATA%/ChBrowser/themes/default/post.html を削除して再起動すれば
+    既定テンプレが再展開される (削除してから起動するだけでよい)。
+-->
+<div class="post{{#if isEmbedded}} embedded{{/if}}"{{#if domId}} id="r{{number}}"{{/if}}>
+<div class="post-header"><span class="post-no {{#if hasFewReplies}}has-replies-few{{/if}}{{#if hasManyReplies}}has-replies-many{{/if}}">{{number}}: </span><span class="post-reply-count" data-replies="{{replyNumbers}}">{{#if replyCount}}返信{{replyCount}}件{{/if}}</span> <span class="post-name">{{name}}</span><span class="post-meta"> {{date}}{{#if id}} ID:{{id}}{{/if}}</span></div>
+<div class="post-body">{{body}}</div>
+<div class="post-media">{{media}}</div>
+{{children}}
+</div>

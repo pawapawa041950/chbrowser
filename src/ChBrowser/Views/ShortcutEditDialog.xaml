@@ -1,0 +1,84 @@
+<Window x:Class="ChBrowser.Views.ShortcutEditDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="ショートカットの設定"
+        Width="460" Height="320"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel LastChildFill="True" Margin="14">
+
+        <!-- 上部: 操作名 -->
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Run Text="操作: " Foreground="#666" />
+            <Run Text="{Binding ActionName, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay, FallbackValue='(未指定)'}"
+                 FontWeight="SemiBold" />
+        </TextBlock>
+
+        <!-- 下部: ボタン群 -->
+        <Border DockPanel.Dock="Bottom" Padding="0,12,0,0">
+            <DockPanel LastChildFill="False">
+                <Button DockPanel.Dock="Left"
+                        Content="クリア"
+                        Width="90"
+                        Click="ClearButton_Click"
+                        ToolTip="このショートカットを未設定にする" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="キャンセル"
+                            Width="90"
+                            IsCancel="True"
+                            Margin="0,0,8,0" />
+                    <Button Content="OK"
+                            Width="90"
+                            IsDefault="True"
+                            Click="OkButton_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- 中央: キャプチャ領域 + 現在の割り当て -->
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 大きい外枠: フォーカスを取ったらここがキャプチャ対象、になる想定 (スタブ)。 -->
+            <Border Grid.Row="0"
+                    x:Name="CaptureArea"
+                    BorderBrush="#1E88E5"
+                    BorderThickness="2"
+                    Background="#F5F8FC"
+                    Focusable="True"
+                    Cursor="IBeam"
+                    MouseLeftButtonDown="CaptureArea_MouseLeftButtonDown">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="ここをクリックしてフォーカスを移してから"
+                               HorizontalAlignment="Center"
+                               Foreground="#666" />
+                    <TextBlock Text="新しいショートカットキーを押してください"
+                               HorizontalAlignment="Center"
+                               Foreground="#666" />
+                    <TextBlock x:Name="LiveCaptureText"
+                               Text=""
+                               HorizontalAlignment="Center"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               Foreground="#1E88E5"
+                               Margin="0,16,0,0" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Grid.Row="1" Margin="0,10,0,0">
+                <Run Text="現在の割り当て: " Foreground="#666" />
+                <Run x:Name="CurrentBindingRun" Text="(未設定)" FontWeight="SemiBold" />
+            </TextBlock>
+        </Grid>
+
+    </DockPanel>
+</Window>

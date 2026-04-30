@@ -1,0 +1,91 @@
+/* ChBrowser 板一覧 (Phase 14a) */
+
+html { height: 100%; }
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: auto;
+    background: #fff;
+    color: #000;
+    font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif;
+    font-size: 12px;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#board-list {
+    padding: 4px 0;
+}
+
+/* ---- カテゴリ ---- */
+details.category {
+    margin: 0;
+}
+
+details.category > summary {
+    list-style: none;          /* デフォルトの ▶ マーカーを消して自前の三角を出す */
+    cursor: pointer;
+    padding: 2px 6px 2px 18px;
+    position: relative;
+    color: #333;
+    font-weight: 600;
+}
+
+details.category > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.category > summary::before {
+    content: '▶';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 8px;
+    color: #888;
+    transition: transform 0.05s linear;
+}
+
+details.category[open] > summary::before {
+    transform: translateY(-50%) rotate(90deg);
+}
+
+details.category > summary:hover {
+    background: #f0f0f0;
+}
+
+/* ---- 板 ---- */
+ul.boards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+li.board {
+    padding: 2px 6px 2px 22px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+li.board:hover {
+    background: #eaf3ff;
+}
+
+li.board.selected {
+    background: #cce5ff;
+}
+
+/* ---- スクロールバー ---- */
+::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+}
+::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
