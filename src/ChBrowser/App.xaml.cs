@@ -140,7 +140,7 @@ public partial class App : Application
         var ngStorage = new NgStorage(paths);
         _ngService    = new ChBrowser.Services.Ng.NgService(ngStorage);
 
-        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService);
+        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths);
         _mainVm          = mainVm;
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
@@ -241,7 +241,7 @@ public partial class App : Application
         void RefreshThreadList(object? src)
         {
             var t = ResolveTargetThreadListTab(src, vm);
-            if (t?.Board is { } b) _ = vm.LoadThreadListAsync(new BoardViewModel(b));
+            if (t is not null) _ = vm.RefreshThreadListTabAsync(t);
         }
         void CloseThreadListTab(object? src) => ResolveTargetThreadListTab(src, vm)?.CloseCommand?.Execute(null);
         void RefreshThread(object? src) { if (ResolveTargetThreadTab(src, vm) is { } t) _ = vm.RefreshThreadAsync(t); }

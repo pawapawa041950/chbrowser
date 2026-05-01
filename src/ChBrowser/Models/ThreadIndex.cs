@@ -5,4 +5,8 @@ namespace ChBrowser.Models;
 /// </summary>
 /// <param name="LastReadPostNumber">最後にスクロール上端にあったレス番号 (位置復元用)。</param>
 /// <param name="LastFetchedPostCount">前回取得完了時のレス総数。subject.txt の件数と比較して新着の有無を判定する。</param>
-public sealed record ThreadIndex(int? LastReadPostNumber, int? LastFetchedPostCount);
+/// <param name="LastReadMarkPostNumber">「ここまで読んだ」帯の対象レス番号 (Phase 19)。
+/// 「rect.bottom &lt;= viewport bottom」を満たす primary レス (= ツリーの子としての描画は除外) の
+/// 最大番号を JS が追跡し、増加時のみ C# に通知して更新する (= 値は減少しない)。
+/// dat 削除で idx.json ごと消えるため自動でリセットされる。</param>
+public sealed record ThreadIndex(int? LastReadPostNumber, int? LastFetchedPostCount, int? LastReadMarkPostNumber = null);

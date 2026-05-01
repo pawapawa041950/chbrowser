@@ -40,7 +40,15 @@
                    Margin="0,0,0,4" />
         <TextBox Text="{Binding ImageSizeThresholdMb, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
                  Width="80"
-                 HorizontalAlignment="Left" />
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,16" />
+
+        <CheckBox IsChecked="{Binding ShowReadMark, Mode=TwoWay}"
+                  Content="「ここまで読んだ」帯を表示する"
+                  Margin="0,0,0,4" />
+        <TextBlock Text="スクロール中、レスを読み終えた箇所に控えめな帯を表示します。リッチスクロールバーにも該当位置が描画されます。OFF にしても位置自体は記録されるため、再度 ON にすると過去の位置から復活します。"
+                   Foreground="#666"
+                   TextWrapping="Wrap" />
 
     </StackPanel>
 </UserControl>

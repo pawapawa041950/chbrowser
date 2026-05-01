@@ -94,7 +94,12 @@
             if (msg.type === 'updateLogMarks' && msg.value) {
                 var changes = msg.value.changes || [];
                 changes.forEach(function(change) {
-                    var tr = tbody.querySelector('tr[data-key="' + change.key + '"]');
+                    // 集約タブ (全ログ / お気に入り板として開く) では同じ key が異なる板に存在しうるので、
+                    // host + dir + key の 3 つで一意な行を特定する。
+                    var sel = 'tr[data-host="' + change.host + '"]'
+                            + '[data-dir="'  + change.directoryName + '"]'
+                            + '[data-key="'  + change.key + '"]';
+                    var tr = tbody.querySelector(sel);
                     if (!tr) return;
                     tr.classList.remove('has-log', 'has-update', 'has-dropped');
                     var sortVal = 0;
@@ -102,6 +107,18 @@
                     else if (change.state === 'updated') { tr.classList.add('has-update');  sortVal = 2; }
                     else if (change.state === 'dropped') { tr.classList.add('has-dropped'); sortVal = 3; }
                     tr.dataset.log = String(sortVal);
+                });
+            } else if (msg.type === 'updateFavorited' && msg.value) {
+                // お気に入り増分更新: 行の is-favorited クラスを toggle (★ 背景表示)。
+                var fchanges = msg.value.changes || [];
+                fchanges.forEach(function(change) {
+                    var sel = 'tr[data-host="' + change.host + '"]'
+                            + '[data-dir="'  + change.directoryName + '"]'
+                            + '[data-key="'  + change.key + '"]';
+                    var tr = tbody.querySelector(sel);
+                    if (!tr) return;
+                    if (change.isFavorited) tr.classList.add('is-favorited');
+                    else                    tr.classList.remove('is-favorited');
                 });
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {

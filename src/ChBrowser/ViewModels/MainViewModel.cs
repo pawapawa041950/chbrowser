@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ChBrowser.Models;
@@ -26,6 +28,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly DonguriService       _donguri;
     private readonly DispatcherTimer      _donguriTimer;
     private readonly ChBrowser.Services.Ng.NgService _ng;
+    private readonly DataPaths            _paths;
 
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
     public ObservableCollection<ThreadListTabViewModel> ThreadListTabs   { get; } = new();
@@ -241,7 +244,8 @@ public sealed partial class MainViewModel : ObservableObject
         FavoritesStorage     favoritesStorage,
         PostClient           postClient,
         DonguriService       donguri,
-        ChBrowser.Services.Ng.NgService ng)
+        ChBrowser.Services.Ng.NgService ng,
+        DataPaths            paths)
     {
         _bbsmenuClient = bbsmenuClient;
         _subjectClient = subjectClient;
@@ -250,6 +254,7 @@ public sealed partial class MainViewModel : ObservableObject
         _postClient    = postClient;
         _donguri       = donguri;
         _ng            = ng;
+        _paths         = paths;
         Favorites      = new FavoritesViewModel(favoritesStorage);
 
         // お気に入りツリーが変わるたびに HTML を再生成 (Phase 14b)
@@ -318,21 +323,22 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>レスのバッチに NG 判定を適用し、可視分だけ tab.AppendPosts する共通ヘルパ。
-    /// バッチ内の連鎖は計算するが、過去バッチに跨る連鎖は対象外 (= タブ再オープン時に正しい連鎖が効く)。</summary>
-    private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch)
+    /// バッチ内の連鎖は計算するが、過去バッチに跨る連鎖は対象外 (= タブ再オープン時に正しい連鎖が効く)。
+    /// <paramref name="isIncremental"/> = true は「初期表示後の差分追加」を JS に伝える (Phase 20)。</summary>
+    private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch, bool isIncremental = false)
     {
         if (batch.Count == 0) return;
         var hidden = _ng.ComputeHidden(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName);
         if (hidden.Count == 0)
         {
-            tab.AppendPosts(batch);
+            tab.AppendPosts(batch, isIncremental);
         }
         else
         {
             var visible = new List<Post>(batch.Count - hidden.Count);
             foreach (var p in batch)
                 if (!hidden.Contains(p.Number)) visible.Add(p);
-            if (visible.Count > 0) tab.AppendPosts(visible);
+            if (visible.Count > 0) tab.AppendPosts(visible, isIncremental);
             tab.HiddenCount += hidden.Count;
         }
         if (ReferenceEquals(tab, SelectedThreadTab))
@@ -437,6 +443,7 @@ public sealed partial class MainViewModel : ObservableObject
             type                  = "setConfig",
             popularThreshold      = config.PopularThreshold,
             imageSizeThresholdMb  = config.ImageSizeThresholdMb,
+            showReadMark          = config.ShowReadMark,
         };
         ThreadConfigJson = System.Text.Json.JsonSerializer.Serialize(threadPayload);
 
@@ -694,6 +701,9 @@ public sealed partial class MainViewModel : ObservableObject
         var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
         if (savedIndex?.LastReadPostNumber is int savedPos)
             tab.ScrollTargetPostNumber = savedPos;
+        // 「ここまで読んだ」帯の対象 (Phase 19)
+        if (savedIndex?.LastReadMarkPostNumber is int savedMark)
+            tab.ReadMarkPostNumber = savedMark;
 
         // ★ ボタンの押下表示を初期化 (既にお気に入り登録済みのスレを開いた場合)
         tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
@@ -748,7 +758,8 @@ public sealed partial class MainViewModel : ObservableObject
                 {
                     var added = new List<Post>(result.Posts.Count - prevCount);
                     for (var i = prevCount; i < result.Posts.Count; i++) added.Add(result.Posts[i]);
-                    AppendPostsWithNg(tab, added);
+                    // disk-first で初期表示済 → HTTP 差分は incremental (Phase 20)
+                    AppendPostsWithNg(tab, added, isIncremental: true);
                     StatusMessage = $"{info.Title}: {added.Count} レス追加 (合計 {result.Posts.Count})";
                 }
                 else if (result.Posts.Count == prevCount)
@@ -823,7 +834,8 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 var newPosts = new List<Post>(result.Posts.Count - prevCount);
                 for (var i = prevCount; i < result.Posts.Count; i++) newPosts.Add(result.Posts[i]);
-                AppendPostsWithNg(tab, newPosts);
+                // RefreshThreadAsync は既存タブの差分追加なので incremental (Phase 20)
+                AppendPostsWithNg(tab, newPosts, isIncremental: true);
                 StatusMessage = $"{tab.Header}: {newPosts.Count} レス追加 (合計 {result.Posts.Count})";
             }
             else if (result.Posts.Count == prevCount)
@@ -903,7 +915,8 @@ public sealed partial class MainViewModel : ObservableObject
         dlg.Show();
     }
 
-    /// <summary>スレ表示タブのゴミ箱アイコンから呼ばれる。dat 削除 + タブ close + スレ一覧の青丸を消す。</summary>
+    /// <summary>スレ表示タブのゴミ箱アイコンから呼ばれる。dat 削除 + タブ close + スレ一覧の青丸を消す。
+    /// お気に入りに登録されていた場合は同時に外す (= dat が無くなったスレをお気に入りに残しても開けないため)。</summary>
     public void DeleteThreadLog(ThreadTabViewModel tab)
     {
         try
@@ -917,7 +930,19 @@ public sealed partial class MainViewModel : ObservableObject
         }
         ThreadTabs.Remove(tab);
         NotifyThreadListLogMark(tab.Board, tab.ThreadKey, LogMarkState.None);
-        StatusMessage = $"{tab.Header} のログを削除しました";
+
+        // お気に入り登録があれば外す (★ 表示の即時反映 + favorites.json への永続化を含む)
+        var favEntry      = Favorites.FindThread(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
+        var alsoUnfaved   = favEntry is not null;
+        if (favEntry is not null)
+        {
+            Favorites.Remove(favEntry);
+            RefreshFavoritedStateOfAllTabs();
+        }
+
+        StatusMessage = alsoUnfaved
+            ? $"{tab.Header} のログを削除しました (お気に入りからも外しました)"
+            : $"{tab.Header} のログを削除しました";
     }
 
     /// <summary>JS からのスクロール位置通知を idx.json に保存し、タブ側にも反映する (タブ復帰時の再復元用)。</summary>
@@ -935,15 +960,46 @@ public sealed partial class MainViewModel : ObservableObject
         if (tab is not null) tab.ScrollTargetPostNumber = topPostNumber;
     }
 
-    /// <summary>同じ板のスレ一覧タブが開いていれば、指定キーのマーク状態を切り替える (再描画なし)。
-    /// お気に入りディレクトリ展開タブ (Board=null) は対象外。</summary>
+    /// <summary>JS からの「ここまで読んだ」位置通知 (Phase 19)。
+    /// 値は減少しない (= 既存値より大きい場合のみ更新)、idx.json に永続化 + 該当タブの ReadMarkPostNumber を更新。</summary>
+    public void UpdateReadMark(Board board, string threadKey, int postNumber)
+    {
+        var existing = _threadIndex.Load(board.Host, board.DirectoryName, threadKey);
+        var prev     = existing?.LastReadMarkPostNumber ?? 0;
+        if (postNumber <= prev) return; // never decrease
+
+        var updated = (existing ?? new ThreadIndex(null, null)) with { LastReadMarkPostNumber = postNumber };
+        _threadIndex.Save(board.Host, board.DirectoryName, threadKey, updated);
+
+        var tab = ThreadTabs.FirstOrDefault(t =>
+            t.Board.Host          == board.Host &&
+            t.Board.DirectoryName == board.DirectoryName &&
+            t.ThreadKey           == threadKey);
+        if (tab is not null) tab.ReadMarkPostNumber = postNumber;
+    }
+
+    /// <summary>指定スレッドのマーク状態変化を、開いている全スレ一覧タブにブロードキャストする (Phase 18 でリファクタ)。
+    /// <list type="bullet">
+    /// <item><description>板タブ (Board != null) — Board.Host / DirectoryName が一致するときに更新</description></item>
+    /// <item><description>集約タブ (お気に入り「板として開く」/ 全ログ、Board == null) — Items に該当 (host, dir, key) が
+    /// あるときだけ更新 (= 対象が含まれない集約タブには通知しない)</description></item>
+    /// </list>
+    /// 各タブは行単位で増分通知 (`SetLogMark`) を受け、JS 側で <c>tr[data-host=][data-dir=][data-key=]</c> で
+    /// 一意な行を特定してマークを差し替える (= 再描画なし)。</summary>
     private void NotifyThreadListLogMark(Board board, string threadKey, LogMarkState state)
     {
-        var listTab = ThreadListTabs.FirstOrDefault(t =>
-            t.Board is not null &&
-            t.Board.Host          == board.Host &&
-            t.Board.DirectoryName == board.DirectoryName);
-        listTab?.SetLogMark(threadKey, state);
+        foreach (var t in ThreadListTabs)
+        {
+            if (t.Board is not null)
+            {
+                if (t.Board.Host == board.Host && t.Board.DirectoryName == board.DirectoryName)
+                    t.SetLogMark(board.Host, board.DirectoryName, threadKey, state);
+            }
+            else if (t.ContainsThread(board.Host, board.DirectoryName, threadKey))
+            {
+                t.SetLogMark(board.Host, board.DirectoryName, threadKey, state);
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -1024,16 +1080,26 @@ public sealed partial class MainViewModel : ObservableObject
         RefreshFavoritedStateOfAllTabs();
     }
 
-    /// <summary>開いている全 ThreadTab の <see cref="ThreadTabViewModel.IsFavorited"/> を、
-    /// 現在のお気に入り状態と同期する。お気に入りに変更があるたびに呼ぶ。</summary>
+    /// <summary>お気に入り状態の変化を、開いている全タブにリアルタイム反映する (Phase 18+)。
+    /// <list type="bullet">
+    /// <item><description>ThreadTab: ★ ボタンの押下表示 (<see cref="ThreadTabViewModel.IsFavorited"/>) を同期</description></item>
+    /// <item><description>ThreadListTab: 各行の is-favorited クラス (= ★ 背景) を増分通知で toggle</description></item>
+    /// </list>
+    /// お気に入りトグル / 削除 / 新規追加 のたびに呼ぶ。</summary>
     public void RefreshFavoritedStateOfAllTabs()
     {
         var favKeys = Favorites.CollectFavoriteThreadKeys();
+
+        // ThreadTab: ★ ボタン
         foreach (var tab in ThreadTabs)
         {
             var b = tab.Board;
             tab.IsFavorited = favKeys.Contains((b.Host, b.DirectoryName, tab.ThreadKey));
         }
+
+        // ThreadListTab: 各行の is-favorited クラス (増分 patch + Items snapshot 同期は VM 側で完結)
+        foreach (var listTab in ThreadListTabs)
+            listTab.SyncFavoritedFromKeySet(favKeys);
     }
 
     /// <summary>D&amp;D による移動を実行。target が null なら root 末尾、folder なら配下、それ以外は target の直後に。</summary>
@@ -1153,6 +1219,227 @@ public sealed partial class MainViewModel : ObservableObject
         return OpenThreadFromListAsync(t.Host, t.DirectoryName, t.ThreadKey, t.Title);
     }
 
+    /// <summary>「すべて開く」: フォルダ配下の全 board / thread を再帰的に展開し、
+    /// 板はそのまま板タブ、スレはそのままスレタブで開く。
+    /// 既存タブがあればアクティブ化されるだけなので重複オープンにはならない。</summary>
+    public Task OpenAllInFolderAsync(FavoriteFolderViewModel folder)
+        => OpenAllEntriesAsync(folder.Children);
+
+    /// <summary>「すべて開く」: お気に入り全体 (仮想ルート) で同様に開く。</summary>
+    public Task OpenAllInRootAsync()
+        => OpenAllEntriesAsync(Favorites.Items);
+
+    private async Task OpenAllEntriesAsync(IEnumerable<FavoriteEntryViewModel> entries)
+    {
+        var boards  = new List<FavoriteBoard>();
+        var threads = new List<FavoriteThread>();
+        foreach (var vm in entries) CollectFavoriteEntriesFromVm(vm, boards, threads);
+
+        if (boards.Count == 0 && threads.Count == 0)
+        {
+            StatusMessage = "開く対象がありません";
+            return;
+        }
+
+        StatusMessage = $"お気に入りを一括オープン中... (板 {boards.Count} / スレ {threads.Count})";
+
+        foreach (var fb in boards)
+        {
+            var board = ResolveBoard(fb.Host, fb.DirectoryName, fb.BoardName);
+            await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
+        }
+        foreach (var ft in threads)
+        {
+            await OpenThreadFromListAsync(ft.Host, ft.DirectoryName, ft.ThreadKey, ft.Title).ConfigureAwait(true);
+        }
+
+        StatusMessage = $"お気に入りオープン完了: 板 {boards.Count} / スレ {threads.Count}";
+    }
+
+    /// <summary>「板として開く」: お気に入り全体 (仮想ルート) を 1 つの統合スレ一覧タブで開く
+    /// (= 既存 <see cref="OpenFavoritesFolderAsync"/> のルート版)。タブ識別は <c>Guid.Empty</c>。</summary>
+    public Task OpenAllRootAsBoardAsync()
+        => OpenFavoritesAggregateTabAsync(Guid.Empty, "お気に入り", Favorites.Items);
+
+    /// <summary>「全ログ」: ローカルに dat を持っている全スレを 1 枚のスレ一覧として表示する (Phase 18)。
+    /// 既存タブがあればアクティブ化、無ければ新規タブを生成して中身を構築する。
+    /// 中身の組み立ては <see cref="BuildAllLogsItems"/> を共有する (= リフレッシュ時もここを通る)。
+    /// タブ識別 (<see cref="ThreadListTabViewModel.FavoritesFolderId"/> 流用) は固定 sentinel。</summary>
+    public Task OpenAllLogsAsync()
+    {
+        var existingTab = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == AllLogsTabId);
+        if (existingTab is not null)
+        {
+            SelectedThreadListTab = existingTab;
+            return Task.CompletedTask;
+        }
+
+        var tab = new ThreadListTabViewModel(AllLogsTabId, "全ログ", t => ThreadListTabs.Remove(t));
+        ThreadListTabs.Add(tab);
+        SelectedThreadListTab = tab;
+        RefreshAllLogsTab(tab);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>「全ログ」タブの中身を再構築する (= ディスク walk + ローカル subject.txt との突合)。
+    /// HTTP は呼ばない (ローカル状態のスナップショット)。</summary>
+    private void RefreshAllLogsTab(ThreadListTabViewModel tab)
+    {
+        try
+        {
+            tab.IsBusy    = true;
+            StatusMessage = "全ログを収集中...";
+            var items     = BuildAllLogsItems();
+            tab.SetItems(items, DateTimeOffset.UtcNow);
+            tab.Header    = $"📁 全ログ ({items.Count})";
+            StatusMessage = $"全ログ: {items.Count} 件";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"全ログ取得失敗: {ex.Message}";
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
+    }
+
+    /// <summary>data/&lt;rootDomain&gt;/&lt;dir&gt;/*.dat を全件走査し、各 dat を 1 行 (<see cref="ThreadListItem"/>) に変換する。
+    /// subject.txt があれば突合してタイトル / postCount / 状態 (青/緑) を引き、
+    /// なければ dat の 1 行目から title を取って Dropped (茶) でマーク。</summary>
+    private List<ThreadListItem> BuildAllLogsItems()
+    {
+        var items   = new List<ThreadListItem>();
+        var favSet  = Favorites.CollectFavoriteThreadKeys();
+
+        foreach (var rootDomain in new[] { "5ch.io", "bbspink.com" })
+        {
+            var rootDir = System.IO.Path.Combine(_paths.Root, rootDomain);
+            if (!System.IO.Directory.Exists(rootDir)) continue;
+
+            foreach (var dirPath in System.IO.Directory.EnumerateDirectories(rootDir))
+            {
+                var dirName  = System.IO.Path.GetFileName(dirPath);
+                var datFiles = System.IO.Directory.EnumerateFiles(dirPath, "*.dat").ToList();
+                if (datFiles.Count == 0) continue;
+
+                // BoardCategories から (rootDomain, dirName) で正規 Board を引く。
+                // 板が bbsmenu に無くなったケースでは fallback Board を作る (Host = rootDomain)。
+                var board     = FindBoardByDirectory(rootDomain, dirName)
+                              ?? new Board(dirName, dirName, $"https://{rootDomain}/{dirName}/", "", 0);
+                var subjList  = LoadSubjectFromDiskSync(board);
+                var subjByKey = subjList.ToDictionary(t => t.Key);
+                var states    = BuildLogStates(board, subjList);
+
+                foreach (var datFile in datFiles)
+                {
+                    var key = System.IO.Path.GetFileNameWithoutExtension(datFile);
+                    if (string.IsNullOrEmpty(key)) continue;
+
+                    ThreadInfo info;
+                    LogMarkState state;
+                    if (subjByKey.TryGetValue(key, out var subj))
+                    {
+                        info  = subj;
+                        state = states.TryGetValue(key, out var s) ? s : LogMarkState.Cached;
+                    }
+                    else
+                    {
+                        // subject.txt に無い (= 落ちた or subject 未取得) — dat 1 行目から title を抽出
+                        var title        = ReadDatTitle(datFile) ?? "(タイトル不明)";
+                        var idx          = _threadIndex.Load(board.Host, dirName, key);
+                        var fetchedCount = idx?.LastFetchedPostCount ?? 0;
+                        info  = new ThreadInfo(key, title, fetchedCount, 0);
+                        state = LogMarkState.Dropped;
+                    }
+
+                    var fav = favSet.Contains((board.Host, dirName, key));
+                    items.Add(new ThreadListItem(info, board.Host, dirName, board.BoardName, state, fav));
+                }
+            }
+        }
+        return items;
+    }
+
+    /// <summary>「全ログ」タブ識別用の固定 Guid (= <see cref="Guid.Empty"/> はお気に入り仮想ルートが使うので衝突回避)。</summary>
+    private static readonly Guid AllLogsTabId = new("ffffffff-ffff-ffff-ffff-fffffffffffe");
+
+    /// <summary>スレ一覧タブの「更新」を共通エントリで dispatch する (Phase 18 リファクタ)。
+    /// <list type="bullet">
+    /// <item><description>板タブ (<c>Board</c> 付き) → <see cref="LoadThreadListAsync"/> (subject.txt 再取得)</description></item>
+    /// <item><description>全ログ → <see cref="RefreshAllLogsTab"/> (ディスク walk 再実行)</description></item>
+    /// <item><description>お気に入り集約 (フォルダ / 仮想ルート板として開く) → 元のフォルダ参照を引き戻して再構築</description></item>
+    /// </list>
+    /// App.xaml.cs の <c>thread_list.refresh</c> ショートカットハンドラから呼ばれる。</summary>
+    public Task RefreshThreadListTabAsync(ThreadListTabViewModel tab)
+    {
+        if (tab.Board is { } board)
+            return LoadThreadListAsync(new BoardViewModel(board));
+
+        if (tab.FavoritesFolderId == AllLogsTabId)
+        {
+            RefreshAllLogsTab(tab);
+            return Task.CompletedTask;
+        }
+
+        if (tab.FavoritesFolderId is Guid id)
+        {
+            // 仮想ルート (= Guid.Empty) ならお気に入り全体、それ以外なら ID で folder 参照を引き戻す
+            if (id == Guid.Empty)
+                return BuildFavoritesAggregateItemsAsync(tab, "お気に入り", Favorites.Items);
+
+            if (Favorites.FindById(id) is FavoriteFolderViewModel folder)
+                return BuildFavoritesAggregateItemsAsync(tab, folder.DisplayName, folder.Children);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>BoardCategories から (rootDomain, directoryName) で板を検索する (host のサブドメイン違いを吸収)。</summary>
+    private Board? FindBoardByDirectory(string rootDomain, string directoryName)
+    {
+        foreach (var cat in BoardCategories)
+            foreach (var bvm in cat.Boards)
+                if (bvm.Board.DirectoryName == directoryName
+                    && DataPaths.ExtractRootDomain(bvm.Board.Host) == rootDomain)
+                    return bvm.Board;
+        return null;
+    }
+
+    /// <summary>ローカル <c>_subject.txt</c> を同期読みする (Async API しかないので blocking で読む)。
+    /// HTTP は呼ばない。ファイル無しなら空配列。</summary>
+    private IReadOnlyList<ThreadInfo> LoadSubjectFromDiskSync(Board board)
+    {
+        try
+        {
+            return _subjectClient.LoadFromDiskAsync(board).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AllLogs] subject load failed: {ex.Message}");
+            return Array.Empty<ThreadInfo>();
+        }
+    }
+
+    /// <summary>dat の 1 行目 (= 1 レス目) から title フィールドを抽出する。
+    /// dat 形式: <c>name&lt;&gt;mail&lt;&gt;date_id&lt;&gt;body&lt;&gt;title</c>。失敗時 null。</summary>
+    private static string? ReadDatTitle(string datPath)
+    {
+        try
+        {
+            var sjis  = System.Text.Encoding.GetEncoding(932);
+            using var sr = new System.IO.StreamReader(datPath, sjis);
+            var first = sr.ReadLine();
+            if (string.IsNullOrEmpty(first)) return null;
+            var fields = first.Split("<>", StringSplitOptions.None);
+            if (fields.Length < 5) return null;
+            return System.Net.WebUtility.HtmlDecode(fields[4]);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>お気に入りフォルダを開いてその中身を 1 枚のスレ一覧として表示する。
     /// フォルダ内のすべての board/thread を再帰収集し、各 board の subject.txt を取得して
     /// 統合した <see cref="ThreadListItem"/> 列を作る。subject.txt から消えたお気に入りスレは
@@ -1160,64 +1447,61 @@ public sealed partial class MainViewModel : ObservableObject
     ///
     /// 注意: フォルダの内容は <c>folderVm.Children</c> (ObservableCollection) を walk する。
     /// <c>folderVm.Model.Children</c> はロード時のスナップショットで D&amp;D 等の在memory編集を反映しないため使わない。</summary>
-    public async Task OpenFavoritesFolderAsync(FavoriteFolderViewModel folderVm)
-    {
-        // Id は不変なので Model から、表示名 (Name) は VM の現在値から取る (rename 反映)
-        var folderId   = folderVm.Model.Id;
-        var folderName = folderVm.DisplayName;
+    public Task OpenFavoritesFolderAsync(FavoriteFolderViewModel folderVm)
+        => OpenFavoritesAggregateTabAsync(folderVm.Model.Id, folderVm.DisplayName, folderVm.Children);
 
+    /// <summary>お気に入りフォルダ (or 仮想ルート) の中身を 1 枚のスレ一覧として表示する共通実装。
+    /// <paramref name="aggregateId"/> はタブ識別用 (フォルダなら <c>FavoriteFolder.Id</c>、仮想ルートなら <c>Guid.Empty</c>)。
+    /// 既存タブがあればアクティブ化、無ければ新規タブを作って中身を <see cref="BuildFavoritesAggregateItemsAsync"/> で構築する。</summary>
+    private Task OpenFavoritesAggregateTabAsync(
+        Guid aggregateId,
+        string aggregateName,
+        IEnumerable<FavoriteEntryViewModel> children)
+    {
         // 既存タブがあればアクティブ化するだけ
-        var existingTab = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == folderId);
+        var existingTab = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == aggregateId);
         if (existingTab is not null)
         {
             SelectedThreadListTab = existingTab;
-            return;
+            return Task.CompletedTask;
         }
 
-        var tab = new ThreadListTabViewModel(folderId, folderName, t => ThreadListTabs.Remove(t));
+        var tab = new ThreadListTabViewModel(aggregateId, aggregateName, t => ThreadListTabs.Remove(t));
         ThreadListTabs.Add(tab);
         SelectedThreadListTab = tab;
+        return BuildFavoritesAggregateItemsAsync(tab, aggregateName, children);
+    }
 
+    /// <summary>お気に入り集約タブ (フォルダの「板として開く」/ 仮想ルートの「板として開く」) の
+    /// items を再構築する (= subject.txt 再取得 → Dropped / 新着判定 → タブに反映)。
+    /// 新規オープン時もリフレッシュ時も同じ経路を通る。</summary>
+    private async Task BuildFavoritesAggregateItemsAsync(
+        ThreadListTabViewModel tab,
+        string aggregateName,
+        IEnumerable<FavoriteEntryViewModel> children)
+    {
         try
         {
             tab.IsBusy    = true;
-            StatusMessage = $"お気に入り「{folderName}」を取得中...";
+            StatusMessage = $"お気に入り「{aggregateName}」を取得中...";
 
-            // VM ツリーを再帰的に走って board/thread エントリを集める
+            // VM ツリーを再帰的に走って thread エントリを集める。
+            // 「板として開く」では fav board エントリは展開せず、登録スレだけを表示する仕様 (= 板の中身を引かない)。
             var boards  = new List<FavoriteBoard>();
             var threads = new List<FavoriteThread>();
-            foreach (var child in folderVm.Children)
-            {
+            foreach (var child in children)
                 CollectFavoriteEntriesFromVm(child, boards, threads);
-            }
 
-            // 各 board と「fav thread の出元 board (board としては未登録の場合)」の subject.txt をまとめて取得
+            // 登録スレの出元板の subject.txt のみ取得 (新着 / Dropped 判定に必要)。
+            // 同じ板に複数スレ登録があっても 1 回だけフェッチ。
             var subjectByBoard = new Dictionary<(string host, string dir), IReadOnlyList<ThreadInfo>>();
             var resolvedBoards = new Dictionary<(string host, string dir), Board>();
 
-            foreach (var fb in boards)
-            {
-                var key = (fb.Host, fb.DirectoryName);
-                if (subjectByBoard.ContainsKey(key)) continue;
-                var board = ResolveBoard(fb.Host, fb.DirectoryName, fb.BoardName);
-                resolvedBoards[key] = board;
-                try
-                {
-                    subjectByBoard[key] = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[Favorites] subject {fb.Host}/{fb.DirectoryName} 失敗: {ex.Message}");
-                    subjectByBoard[key] = Array.Empty<ThreadInfo>();
-                }
-            }
-
-            // 単独登録スレの出元板も同様に subject.txt を取りに行く (fav board に未登録の場合)
             foreach (var ft in threads)
             {
                 var key = (ft.Host, ft.DirectoryName);
                 if (subjectByBoard.ContainsKey(key)) continue;
-                var board = ResolveBoard(ft.Host, ft.DirectoryName, "");
+                var board = ResolveBoard(ft.Host, ft.DirectoryName, ft.BoardName);
                 resolvedBoards[key] = board;
                 try
                 {
@@ -1232,32 +1516,12 @@ public sealed partial class MainViewModel : ObservableObject
 
             var items     = new List<ThreadListItem>();
             var addedKeys = new HashSet<(string, string, string)>();
-            // お気に入りスレ全体を一括取得 (個別判定よりこの方が速い)
-            var favSet = Favorites.CollectFavoriteThreadKeys();
 
-            // 1) お気に入り「板」由来のスレを subject.txt 順に
-            foreach (var fb in boards)
-            {
-                var key   = (fb.Host, fb.DirectoryName);
-                var board = resolvedBoards[key];
-                if (!subjectByBoard.TryGetValue(key, out var infos)) continue;
-                var states = BuildLogStates(board, infos);
-                foreach (var info in infos)
-                {
-                    if (!addedKeys.Add((fb.Host, fb.DirectoryName, info.Key))) continue;
-                    var state = states.TryGetValue(info.Key, out var s) ? s : LogMarkState.None;
-                    var fav   = favSet.Contains((fb.Host, fb.DirectoryName, info.Key));
-                    items.Add(new ThreadListItem(info, fb.Host, fb.DirectoryName, fb.BoardName, state, fav));
-                }
-            }
-
-            // 2) お気に入り「スレ」 — まだ追加されていないものだけ。subject.txt に無ければ Dropped。
-            //    こちらに来るスレは定義上すべて IsFavorited=true。
+            // 登録スレを subject.txt と突き合わせて並べる。subject.txt に無ければ Dropped。
             foreach (var ft in threads)
             {
-                var key   = (ft.Host, ft.DirectoryName);
-                if (addedKeys.Contains((ft.Host, ft.DirectoryName, ft.ThreadKey))) continue;
-                addedKeys.Add((ft.Host, ft.DirectoryName, ft.ThreadKey));
+                var key = (ft.Host, ft.DirectoryName);
+                if (!addedKeys.Add((ft.Host, ft.DirectoryName, ft.ThreadKey))) continue;
 
                 var infos = subjectByBoard.TryGetValue(key, out var v) ? v : Array.Empty<ThreadInfo>();
                 var info  = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
@@ -1277,8 +1541,8 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             tab.SetItems(items, DateTimeOffset.UtcNow);
-            tab.Header   = $"★ {folderName} ({items.Count})";
-            StatusMessage = $"お気に入り「{folderName}」: {items.Count} 件";
+            tab.Header   = $"★ {aggregateName} ({items.Count})";
+            StatusMessage = $"お気に入り「{aggregateName}」: {items.Count} 件";
         }
         catch (Exception ex)
         {
@@ -1342,14 +1606,14 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>兄弟内で 1 つ下に移動。</summary>
     public void MoveFavoriteEntryDown(FavoriteEntryViewModel vm) => Favorites.MoveDown(vm);
 
-    /// <summary>「全更新」: お気に入り登録された全 board の subject.txt を取得し、
-    /// お気に入り登録スレと突き合わせて<br/>
-    /// (a) 新着あり (= subject.txt の post 数 &gt; idx.json の lastFetchedPostCount) のスレ<br/>
-    /// (b) subject.txt から消えた (= 落ちた) スレ<br/>
-    /// をすべて新規タブで開く。</summary>
-    public async Task RefreshAllFavoritesAsync()
+    /// <summary>「お気に入りチェック」: お気に入り登録スレの subject.txt を確認し、
+    /// 新着があるスレ (= subject.txt の post 数 &gt; idx.json の lastFetchedPostCount) を新規タブで開く。
+    /// subject.txt から消えた (= 落ちた) スレは除外。
+    /// subject.txt 取得 / dat 取得の通信本数は合算で <see cref="AppConfig.BatchConcurrency"/> までに制限し、
+    /// 進捗は <see cref="StatusMessage"/> で表示する。</summary>
+    public async Task CheckFavoritesAsync()
     {
-        // 1. お気に入り (フォルダ含む) を再帰展開 (VM ツリー直接 — 在memory編集を即座に反映)
+        // 1. お気に入り (フォルダ含む) を再帰展開
         var boards  = new List<FavoriteBoard>();
         var threads = new List<FavoriteThread>();
         foreach (var topVm in Favorites.Items)
@@ -1359,39 +1623,62 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (threads.Count == 0)
         {
-            StatusMessage = "お気に入りスレ無し: 全更新スキップ";
+            StatusMessage = "お気に入りスレ無し: チェックスキップ";
             return;
         }
 
-        StatusMessage = $"お気に入り全更新中... (チェック対象 {threads.Count} スレ)";
-
-        // 2. ユニークな board の subject.txt を一括取得 (お気に入り板由来 + スレ由来の両方)
+        // 2. 出元板 (= 登録スレが属する板) のユニーク集合を作る。fav board は新仕様では展開しないので無視。
         var resolved = new Dictionary<(string, string), Board>();
-        var subjects = new Dictionary<(string, string), IReadOnlyList<ThreadInfo>>();
-
-        void AddBoardLookup(string host, string dir, string boardName)
+        foreach (var ft in threads)
         {
-            var key = (host, dir);
-            if (resolved.ContainsKey(key)) return;
-            resolved[key] = ResolveBoard(host, dir, boardName);
+            var key = (ft.Host, ft.DirectoryName);
+            if (resolved.ContainsKey(key)) continue;
+            resolved[key] = ResolveBoard(ft.Host, ft.DirectoryName, ft.BoardName);
         }
-        foreach (var fb in boards)  AddBoardLookup(fb.Host, fb.DirectoryName, fb.BoardName);
-        foreach (var ft in threads) AddBoardLookup(ft.Host, ft.DirectoryName, ft.BoardName);
 
-        foreach (var (key, board) in resolved)
+        // バッチ全体で 1 つの semaphore を共有。subject.txt 取得 (Phase 3) と dat 取得 (Phase 5)
+        // が同時に走っても合算で BatchConcurrency 本までしか動かない。
+        var concurrency = Math.Max(1, CurrentConfig.BatchConcurrency);
+        using var sem   = new SemaphoreSlim(concurrency, concurrency);
+        var dispatcher  = System.Windows.Application.Current?.Dispatcher;
+
+        // ---- Phase 3: subject.txt を並列取得 ----
+        var subjects    = new ConcurrentDictionary<(string, string), IReadOnlyList<ThreadInfo>>();
+        var totalBoards = resolved.Count;
+        var subjDone    = 0;
+
+        StatusMessage = $"お気に入りチェック: subject 取得 0/{totalBoards}";
+
+        var subjectTasks = resolved.Select(async kv =>
         {
+            await sem.WaitAsync().ConfigureAwait(false);
             try
             {
-                subjects[key] = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
+                try
+                {
+                    var infos = await _subjectClient.FetchAndSaveAsync(kv.Value).ConfigureAwait(false);
+                    subjects[kv.Key] = infos;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Favorites] subject {kv.Key} 失敗: {ex.Message}");
+                    subjects[kv.Key] = Array.Empty<ThreadInfo>();
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                Debug.WriteLine($"[Favorites] subject {key} 失敗: {ex.Message}");
-                subjects[key] = Array.Empty<ThreadInfo>();
+                sem.Release();
             }
-        }
+            var d = Interlocked.Increment(ref subjDone);
+            if (dispatcher is not null)
+            {
+                await dispatcher.InvokeAsync(
+                    () => StatusMessage = $"お気に入りチェック: subject 取得 {d}/{totalBoards}");
+            }
+        }).ToList();
+        await Task.WhenAll(subjectTasks).ConfigureAwait(true);
 
-        // 3. 各お気に入りスレについて新着 / 落ちた判定 → 該当を新規タブで開く
+        // ---- Phase 4: 新着判定。落ちた (subject.txt に無い) スレはスキップ。 ----
         var toOpen = new List<(Board board, ThreadInfo info)>();
         foreach (var ft in threads)
         {
@@ -1400,30 +1687,129 @@ public sealed partial class MainViewModel : ObservableObject
             if (!resolved.TryGetValue(key, out var board)) continue;
 
             var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
-            if (info is null)
-            {
-                // 落ちた → ローカル dat があればそれを表示するだけ。dropped 扱い
-                toOpen.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
-                continue;
-            }
+            if (info is null) continue; // 落ちた → 新仕様では除外
 
-            // 新着判定: idx.json の lastFetchedPostCount との比較
-            var idx = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
+            var idx  = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
             var prev = idx?.LastFetchedPostCount ?? 0;
-            if (info.PostCount > prev)
+            if (info.PostCount > prev) toOpen.Add((board, info));
+        }
+
+        if (toOpen.Count == 0)
+        {
+            StatusMessage = "お気に入りチェック完了: 新着なし";
+            return;
+        }
+
+        // ---- Phase 5: dat を並列取得 (同じ semaphore を共有)。
+        //      取得本体だけを semaphore 配下で実行し、UI 反映 (タブ作成 / Posts 反映) は完了順に逐次行う。 ----
+        var totalUpdate = toOpen.Count;
+        var datDone     = 0;
+        StatusMessage = $"お気に入りチェック: 更新スレ取得 0/{totalUpdate}";
+
+        var datTasks = toOpen.Select(async pair =>
+        {
+            await sem.WaitAsync().ConfigureAwait(false);
+            try
             {
-                toOpen.Add((board, info));
+                var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
+                var result     = await _datClient.FetchStreamingAsync(pair.board, pair.info.Key, noProgress).ConfigureAwait(false);
+                return (pair.board, pair.info, Result: (DatFetchResult?)result, Error: (Exception?)null);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Favorites] dat {pair.board.DirectoryName}/{pair.info.Key} 失敗: {ex.Message}");
+                return (pair.board, pair.info, Result: (DatFetchResult?)null, Error: (Exception?)ex);
+            }
+            finally
+            {
+                sem.Release();
+                Interlocked.Increment(ref datDone);
+            }
+        }).ToList();
+
+        // 結果を完了順ではなく開始順 (toOpen 順) に処理。早く完了したタスクは await が即座に戻るので
+        // トータル時間は max(各タスク) に支配され、順次 await でも並列性能を損なわない。
+        var i = 0;
+        foreach (var t in datTasks)
+        {
+            i++;
+            StatusMessage = $"お気に入りチェック: 更新スレ取得 {i}/{totalUpdate} (完了 {datDone}/{totalUpdate})";
+            var (board, info, result, error) = await t.ConfigureAwait(true);
+            if (result is null) continue;
+            try { OpenThreadFromPrefetched(board, info, result); }
+            catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
+        }
+
+        StatusMessage = $"お気に入りチェック完了: 更新 {toOpen.Count} 件";
+    }
+
+    /// <summary>事前に取得済みの <see cref="DatFetchResult"/> からスレタブを作成 / 既存タブに反映する。
+    /// HTTP は呼ばない (= 並列 fetch 済の結果を流し込むだけ)。
+    /// <see cref="OpenThreadAsync"/> の「タブ作成 + idx 更新 + log mark 通知」部分を切り出した版。</summary>
+    private void OpenThreadFromPrefetched(Board board, ThreadInfo info, DatFetchResult result)
+    {
+        // 既存タブがあれば差分を append して終わり
+        foreach (var existing in ThreadTabs)
+        {
+            if (existing.Board.Host          == board.Host &&
+                existing.Board.DirectoryName == board.DirectoryName &&
+                existing.ThreadKey           == info.Key)
+            {
+                var prevCount = existing.Posts.Count;
+                if (result.Posts.Count > prevCount)
+                {
+                    var added = new List<Post>(result.Posts.Count - prevCount);
+                    for (var n = prevCount; n < result.Posts.Count; n++) added.Add(result.Posts[n]);
+                    // お気に入りチェックでの既存タブ差分追加なので incremental (Phase 20)
+                    AppendPostsWithNg(existing, added, isIncremental: true);
+                }
+                existing.DatSize = result.DatSize;
+
+                var idx0 = (_threadIndex.Load(board.Host, board.DirectoryName, info.Key) ?? new ThreadIndex(null, null))
+                    with { LastFetchedPostCount = result.Posts.Count };
+                _threadIndex.Save(board.Host, board.DirectoryName, info.Key, idx0);
+
+                NotifyThreadListLogMark(board, info.Key, LogMarkState.Cached);
+                existing.State = LogMarkState.Cached;
+                return;
             }
         }
 
-        // 4. 重複防止 (同一スレが既にタブで開かれている場合はスキップ — OpenThreadAsync が既存タブを再利用する)
-        foreach (var (board, info) in toOpen)
-        {
-            await OpenThreadAsync(board, info).ConfigureAwait(true);
-        }
+        // 新規タブ作成 (= OpenThreadAsync 前半部と同等)
+        var tab = new ThreadTabViewModel(
+            board, info,
+            closeCallback:          t => ThreadTabs.Remove(t),
+            deleteCallback:         t => DeleteThreadLog(t),
+            refreshCallback:        t => _ = RefreshThreadAsync(t),
+            addToFavoritesCallback: t => ToggleThreadFavorite(t),
+            writeCallback:          t => OpenPostDialog(t));
 
-        StatusMessage = toOpen.Count > 0
-            ? $"お気に入り全更新完了: {toOpen.Count} スレを開きました"
-            : "お気に入り全更新完了: 新着なし";
+        tab.ViewMode = CurrentConfig.DefaultThreadViewMode switch
+        {
+            "Tree"      => ThreadViewMode.Tree,
+            "DedupTree" => ThreadViewMode.DedupTree,
+            _           => ThreadViewMode.Flat,
+        };
+
+        var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
+        if (savedIndex?.LastReadPostNumber is int savedPos)
+            tab.ScrollTargetPostNumber = savedPos;
+        if (savedIndex?.LastReadMarkPostNumber is int savedMark)
+            tab.ReadMarkPostNumber = savedMark;
+
+        tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
+        tab.State       = LogMarkState.Cached;
+
+        ThreadTabs.Add(tab);
+        SelectedThreadTab = tab;
+
+        AppendPostsWithNg(tab, result.Posts);
+        tab.DatSize = result.DatSize;
+
+        var idx = (_threadIndex.Load(board.Host, board.DirectoryName, info.Key) ?? new ThreadIndex(null, null))
+            with { LastFetchedPostCount = result.Posts.Count };
+        _threadIndex.Save(board.Host, board.DirectoryName, info.Key, idx);
+
+        NotifyThreadListLogMark(board, info.Key, LogMarkState.Cached);
     }
 }

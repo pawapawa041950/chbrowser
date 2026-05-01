@@ -47,6 +47,26 @@
     // 設定 (Phase 11) で動的変更可能。setConfig メッセージで上書きされる。
     let POPULAR_THRESHOLD = 3;
 
+    // 重複なしツリーの「incremental セクション」境界 (Phase 20)。
+    //   incrementalPivotIndex: allPosts のうち、最初の差分 append (= リフレッシュ後 / お気に入りチェック差分等) が
+    //                          始まる index。null = まだ差分 append が来ていない (= 通常の dedup-tree)。
+    //   一度 pivot が設定されたら、同じタブセッション中は固定 (= 後続の incremental 追加でも更新しない)。
+    //   ピボット以降のレスは Section B (末尾の chain block) として描画され、祖先付きで「ここまで読んだ」帯の
+    //   下に新着として表示される。
+    let incrementalPivotIndex = null;
+
+    // 「ここまで読んだ」帯 (Phase 19)。
+    //   readMarkPostNumber: 帯を出すレス番号。スレを開いた最初の appendPosts 時に C# から渡される値で固定し、
+    //                       以降はスクロールでもリフレッシュでも動かさない (= 次回オープン時に最新位置から表示される)。
+    //                       null = 未設定で帯なし。
+    //   readMarkInitialized: appendPosts で初回値を取り込み済みかどうか (リフレッシュで上書きされないよう一度きり)。
+    //   readMarkSentMax   : C# に送った最深値。同じ値を再送しないための dedupe 用 (帯位置とは独立)。
+    //   showReadMark      : 設定 ON/OFF。OFF でも値は記録され続け、ON にすれば再び帯が現れる。
+    let readMarkPostNumber  = null;
+    let readMarkInitialized = false;
+    let readMarkSentMax     = null;
+    let showReadMark        = true;
+
     // ---------- escape helpers ----------
     function escapeHtml(s) {
         if (s === null || s === undefined) return '';
@@ -480,10 +500,12 @@
         return refs;
     }
 
-    /** レス番号 N → N を >>参照しているレス番号配列、を返す逆引き。 */
-    function buildReverseIndex() {
+    /** レス番号 N → N を >>参照しているレス番号配列、を返す逆引き。
+     *  <code>posts</code> が省略されたら全レス (allPosts) を対象にする (= 既存挙動と同じ)。
+     *  Section A (= dedup-tree の pre-pivot) 描画時は subset を渡してインクリメンタル分を除外する。 */
+    function buildReverseIndexFrom(posts) {
         const rev = new Map();
-        for (const post of allPosts) {
+        for (const post of posts) {
             const seen = new Set();
             for (const r of extractAnchorRefs(post.body || '')) {
                 if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
@@ -498,6 +520,73 @@
             }
         }
         return rev;
+    }
+    function buildReverseIndex() { return buildReverseIndexFrom(allPosts); }
+
+    // ---- Phase 20: incremental セクションの chain forest 構築 ----
+    /** num の祖先を anchor で 1 段ずつ遡って [oldest, ..., num] の配列にする。
+     *  各レスから最初の有効 anchor (= 自分より小さい番号で postsByNumber に居る) を辿る。
+     *  循環や行き止まりで終端。 */
+    function buildAncestorChain(num) {
+        const chain = [num];
+        const seen  = new Set([num]);
+        let cur     = num;
+        while (true) {
+            const post = postsByNumber.get(cur);
+            if (!post) break;
+            let next = null;
+            for (const r of extractAnchorRefs(post.body || '')) {
+                if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
+                for (let n = r.from; n <= r.to; n++) {
+                    if (n >= cur) continue;
+                    if (!postsByNumber.has(n)) continue;
+                    if (seen.has(n)) continue;
+                    next = n; break;
+                }
+                if (next != null) break;
+            }
+            if (next == null) break;
+            seen.add(next);
+            chain.unshift(next);
+            cur = next;
+        }
+        return chain;
+    }
+
+    /** 各 incremental レスの祖先 chain を merge して forest (= Map&lt;number, node&gt;) を返す。
+     *  共通祖先を持つ chain は同じノード配下に集約される (= 同じ親が複数回描画されないように)。 */
+    function buildIncrementalForest(incrementalNumbers) {
+        const rootMap = new Map(); // number -> node{number, childMap}
+        for (const num of incrementalNumbers) {
+            const chain = buildAncestorChain(num);
+            let curMap = rootMap;
+            for (const n of chain) {
+                let node = curMap.get(n);
+                if (!node) {
+                    node = { number: n, childMap: new Map() };
+                    curMap.set(n, node);
+                }
+                curMap = node.childMap;
+            }
+        }
+        return rootMap;
+    }
+
+    /** forest ノードを再帰的に HTML 化。
+     *  incrementalSet に含まれるノード (= 末尾 leaf 寄り、新規取得分) は primary (id="rN" 付き)、
+     *  それ以外 (= 既存スレからの祖先) は embedded (id 無し) で出す。 */
+    function renderIncrementalForestNode(node, incrementalSet) {
+        const post = postsByNumber.get(node.number);
+        if (!post) return '';
+        const isInc = incrementalSet.has(node.number);
+        let childrenHtml = '';
+        for (const child of node.childMap.values()) {
+            childrenHtml += '<div class="inline-expansion reverse">';
+            childrenHtml += renderIncrementalForestNode(child, incrementalSet);
+            childrenHtml += '</div>';
+        }
+        // isInc=true (新規分): primary, id 付き / isInc=false (祖先): embedded, id 無し (= Section A の primary と衝突回避)
+        return renderPost(postDataFor(post, /*isEmbedded*/ !isInc, /*omitId*/ !isInc, childrenHtml));
     }
 
     /** ツリー (重複あり): トップレベルレス + 1 段の親 (>>X 先) + 1 段の子 (>>X 元) を直下に展開。 */
@@ -591,10 +680,40 @@
         if (viewMode === 'tree') {
             for (const p of allPosts) html += buildTreePostHtml(p, currentReverseIndex, false);
         } else if (viewMode === 'dedupTree') {
-            const rendered = new Set();
-            for (const p of allPosts) {
-                if (rendered.has(p.number)) continue;
-                html += buildDedupPostHtml(p, currentReverseIndex, rendered, false);
+            // Phase 20: pivot 設定済 (= リフレッシュ等で差分 append が来た) なら 2 セクション構成。
+            //   Section A: pre-pivot レスを通常の dedup tree で描画。reverseIndex も pre-pivot 限定にして
+            //              incremental 分が祖先の子として埋め込まれてしまうのを防ぐ。
+            //   Section B: post-pivot レス (= 新規取得分) を、各レスの祖先 chain ごと末尾に並べる。
+            //              共通祖先は forest で merge。ancestor は embedded、incremental 自身は primary。
+            if (incrementalPivotIndex == null || incrementalPivotIndex >= allPosts.length) {
+                const rendered = new Set();
+                for (const p of allPosts) {
+                    if (rendered.has(p.number)) continue;
+                    html += buildDedupPostHtml(p, currentReverseIndex, rendered, false);
+                }
+            } else {
+                const sectionA = allPosts.slice(0, incrementalPivotIndex);
+                const sectionB = allPosts.slice(incrementalPivotIndex);
+                // Section A
+                const reverseA = buildReverseIndexFrom(sectionA);
+                const renderedA = new Set();
+                for (const p of sectionA) {
+                    if (renderedA.has(p.number)) continue;
+                    html += buildDedupPostHtml(p, reverseA, renderedA, false);
+                }
+                // Section B
+                const incNumbers = sectionB.map(p => p.number);
+                const incSet     = new Set(incNumbers);
+                const forest     = buildIncrementalForest(incNumbers);
+                if (forest.size > 0) {
+                    html += '<div class="incremental-section">';
+                    for (const node of forest.values()) {
+                        html += '<div class="incremental-block">';
+                        html += renderIncrementalForestNode(node, incSet);
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
             }
         } else {
             for (const p of allPosts) html += buildPostHtml(p);
@@ -611,6 +730,8 @@
         observeImageSlots(document);
         tryScrollToTarget();
         updateRichScrollbar();
+        updateReadUpToBand();
+        updateReadMarkScrollbarMarker();
     }
 
 
@@ -1034,7 +1155,103 @@
         }, SCROLL_SAVE_DEBOUNCE_MS);
     }
 
+    // ---------- 「ここまで読んだ」帯 (Phase 19) ----------
+    // 判定基準: primary レス (= #posts の直下子、id="rN") のうち
+    //   rect.bottom <= window.innerHeight (= レス下端が viewport 下端以下)
+    // を満たす最大番号。
+    //   - 短文レス: 全体表示で即条件成立
+    //   - 長文レス: 読み飛ばしてスクロールが下端を抜けたとき成立
+    //   - 末尾レス: スレ最下端までスクロールしたとき成立
+    // 値は減少しない (前回より大きいときだけ採用)。
+    let readMarkSendTimer = null;
+    function findDeepestReadMarkPostNumber() {
+        const root = document.getElementById('posts');
+        if (!root) return null;
+        const vh   = window.innerHeight;
+        let best   = null;
+        for (const post of root.children) {
+            const id = post.id;
+            if (!id || !id.startsWith('r')) continue;
+            const rect = post.getBoundingClientRect();
+            if (rect.bottom <= vh) {
+                const n = parseInt(id.slice(1), 10);
+                if (best == null || n > best) best = n;
+            }
+        }
+        return best;
+    }
+    function scheduleSendReadMark() {
+        if (readMarkSendTimer != null) return;
+        readMarkSendTimer = setTimeout(function () {
+            readMarkSendTimer = null;
+            const n = findDeepestReadMarkPostNumber();
+            if (n == null) return;
+            // dedupe: 同じ値や過去最大以下は C# に送らない。永続化された値は次回オープン時に取り込まれる。
+            if (readMarkSentMax != null && n <= readMarkSentMax) return;
+            readMarkSentMax = n;
+            // ※ 現セッション中は帯を動かさない (= readMarkPostNumber / 帯 DOM はそのまま)。
+            //   次回スレを開いた瞬間に C# から最新の readMarkPostNumber が来て、新しい位置に表示される。
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'readMark', postNumber: n });
+            }
+        }, SCROLL_SAVE_DEBOUNCE_MS);
+    }
+
+    /** 現在の readMarkPostNumber と DOM 状態を見て、ここまで読んだ帯を再配置する。
+     *  対象レスが DOM に居ない (= NG / view mode で primary でない) 場合は、
+     *  「番号がそれ以上の primary レスのうち最初のもの」の後ろに帯を挿入する。 */
+    function updateReadUpToBand() {
+        // 既存帯を一旦取り除く (= 配置場所の更新も再挿入で行う)
+        const existing = document.getElementById('read-up-to-band');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+        if (readMarkPostNumber == null) return;
+
+        const root = document.getElementById('posts');
+        if (!root) return;
+
+        // 対象レス、無ければ番号 >= readMark の最初の primary レスを探す
+        let target = document.getElementById('r' + readMarkPostNumber);
+        if (!target || target.parentNode !== root) {
+            target = null;
+            for (const post of root.children) {
+                const id = post.id;
+                if (!id || !id.startsWith('r')) continue;
+                const n = parseInt(id.slice(1), 10);
+                if (n >= readMarkPostNumber) { target = post; break; }
+            }
+        }
+        if (!target) return; // 帯を出す場所がない (該当以降に primary レスが無い)
+
+        const band = document.createElement('div');
+        band.id        = 'read-up-to-band';
+        band.className = 'read-up-to-band';
+        target.parentNode.insertBefore(band, target.nextSibling);
+    }
+
+    /** リッチスクロールバーの readmark トラックに帯マーカーを描画。
+     *  対象レスの DOM 上の縦位置 (= scrollHeight に対する比率) に細い横線を出すだけ。 */
+    function updateReadMarkScrollbarMarker() {
+        const sb = document.getElementById('richScrollbar');
+        if (!sb) return;
+        const track = sb.querySelector('.track-readmark');
+        if (!track) return;
+        track.innerHTML = '';
+        if (readMarkPostNumber == null) return;
+        const scrollHeight = document.documentElement.scrollHeight;
+        if (!scrollHeight) return;
+        // 帯か対象レス (帯が無ければレス本体) の Y 座標で位置を決める
+        const band = document.getElementById('read-up-to-band');
+        const ref  = band || document.getElementById('r' + readMarkPostNumber);
+        if (!ref) return;
+        const m = document.createElement('div');
+        m.className = 'marker';
+        m.style.top = ((ref.offsetTop + ref.offsetHeight) / scrollHeight * 100) + '%';
+        track.appendChild(m);
+    }
+
     window.addEventListener('scroll', scheduleSendScrollPosition, { passive: true });
+    window.addEventListener('scroll', scheduleSendReadMark,       { passive: true });
 
     // ---------- click handling (anchor scroll / external URL / inline image) ----------
     // 注意: スレ表示内の <a> は href 属性を持たず非 focusable にしている (Chromium が
@@ -1312,13 +1529,24 @@
     /** streaming で逐次追加。flat モードは既存 DOM 末尾に増分追加、tree 系はフル再描画。
      *  スレ表示の唯一の描画 API。「全置換」は使わず、各 WebView2 はライフタイム中ずっと
      *  この関数だけで posts が積み上がる前提で動作する (旧 setPosts チャネルは撤去)。 */
-    window.appendPosts = function (batch, scrollTarget) {
+    window.appendPosts = function (batch, scrollTarget, readMark, incremental) {
         if (!Array.isArray(batch) || batch.length === 0) return;
         const root = document.getElementById('posts');
         if (!root) return;
 
         // 同梱された scrollTarget があれば保留中ターゲットを更新
         if (typeof scrollTarget === 'number') pendingScrollTarget = scrollTarget;
+        // 「ここまで読んだ」帯の対象 (Phase 19) — 初回 appendPosts のみ採用 (= リフレッシュでは動かさない)。
+        if (!readMarkInitialized) {
+            if (typeof readMark === 'number') readMarkPostNumber = readMark;
+            readMarkInitialized = true;
+        }
+
+        // 重複なしツリー用 incremental pivot (Phase 20) — 初めて incremental=true が来たとき
+        // この時点での allPosts.length を pivot として固定する。以降は pivot は動かさない。
+        if (incremental === true && incrementalPivotIndex == null) {
+            incrementalPivotIndex = allPosts.length;
+        }
 
         // 内部状態は常に同じ更新
         for (const p of batch) {
@@ -1376,6 +1604,8 @@
         observeImageSlots(root);
         tryScrollToTarget();
         updateRichScrollbar();
+        updateReadUpToBand();
+        updateReadMarkScrollbarMarker();
     };
 
     window.setViewMode = function (mode) {
@@ -1391,12 +1621,16 @@
             const msg = e.data;
             if (!msg || typeof msg !== 'object' || !msg.type) return;
             switch (msg.type) {
-                case 'appendPosts': window.appendPosts(msg.posts, msg.scrollTarget); break;
+                case 'appendPosts': window.appendPosts(msg.posts, msg.scrollTarget, msg.readMarkPostNumber, msg.incremental); break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setConfig':
                     // Phase 11: アプリ設定の即時反映
                     if (typeof msg.popularThreshold     === 'number') POPULAR_THRESHOLD     = msg.popularThreshold;
                     if (typeof msg.imageSizeThresholdMb === 'number') IMAGE_SIZE_THRESHOLD  = msg.imageSizeThresholdMb * 1024 * 1024;
+                    if (typeof msg.showReadMark         === 'boolean') {
+                        showReadMark = msg.showReadMark;
+                        document.body.classList.toggle('no-read-mark', !showReadMark);
+                    }
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();
                     break;

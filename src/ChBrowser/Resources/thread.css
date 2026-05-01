@@ -287,6 +287,25 @@ a.anchor.missing {
 .track-image   .marker { background: #f57c00; }
 .track-video   .marker { background: #7b1fa2; }
 
+/* ---- ここまで読んだ帯 (Phase 19) ---- */
+/* レスの直後に挿入する細い水平帯 (控えめな配色)。 */
+.read-up-to-band {
+    margin: 4px 0 6px 0;
+    padding: 1px 0;
+    border-top: 1px dashed #888;
+    color: #888;
+    font-size: 11px;
+    text-align: center;
+    background: rgba(140, 140, 160, 0.06);
+    user-select: none;
+}
+.read-up-to-band::before { content: '— ここまで読んだ —'; }
+/* OFF 設定で帯と scrollbar マーカーを非表示。 */
+body.no-read-mark .read-up-to-band,
+body.no-read-mark .track-readmark .marker { display: none; }
+/* readmark トラックは細い横バー (5px 幅、薄い紫)。 */
+.track-readmark .marker { background: #9575cd; height: 3px; }
+
 /* ---- スクロールサム (現在の表示範囲、ドラッグで移動) ---- */
 #scrollThumb {
     position: absolute;

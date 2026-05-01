@@ -118,9 +118,13 @@ li.fav-item.selected.thread-row {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'><path d='M 2 4 L 12 4 M 2 7.5 L 12 7.5 M 2 11 L 12 11' stroke='%233070B0' stroke-width='1.4' stroke-linecap='round'/></svg>");
 }
 
+.icon-thread {
+    /* 文書 (折れ角付き矩形、緑系) */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'><path d='M 3 2 L 9 2 L 12 5 L 12 12 L 3 12 Z' fill='%23F4F8F0' stroke='%235A8A4A' stroke-width='0.9' stroke-linejoin='round'/><path d='M 9 2 L 9 5 L 12 5' fill='none' stroke='%235A8A4A' stroke-width='0.9' stroke-linejoin='round'/><path d='M 5 7 L 10 7 M 5 9 L 10 9' stroke='%235A8A4A' stroke-width='0.7' stroke-linecap='round'/></svg>");
+}
+
 li.thread-row {
     color: #444;
-    padding-left: 22px;       /* 板/フォルダのアイコン分インデント */
 }
 
 /* ---- D&D インジケータ ---- */

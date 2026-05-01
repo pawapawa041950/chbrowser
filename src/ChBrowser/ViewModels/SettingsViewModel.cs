@@ -30,6 +30,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private int    _popularThreshold      = 3;
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
+    [ObservableProperty] private bool   _showReadMark          = true;
     [ObservableProperty] private int    _cacheMaxMb            = 1024;
     [ObservableProperty] private int    _viewerThumbnailSize   = 80;
 
@@ -37,6 +38,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _favoritesOpenOnSingleClick  = true;
     [ObservableProperty] private bool   _boardListOpenOnSingleClick  = true;
     [ObservableProperty] private bool   _threadListOpenOnSingleClick = true;
+
+    // ---- バッチ処理の同時通信数 (お気に入りチェック等) ----
+    [ObservableProperty] private int    _batchConcurrency            = 6;
 
     // ---- Phase 11c: タブ動作 (スレ一覧タブ × 5 イベント、スレッドタブ × 5 イベント) ----
     [ObservableProperty] private string _threadListTabMiddleClickAction = "close";
@@ -132,9 +136,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         PopularThreshold             = initial.PopularThreshold;
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
+        ShowReadMark                 = initial.ShowReadMark;
         CacheMaxMb                   = initial.CacheMaxMb;
         ViewerThumbnailSize          = initial.ViewerThumbnailSize;
         FavoritesOpenOnSingleClick   = initial.FavoritesOpenOnSingleClick;
+        BatchConcurrency             = initial.BatchConcurrency;
         BoardListOpenOnSingleClick   = initial.BoardListOpenOnSingleClick;
         ThreadListOpenOnSingleClick  = initial.ThreadListOpenOnSingleClick;
         ThreadListTabMiddleClickAction = initial.ThreadListTabMiddleClickAction;
@@ -222,9 +228,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         PopularThreshold            = PopularThreshold,
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
+        ShowReadMark                = ShowReadMark,
         CacheMaxMb                  = CacheMaxMb,
         ViewerThumbnailSize         = ViewerThumbnailSize,
         FavoritesOpenOnSingleClick  = FavoritesOpenOnSingleClick,
+        BatchConcurrency            = BatchConcurrency,
         BoardListOpenOnSingleClick  = BoardListOpenOnSingleClick,
         ThreadListOpenOnSingleClick = ThreadListOpenOnSingleClick,
         ThreadListTabMiddleClickAction = ThreadListTabMiddleClickAction,

@@ -31,6 +31,9 @@
              各 MenuItem の Click ハンドラは Tag 経由で操作対象 id を取り出す。 -->
 
         <ContextMenu x:Key="FavoriteFolderContextMenu" x:Shared="False">
+            <MenuItem Header="すべて開く"   Click="FavOpenAll_Click" />
+            <MenuItem Header="板として開く" Click="FavOpenAsBoard_Click" />
+            <Separator />
             <MenuItem Header="新規フォルダ" Click="FavNewFolderHere_Click" />
             <MenuItem Header="名前変更"     Click="FavRename_Click" />
             <MenuItem Header="削除"         Click="FavDelete_Click" />
@@ -53,10 +56,20 @@
             <MenuItem Header="下へ" Click="FavMoveDown_Click" />
         </ContextMenu>
 
+        <!-- 「お気に入り」仮想ルートフォルダの右クリックメニュー。FavoriteRef.Tag は null。 -->
+        <ContextMenu x:Key="FavoriteVirtualRootContextMenu" x:Shared="False">
+            <MenuItem Header="すべて開く"                Click="FavOpenAll_Click" />
+            <MenuItem Header="板として開く"              Click="FavOpenAsBoard_Click" />
+            <Separator />
+            <MenuItem Header="新規フォルダ (ルート直下)" Click="FavNewFolderRoot_Click" />
+            <MenuItem Header="お気に入りチェック"        Click="FavCheckUpdates_Click" />
+        </ContextMenu>
+
+        <!-- 旧 FavoriteRootContextMenu (= 空エリア用)。仮想ルートで覆われるため通常は発火しないが fallback として残す。 -->
         <ContextMenu x:Key="FavoriteRootContextMenu" x:Shared="False">
             <MenuItem Header="新規フォルダ (ルート直下)" Click="FavNewFolderRoot_Click" />
             <Separator />
-            <MenuItem Header="全更新"                    Click="FavRefreshAll_Click" />
+            <MenuItem Header="お気に入りチェック"        Click="FavCheckUpdates_Click" />
         </ContextMenu>
 
         <!-- ツールバー用アイコンボタン (Button をテンプレート化) -->
@@ -109,6 +122,7 @@
                 <MenuItem Header="ファイル(_F)">
                 <MenuItem Header="板一覧を更新(_U)"
                           Command="{Binding RefreshBoardListCommand}" />
+                <MenuItem Header="お気に入りチェック(_C)" Click="FavCheckUpdates_Click" />
                 <MenuItem Header="新規スレッド作成(_N)..." />
                 <Separator />
                 <MenuItem Header="終了(_X)" Click="ExitMenu_Click" />
@@ -237,11 +251,24 @@
                      JS の contextmenu イベント → postMessage('contextMenu', target, id) → C# が
                      対応する ContextMenu を Tag に対象 id を積んで popup する。 -->
                 <DockPanel Grid.Row="0">
-                    <TextBlock DockPanel.Dock="Top"
-                               Text="お気に入り"
-                               Padding="6,4"
-                               Background="{x:Static SystemColors.ControlBrush}"
-                               FontWeight="SemiBold" />
+                    <DockPanel DockPanel.Dock="Top"
+                               Background="{x:Static SystemColors.ControlBrush}">
+                        <Button DockPanel.Dock="Right"
+                                Style="{StaticResource ToolbarIconButton}"
+                                Click="FavCheckUpdates_Click"
+                                ToolTip="お気に入りチェック (登録スレに新着があるか確認 → 更新スレを開く)"
+                                Width="22" Height="20" Margin="2,1">
+                            <!-- ⟳ リロード風アイコン (緑) -->
+                            <Path Data="M 11 4 A 5 5 0 1 1 5.5 9.6 M 11 4 L 11 1 M 11 4 L 14 4"
+                                  Stroke="#3070B0" StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Fill="Transparent"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <TextBlock Text="お気に入り"
+                                   Padding="6,4"
+                                   FontWeight="SemiBold" />
+                    </DockPanel>
                     <wv2:WebView2 x:Name="FavoritesWebView"
                                   ctrl:WebView2Helper.Html="{Binding FavoritesHtml}"
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding FavoritesConfigJson}"
@@ -345,6 +372,7 @@
                             <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
                                 <wv2:WebView2 ctrl:WebView2Helper.Html="{Binding Html}"
                                               ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
+                                              ctrl:WebView2Helper.FavoritedUpdate="{Binding FavoritedUpdate}"
                                               ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=Window}}"
                                               ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=Window}}"
                                               WebMessageReceived="ThreadListWebView_WebMessageReceived"

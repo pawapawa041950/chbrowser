@@ -22,7 +22,28 @@ public static class FavoritesHtmlBuilder
     {
         var sb = new StringBuilder(4096);
         sb.Append(@"<ul class=""fav-root"">");
+
+        // 「機能」フォルダ (Phase 18) — お気に入り仮想ルートより上の兄弟。
+        // 永続化対象外 / drag 不可 / context menu なし、JS 側は data-type="function-folder" / "all-logs" で識別。
+        sb.Append(@"<li class=""fav-item"" data-type=""function-folder"">")
+          .Append(@"<details class=""folder"" open>")
+          .Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">機能</span></summary>")
+          .Append(@"<ul class=""children"">")
+          .Append(@"<li class=""fav-item board-row"" data-type=""all-logs"">")
+          .Append(@"<span class=""icon icon-board""></span><span class=""label"">全ログ</span>")
+          .Append(@"</li>")
+          .Append(@"</ul></details></li>");
+
+        // 全エントリを「お気に入り」仮想ルートフォルダの下に入れる。
+        // この li は永続化対象ではないため data-id を持たず、data-type="virtual-root" で識別する
+        // (= JS 側で contextMenu / drag 不可 / 開閉のみ、C# 側は target='virtual-root' で専用メニューを出す)。
+        sb.Append(@"<li class=""fav-item"" data-type=""virtual-root"">")
+          .Append(@"<details class=""folder"" open>")
+          .Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">お気に入り</span></summary>")
+          .Append(@"<ul class=""children"">");
         foreach (var vm in roots) AppendEntry(sb, vm);
+        sb.Append("</ul></details></li>");
+
         sb.Append("</ul>");
         return LoadShellHtml().Replace("<!--{{ITEMS}}-->", sb.ToString());
     }
@@ -82,7 +103,7 @@ public static class FavoritesHtmlBuilder
         sb.Append(@" data-board=""").Append(HtmlEscape.Attr(t.BoardName)).Append('"');
         sb.Append(@" draggable=""true""");
         sb.Append('>');
-        sb.Append(@"<span class=""label"">").Append(HtmlEscape.Text(t.Title)).Append("</span>");
+        sb.Append(@"<span class=""icon icon-thread""></span><span class=""label"">").Append(HtmlEscape.Text(t.Title)).Append("</span>");
         sb.Append("</li>");
     }
 

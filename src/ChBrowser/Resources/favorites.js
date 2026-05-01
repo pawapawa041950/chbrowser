@@ -42,24 +42,41 @@
         selected = li;
     }
 
-    // ---- クリック: 1 クリック設定なら開く、そうでなければ選択のみ ----
+    // ---- クリック: 1 クリック設定なら開く、そうでなければ選択のみ。
+    //      フォルダ / 仮想ルート / 機能フォルダは「ツリー開閉のみ」(= summary の details 標準動作に任せる) ----
     root.addEventListener('click', function (e) {
         var li = findItem(e.target);
         if (!li) return;
         setSelected(li);
+        var t = li.dataset.type;
+        if (t === 'folder' || t === 'virtual-root' || t === 'function-folder') return;
+        if (t === 'all-logs') {
+            // クリック設定に関わらず単一クリックで開く (機能項目)
+            post({ type: 'openAllLogs' });
+            return;
+        }
         if (openOnSingleClick) {
             post({ type: 'openFavorite', id: li.dataset.id });
         }
     });
 
-    // ---- ダブルクリック: 1 クリック設定 OFF のときだけ開く ----
+    // ---- ダブルクリック: 1 クリック設定 OFF のときだけ開く (フォルダ / 仮想ルート / 機能は抑止) ----
     root.addEventListener('dblclick', function (e) {
         var li = findItem(e.target);
         if (!li) return;
+        var t = li.dataset.type;
+        if (t === 'folder' || t === 'virtual-root' || t === 'function-folder') {
+            // フォルダ <details> 自動トグルは preventDefault しないと dblclick で展開動作が起きる
+            e.preventDefault();
+            return;
+        }
+        if (t === 'all-logs') {
+            e.preventDefault();
+            return; // single-click 経路で処理済
+        }
         if (!openOnSingleClick) {
             post({ type: 'openFavorite', id: li.dataset.id });
         }
-        // フォルダ <details> 自動トグルは preventDefault しないと dblclick で展開動作が起きる
         e.preventDefault();
     });
 
@@ -96,15 +113,18 @@
         e.preventDefault();
         var li = findItem(e.target);
         if (!li) {
-            // 空エリア (ルートのコンテキストメニュー)
+            // 空エリア (= 通常は仮想ルート li が画面を埋めるので発火しない fallback パス)
             post({ type: 'contextMenu', target: 'empty' });
             return;
         }
+        var t = li.dataset.type;
+        // 機能フォルダ / 全ログ には現状コンテキストメニューを出さない
+        if (t === 'function-folder' || t === 'all-logs') return;
         setSelected(li);
         post({
             type:   'contextMenu',
-            target: li.dataset.type,   // 'folder' | 'board' | 'thread'
-            id:     li.dataset.id,
+            target: t,                 // 'folder' | 'board' | 'thread' | 'virtual-root'
+            id:     li.dataset.id || null,
         });
     });
 
@@ -123,7 +143,13 @@
 
     root.addEventListener('dragstart', function (e) {
         var li = findItem(e.target);
+        // 仮想ルート / 機能フォルダ / 全ログ は drag 不可 (= 永続化対象でないので動かしようがない)
         if (!li) { e.preventDefault(); return; }
+        var t = li.dataset.type;
+        if (t === 'virtual-root' || t === 'function-folder' || t === 'all-logs') {
+            e.preventDefault();
+            return;
+        }
         draggingId = li.dataset.id;
         li.classList.add('drag-source');
         e.dataTransfer.effectAllowed = 'move';
@@ -139,8 +165,10 @@
 
     /** target li 内のどこに落ちようとしているかを座標から判定。
      *  フォルダ: 中央 50% を 'inside'、上 25% を 'before'、下 25% を 'after'。
+     *  仮想ルート: 'inside' のみ (兄弟挿入は不可)。
      *  非フォルダ: 上半分 'before'、下半分 'after' (= フォルダではないので inside 不可)。 */
     function pickPosition(li, e) {
+        if (li.dataset.type === 'virtual-root') return 'inside';
         var rect = li.getBoundingClientRect();
         var y    = e.clientY - rect.top;
         var h    = rect.height || 1;
@@ -162,6 +190,12 @@
             clearDropIndicators();
             e.preventDefault(); // drop 受け入れ
             e.dataTransfer.dropEffect = 'move';
+            return;
+        }
+        // 機能フォルダ / 全ログ は drop 受け付け不可
+        if (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs') {
+            clearDropIndicators();
+            e.dataTransfer.dropEffect = 'none';
             return;
         }
         if (li.dataset.id === draggingId) {
@@ -193,8 +227,19 @@
         e.preventDefault();
         if (!draggingId) return;
         var li = findItem(e.target);
-        var targetId = li ? li.dataset.id : null;
+        // 機能フォルダ / 全ログへの drop は無視
+        if (li && (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs')) {
+            clearDropIndicators();
+            draggingId = null;
+            return;
+        }
+        var targetId = li ? (li.dataset.id || null) : null;
         var position = li ? (lastDropPosition || pickPosition(li, e)) : 'rootEnd';
+        // 仮想ルートへの drop は「ルート末尾へ移動」と等価
+        if (li && li.dataset.type === 'virtual-root') {
+            targetId = null;
+            position = 'rootEnd';
+        }
         clearDropIndicators();
         post({
             type:     'moveFavorite',

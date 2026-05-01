@@ -12,6 +12,19 @@
                   Margin="0,0,0,4" />
         <TextBlock Text="OFF にするとダブルクリックで開く動作になります。"
                    Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,16" />
+
+        <TextBlock Text="バッチ処理の同時通信数"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,4" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+            <TextBox Text="{Binding BatchConcurrency, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                     Width="60" />
+            <TextBlock Text="本" VerticalAlignment="Center" Margin="6,0,0,0" />
+        </StackPanel>
+        <TextBlock Text="お気に入りチェック等のバッチ処理で subject.txt / dat を取得する際の並列上限。タブクリック等のユーザ操作はこの制限の対象外です。1〜50 の範囲で、デフォルトは 6。"
+                   Foreground="#666"
                    TextWrapping="Wrap" />
     </StackPanel>
 </UserControl>

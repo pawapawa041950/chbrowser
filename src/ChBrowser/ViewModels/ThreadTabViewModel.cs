@@ -14,6 +14,11 @@ public enum ThreadViewMode
     DedupTree,
 }
 
+/// <summary>JS の <c>appendPosts</c> に渡すペイロード (Phase 20)。
+/// <see cref="IsIncremental"/> = true なら、dedup-tree モードでこの batch 以降を「末尾 incremental block」として
+/// 既存ツリーとは別レンダリングにする (= 既読下に新着を表示するため)。</summary>
+public sealed record AppendBatchData(IReadOnlyList<Post> Posts, bool IsIncremental);
+
 /// <summary>
 /// 1 スレッド = 1 タブ。WebView2 へは Posts (Post 列) を Bind し、HTML 構築は JS 側で行う。
 /// 表示モード (Flat/Tree/DedupTree) は今後 JS 側で実装予定。現状は Flat のみ動作、
@@ -55,11 +60,12 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public IReadOnlyList<Post> Posts { get; private set; } = new List<Post>();
 
     /// <summary>
-    /// streaming で受け取った直近のレスバッチ。WebView2Helper.AppendBatch がこれを観測して
-    /// JS の window.appendPosts() に送る。スレ表示への描画は常にこのチャネルだけを通る。
+    /// streaming で受け取った直近のレスバッチと、それが「差分 append (= incremental)」かどうかのフラグ。
+    /// WebView2Helper.AppendBatch がこれを観測して JS の window.appendPosts() に送る。
+    /// スレ表示への描画は常にこのチャネルだけを通る。
     /// </summary>
     [ObservableProperty]
-    private IReadOnlyList<Post>? _latestAppendBatch;
+    private AppendBatchData? _latestAppendBatch;
 
     /// <summary>
     /// JS にスクロール対象として伝えるレス番号。idx.json から読んだ初期値、または
@@ -67,6 +73,11 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// </summary>
     [ObservableProperty]
     private int? _scrollTargetPostNumber;
+
+    /// <summary>「ここまで読んだ」帯の対象レス番号 (Phase 19)。
+    /// idx.json の <c>LastReadMarkPostNumber</c> から初期化、JS からの readMark メッセージで増加方向のみ更新される。</summary>
+    [ObservableProperty]
+    private int? _readMarkPostNumber;
 
     /// <summary>
     /// このタブが現在 TabControl で選択されているか。各タブが専有する WebView2 の
@@ -126,15 +137,18 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     }
 
     /// <summary>レスを末尾に追加。内部 <see cref="Posts"/> を更新したあと、
-    /// <see cref="LatestAppendBatch"/> 経由で WebView2 (JS) に増分を送る。</summary>
-    public void AppendPosts(IReadOnlyList<Post> batch)
+    /// <see cref="LatestAppendBatch"/> 経由で WebView2 (JS) に増分を送る。
+    /// <paramref name="isIncremental"/> = true は「初期表示が完了した後の差分追加」を示し
+    /// (= リフレッシュ / お気に入りチェック後の差分等)、JS 側の dedup-tree 描画で 2 セクション構成
+    /// (既存ツリー + 末尾の incremental tail block) に切り替えるシグナルになる (Phase 20)。</summary>
+    public void AppendPosts(IReadOnlyList<Post> batch, bool isIncremental = false)
     {
         if (batch.Count == 0) return;
         var merged = new List<Post>(Posts.Count + batch.Count);
         merged.AddRange(Posts);
         merged.AddRange(batch);
         Posts = merged;
-        LatestAppendBatch = batch;
+        LatestAppendBatch = new AppendBatchData(batch, isIncremental);
     }
 
     partial void OnViewModeChanged(ThreadViewMode value)

@@ -22,6 +22,10 @@ namespace ChBrowser.Controls;
 public interface IThreadDisplayBinding
 {
     int? ScrollTargetPostNumber { get; }
+
+    /// <summary>「ここまで読んだ」帯の対象レス番号 (Phase 19)。null なら帯を表示しない。
+    /// appendPosts のメッセージに同梱して JS に push する。</summary>
+    int? ReadMarkPostNumber { get; }
 }
 
 /// <summary>
@@ -305,6 +309,42 @@ public static class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // FavoritedUpdate (スレ一覧: is-favorited クラスを postMessage で toggle)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty FavoritedUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "FavoritedUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnFavoritedUpdateChanged));
+
+    public static object? GetFavoritedUpdate(DependencyObject d) => d.GetValue(FavoritedUpdateProperty);
+    public static void    SetFavoritedUpdate(DependencyObject d, object? value) => d.SetValue(FavoritedUpdateProperty, value);
+
+    private static async void OnFavoritedUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is null) return;
+
+        try
+        {
+            await EnsureCoreAsync(wv).ConfigureAwait(true);
+            var state = HtmlNavStates.GetValue(wv, _ => new HtmlNavState());
+            if (state.CurrentNav is { } nav) await nav.Task.ConfigureAwait(true);
+
+            var json = JsonSerializer.Serialize(
+                new { type = "updateFavorited", value = e.NewValue },
+                PostJsonOptions);
+            wv.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WebView2Helper] FavoritedUpdate push failed: {ex.Message}");
+        }
+    }
+
+    // ------------------------------------------------------------
     // AppendBatch (スレ表示: スレ表示の唯一の描画チャネル — appendPosts として JS に post)
     //
     // 旧実装には Posts (= setPosts) の全置換チャネルもあったが、
@@ -352,9 +392,25 @@ public static class WebView2Helper
             await state.NavigationTask.ConfigureAwait(true);
 
             // streaming 中もこのバッチで対象レスが現れる可能性があるので scroll target を併送
-            var scrollTarget = (wv.DataContext as IThreadDisplayBinding)?.ScrollTargetPostNumber;
+            var binding      = wv.DataContext as IThreadDisplayBinding;
+            var scrollTarget = binding?.ScrollTargetPostNumber;
+            var readMark     = binding?.ReadMarkPostNumber;
+            // e.NewValue は AppendBatchData (Phase 20)。Posts と IsIncremental を分けて送る。
+            object posts;
+            bool incremental;
+            if (e.NewValue is ChBrowser.ViewModels.AppendBatchData data)
+            {
+                posts       = data.Posts;
+                incremental = data.IsIncremental;
+            }
+            else
+            {
+                // 旧型 (IReadOnlyList<Post>) フォールバック (= 互換性のため残すが現状到達経路なし)
+                posts       = e.NewValue;
+                incremental = false;
+            }
             var json = JsonSerializer.Serialize(
-                new { type = "appendPosts", posts = e.NewValue, scrollTarget },
+                new { type = "appendPosts", posts, scrollTarget, readMarkPostNumber = readMark, incremental },
                 PostJsonOptions);
             wv.CoreWebView2.PostWebMessageAsJson(json);
         }

@@ -574,6 +574,11 @@ public partial class MainWindow : Window
                 if (ParseId(idStr) is Guid id) await main.OpenFavoriteByIdAsync(id);
                 break;
             }
+            case "openAllLogs":
+            {
+                await main.OpenAllLogsAsync();
+                break;
+            }
             case "setFolderExpanded":
             {
                 var idStr = payload.TryGetProperty("id", out var p) ? p.GetString() : null;
@@ -605,10 +610,11 @@ public partial class MainWindow : Window
     {
         var key = target switch
         {
-            "folder" => "FavoriteFolderContextMenu",
-            "board"  => "FavoriteBoardContextMenu",
-            "thread" => "FavoriteThreadContextMenu",
-            _        => "FavoriteRootContextMenu",
+            "folder"       => "FavoriteFolderContextMenu",
+            "board"        => "FavoriteBoardContextMenu",
+            "thread"       => "FavoriteThreadContextMenu",
+            "virtual-root" => "FavoriteVirtualRootContextMenu",
+            _              => "FavoriteRootContextMenu",
         };
         if (Resources[key] is not ContextMenu menu) return;
         menu.Tag             = id is Guid g ? new FavoriteRef(g) : null;
@@ -678,10 +684,44 @@ public partial class MainWindow : Window
             main.MoveFavoriteEntryDown(vm);
     }
 
-    private void FavRefreshAll_Click(object sender, RoutedEventArgs e)
+    /// <summary>「お気に入りチェック」: 仮想ルート / ファイルメニュー / お気に入りペインのリフレッシュボタン
+    /// すべてここから入る。<see cref="MainViewModel.CheckFavoritesAsync"/> を fire-and-forget。</summary>
+    private void FavCheckUpdates_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel main) return;
-        _ = main.RefreshAllFavoritesAsync();
+        _ = main.CheckFavoritesAsync();
+    }
+
+    /// <summary>「すべて開く」: 仮想ルート (Tag null) ならお気に入り全体、フォルダなら配下を、
+    /// 板はそのまま板タブ、スレはそのままスレタブで一気に開く。</summary>
+    private void FavOpenAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel main) return;
+        if (RefFromMenu(sender) is FavoriteRef r)
+        {
+            if (main.Favorites.FindById(r.Id) is FavoriteFolderViewModel folder)
+                _ = main.OpenAllInFolderAsync(folder);
+        }
+        else
+        {
+            _ = main.OpenAllInRootAsync();
+        }
+    }
+
+    /// <summary>「板として開く」: 仮想ルート / フォルダ配下の全エントリを統合した板スレ一覧タブで開く
+    /// (= 従来のフォルダクリック動作と同じ)。</summary>
+    private void FavOpenAsBoard_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel main) return;
+        if (RefFromMenu(sender) is FavoriteRef r)
+        {
+            if (main.Favorites.FindById(r.Id) is FavoriteFolderViewModel folder)
+                _ = main.OpenFavoritesFolderAsync(folder);
+        }
+        else
+        {
+            _ = main.OpenAllRootAsBoardAsync();
+        }
     }
 
     /// <summary>スレ表示 WebView2 からの postMessage を捌く。
@@ -722,6 +762,11 @@ public partial class MainWindow : Window
         if (type == "scrollPosition")
         {
             HandleScrollPosition(sender, payload);
+            return;
+        }
+        if (type == "readMark")
+        {
+            HandleReadMark(sender, payload);
             return;
         }
         if (type == "imageMetaRequest")
@@ -778,6 +823,18 @@ public partial class MainWindow : Window
         if (numProp.ValueKind != JsonValueKind.Number) return;
         if (!numProp.TryGetInt32(out var num)) return;
         main.UpdateScrollPosition(tab.Board, tab.ThreadKey, num);
+    }
+
+    /// <summary>JS が検出した「ここまで読んだ」レス番号を MainViewModel に通知 (Phase 19)。</summary>
+    private void HandleReadMark(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (DataContext is not MainViewModel main) return;
+        if (!payload.TryGetProperty("postNumber", out var numProp)) return;
+        if (numProp.ValueKind != JsonValueKind.Number) return;
+        if (!numProp.TryGetInt32(out var num)) return;
+        main.UpdateReadMark(tab.Board, tab.ThreadKey, num);
     }
 
     /// <summary>

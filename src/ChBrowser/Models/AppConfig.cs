@@ -29,6 +29,10 @@ public sealed record AppConfig
     /// <summary>画像 HEAD 自動取得しきい値 (MB)。これ以上の画像はクリックされるまで取得しない。即時反映。</summary>
     public int ImageSizeThresholdMb { get; init; } = 5;
 
+    /// <summary>「ここまで読んだ」帯を表示するか (Phase 19)。OFF にすると JS 側で band / リッチスクロールバーのトラック共に非表示。
+    /// 値の記録自体は行うので、再度 ON にしたときに過去の位置から復活する。即時反映 (setConfig メッセージ)。</summary>
+    public bool ShowReadMark { get; init; } = true;
+
     // ---- 画像 ----
     /// <summary>画像キャッシュ上限 (MB)。即時反映 (ImageCacheService.MaxBytes)。</summary>
     public int CacheMaxMb { get; init; } = 1024;
@@ -40,6 +44,11 @@ public sealed record AppConfig
     // ---- ペイン操作 (Phase 11b) ----
     /// <summary>お気に入りペインで 1 クリックで開く。OFF でダブルクリック動作。即時反映 (favorites.js への setConfig)。</summary>
     public bool FavoritesOpenOnSingleClick { get; init; } = true;
+
+    /// <summary>バッチ処理 (お気に入りチェック等) で subject.txt / dat の通信を行う際の同時実行本数。
+    /// ユーザが直接トリガーする操作 (タブクリックでスレを開く等) はこの制限の対象外。
+    /// 1 で完全直列、上げると速くなるが帯域占有。範囲: 1〜50 を想定。即時反映。</summary>
+    public int BatchConcurrency { get; init; } = 6;
 
     /// <summary>板一覧ペインで 1 クリックで開く。OFF でダブルクリック動作。即時反映。</summary>
     public bool BoardListOpenOnSingleClick { get; init; } = true;
