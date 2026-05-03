@@ -20,7 +20,6 @@
 
 .post-no {
     color: #006400;
-    font-weight: bold;
 }
 
 /* レス番号の色: 自分宛の返信があるレスを目立たせる。
@@ -89,3 +88,39 @@
 /* ツリー (重複あり / 重複なし) の forward (親) / reverse (子) 別の色 */
 .inline-expansion.forward .post.embedded { background: #f7faff; border-color: #e0e8f5; }
 .inline-expansion.reverse .post.embedded { background: #f7fff8; border-color: #e0f0e4; }
+
+/* 新規取得レス (= スレを最初に開いた後の差分取得 / お気に入りチェックで来た分) のレス No を強調。
+ * 取得済 / 初回 dat 取得分は既定の通常太さで描画される (is-new クラスが付かないため)。 */
+.post.is-new .post-no {
+    font-weight: bold;
+}
+
+/* 同一ワッチョイが複数ある場合、name 内の `xxxx-yyyy` 部分にこのリンク風装飾が付く (Phase 22)。
+ * ホバーで該当ワッチョイの全レスがポップアップ表示。 */
+.watchoi-link {
+    color: #0066cc;
+    text-decoration: underline;
+    cursor: help;
+    text-underline-offset: 2px;
+}
+.watchoi-link:hover {
+    color: #003a7a;
+}
+
+/* 同一 ID が複数ある場合、meta の "ID" 文字列にこのリンク風装飾が付く (Phase 22)。
+ * 件数が AppConfig.IdHighlightThreshold (既定 5) 以上なら id-many で赤化。 */
+.id-link {
+    color: #0066cc;
+    text-decoration: underline;
+    cursor: help;
+    text-underline-offset: 2px;
+}
+.id-link:hover {
+    color: #003a7a;
+}
+.id-link.id-many {
+    color: #d33;
+}
+.id-link.id-many:hover {
+    color: #a00;
+}

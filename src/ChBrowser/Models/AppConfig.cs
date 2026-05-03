@@ -33,6 +33,12 @@ public sealed record AppConfig
     /// 値の記録自体は行うので、再度 ON にしたときに過去の位置から復活する。即時反映 (setConfig メッセージ)。</summary>
     public bool ShowReadMark { get; init; } = true;
 
+    /// <summary>同一 ID の書込が何件以上あったら ID の "ID" 文字列を赤色で強調するかの閾値 (Phase 22)。
+    /// 既定 5 = 同一 ID が 5 件以上で赤。1 にすると同 ID が 2 件以上で赤、等。
+    /// 同 ID が 2 件以上 (= 単に複数) のときはリンク風装飾は常に出る (赤化はこの閾値を超えたときだけ)。
+    /// ワッチョイには赤化の閾値は無く、複数あればリンク風装飾のみ。即時反映 (setConfig メッセージ)。</summary>
+    public int IdHighlightThreshold { get; init; } = 5;
+
     // ---- 画像 ----
     /// <summary>画像キャッシュ上限 (MB)。即時反映 (ImageCacheService.MaxBytes)。</summary>
     public int CacheMaxMb { get; init; } = 1024;

@@ -45,7 +45,18 @@
     let pendingScrollTarget = null;
 
     // 設定 (Phase 11) で動的変更可能。setConfig メッセージで上書きされる。
-    let POPULAR_THRESHOLD = 3;
+    let POPULAR_THRESHOLD       = 3;
+    let ID_HIGHLIGHT_THRESHOLD  = 5; // 同 ID が >= 5 件で「ID」文字列を赤化 (Phase 22)
+
+    // ID / ワッチョイ (xxxx-yyyy) の出現一覧。renderCurrentViewMode / appendPosts 後に再計算する。
+    //   id      → [postNumber, postNumber, ...]
+    //   wacchoi → [postNumber, postNumber, ...]
+    let currentIdMap      = new Map();
+    let currentWatchoiMap = new Map();
+    // ワッチョイ抽出用の正規表現。`xxxx-yyyy` (4+1+4 = 9 chars) パターン。
+    //   - 文字種は alphanumeric + `+/` (5ch のワッチョイ末尾は base64 風で `+/` を含むことがある)。
+    //   - 名前文字列に複数候補があった場合は最初の 1 件を採用する。
+    const WATCHOI_RE = /[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4}/;
 
     // 重複なしツリーの「incremental セクション」境界 (Phase 20)。
     //   incrementalPivotIndex: allPosts のうち、最初の差分 append (= リフレッシュ後 / お気に入りチェック差分等) が
@@ -573,20 +584,22 @@
     }
 
     /** forest ノードを再帰的に HTML 化。
-     *  incrementalSet に含まれるノード (= 末尾 leaf 寄り、新規取得分) は primary (id="rN" 付き)、
-     *  それ以外 (= 既存スレからの祖先) は embedded (id 無し) で出す。 */
-    function renderIncrementalForestNode(node, incrementalSet) {
+     *  isEmbedded は「inline-expansion 配下で描画されているか (= 深さ)」を示す:
+     *    forest root (Section B の直下) は false、その配下の子は true で渡す。
+     *    これにより Section A の通常の dedup tree と同じ見た目 (root=枠線なし / 子=枠線+色) になる。
+     *  omitId は「Section A 側に primary instance を持つレス (= 既存の祖先) か」で決める:
+     *    incrementalSet に含まれる (= 新規分) なら id 付き、それ以外 (= Section A にも存在) なら id 無し。 */
+    function renderIncrementalForestNode(node, incrementalSet, isEmbedded) {
         const post = postsByNumber.get(node.number);
         if (!post) return '';
         const isInc = incrementalSet.has(node.number);
         let childrenHtml = '';
         for (const child of node.childMap.values()) {
             childrenHtml += '<div class="inline-expansion reverse">';
-            childrenHtml += renderIncrementalForestNode(child, incrementalSet);
+            childrenHtml += renderIncrementalForestNode(child, incrementalSet, /*isEmbedded*/ true);
             childrenHtml += '</div>';
         }
-        // isInc=true (新規分): primary, id 付き / isInc=false (祖先): embedded, id 無し (= Section A の primary と衝突回避)
-        return renderPost(postDataFor(post, /*isEmbedded*/ !isInc, /*omitId*/ !isInc, childrenHtml));
+        return renderPost(postDataFor(post, isEmbedded, /*omitId*/ !isInc, childrenHtml));
     }
 
     /** ツリー (重複あり): トップレベルレス + 1 段の親 (>>X 先) + 1 段の子 (>>X 元) を直下に展開。 */
@@ -709,7 +722,7 @@
                     html += '<div class="incremental-section">';
                     for (const node of forest.values()) {
                         html += '<div class="incremental-block">';
-                        html += renderIncrementalForestNode(node, incSet);
+                        html += renderIncrementalForestNode(node, incSet, /*isEmbedded*/ false);
                         html += '</div>';
                     }
                     html += '</div>';
@@ -732,6 +745,190 @@
         updateRichScrollbar();
         updateReadUpToBand();
         updateReadMarkScrollbarMarker();
+        markNewPosts();
+        recomputeMetaMaps();
+        decorateMeta();
+    }
+
+    /** スレを最初に開いた後の差分取得 (= incrementalPivotIndex 以降) で来たレスを「新規」として
+     *  is-new クラスでマークする。post.css 側で .post.is-new .post-no を太字強調。
+     *  primary instance (= id="rN" 付き) のみマークするので、tree モード重複表示の embedded 側は対象外
+     *  (= ユーザの主視点である primary のレスでだけ強調が出ればよい)。
+     *  classList.add は冪等なので renderCurrentViewMode + appendPosts flat の両方から呼んで OK。 */
+    function markNewPosts() {
+        if (incrementalPivotIndex == null) return;
+        for (let i = incrementalPivotIndex; i < allPosts.length; i++) {
+            const el = document.getElementById('r' + allPosts[i].number);
+            if (el) el.classList.add('is-new');
+        }
+    }
+
+    // ---------- ID / ワッチョイの集計と装飾 (Phase 22) ----------
+
+    /** allPosts を走査して currentIdMap / currentWatchoiMap を再構築する。
+     *  ID は p.id をそのまま、ワッチョイは p.name から WATCHOI_RE で最初にマッチした 9 文字を採用。 */
+    function recomputeMetaMaps() {
+        currentIdMap.clear();
+        currentWatchoiMap.clear();
+        for (const p of allPosts) {
+            if (p.id) {
+                if (!currentIdMap.has(p.id)) currentIdMap.set(p.id, []);
+                currentIdMap.get(p.id).push(p.number);
+            }
+            const w = extractWatchoi(p.name);
+            if (w) {
+                if (!currentWatchoiMap.has(w)) currentWatchoiMap.set(w, []);
+                currentWatchoiMap.get(w).push(p.number);
+            }
+        }
+    }
+
+    /** name HTML から最初の `xxxx-yyyy` 形式部分を抽出 (タグは事前ストリップ)。無ければ null。 */
+    function extractWatchoi(nameHtml) {
+        if (!nameHtml) return null;
+        const text = String(nameHtml).replace(STRIP_TAGS_RE, '');
+        const m = text.match(WATCHOI_RE);
+        return m ? m[0] : null;
+    }
+
+    /** scopeRoot 内の全 .post[id^="r"] を走査して、複数件ある ID / ワッチョイの該当文字列に
+     *  リンク風 span を被せる。装飾済みは `data-meta-decorated` 属性で判定して二重装飾を防ぐ。
+     *  scopeRoot 省略時は document.getElementById('posts')。 */
+    function decorateMeta(scopeRoot) {
+        const root = scopeRoot || document.getElementById('posts');
+        if (!root) return;
+        const posts = root.querySelectorAll('.post[id^="r"]');
+        posts.forEach(function (postEl) {
+            if (postEl.dataset.metaDecorated === '1') return;
+            const num = parseInt(postEl.id.slice(1), 10);
+            const p = postsByNumber.get(num);
+            if (!p) return;
+
+            // ---- ワッチョイ装飾 (post-name 内) ----
+            const wacchoi = extractWatchoi(p.name);
+            if (wacchoi) {
+                const list = currentWatchoiMap.get(wacchoi);
+                if (list && list.length > 1) {
+                    const nameEl = postEl.querySelector(':scope > .post-header > .post-name');
+                    if (nameEl) wrapTextMatches(nameEl, WATCHOI_RE, function (matched) {
+                        const span = document.createElement('span');
+                        span.className = 'watchoi-link';
+                        span.dataset.watchoi = matched;
+                        span.dataset.watchoiList = list.join(',');
+                        span.textContent = matched;
+                        return span;
+                    }, /*onlyFirst*/ true);
+                }
+            }
+
+            // ---- ID 装飾 (post-meta 内の "ID:" 直前の "ID") ----
+            if (p.id) {
+                const list = currentIdMap.get(p.id);
+                if (list && list.length > 1) {
+                    const metaEl = postEl.querySelector(':scope > .post-header > .post-meta');
+                    if (metaEl) wrapTextMatches(metaEl, /\bID(?=:)/, function (matched) {
+                        const span = document.createElement('span');
+                        span.className = 'id-link';
+                        if (list.length >= ID_HIGHLIGHT_THRESHOLD) span.classList.add('id-many');
+                        span.dataset.id = p.id;
+                        span.dataset.idList = list.join(',');
+                        span.textContent = matched;
+                        return span;
+                    }, /*onlyFirst*/ true);
+                }
+            }
+            postEl.dataset.metaDecorated = '1';
+        });
+        // ホバーハンドラを取り付け (level 0 = 最上位ペイン直下のレス)。
+        attachMetaHoverHandlers(root, 0);
+    }
+
+    /** decorateMeta が付けた `.watchoi-link` / `.id-link` を全て解除して text node に戻す。
+     *  併せて post の data-meta-decorated 属性もクリアし、再度 decorateMeta を走らせられる状態にする。
+     *  flat appendPosts で件数しきい値の境界を跨いだケース (例: 4 件 → 5 件で赤化) を反映するために使う。 */
+    function clearMetaDecorations(scopeRoot) {
+        const root = scopeRoot || document.getElementById('posts');
+        if (!root) return;
+        root.querySelectorAll('.watchoi-link, .id-link').forEach(function (el) {
+            el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
+        });
+        root.querySelectorAll('.post[data-meta-decorated="1"]').forEach(function (postEl) {
+            delete postEl.dataset.metaDecorated;
+        });
+    }
+
+    /** TreeWalker で text node を走査し、regex マッチ部分を element で包む。
+     *  onlyFirst=true なら最初のマッチを処理した時点で抜ける (各 post-name のワッチョイは 1 つのみ)。 */
+    function wrapTextMatches(scope, regex, makeReplacement, onlyFirst) {
+        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+        const targets = [];
+        let n;
+        while ((n = walker.nextNode())) {
+            if (regex.test(n.nodeValue)) {
+                targets.push(n);
+                if (onlyFirst) break;
+            }
+        }
+        if (targets.length === 0) return;
+
+        const r = regex.global ? regex : new RegExp(regex.source, regex.flags + 'g');
+        for (const node of targets) {
+            const text = node.nodeValue;
+            r.lastIndex = 0;
+            const parent = node.parentNode;
+            let last = 0;
+            let m;
+            const inserts = [];
+            while ((m = r.exec(text)) !== null) {
+                if (m.index > last) inserts.push(document.createTextNode(text.slice(last, m.index)));
+                inserts.push(makeReplacement(m[0], m));
+                last = m.index + m[0].length;
+                if (onlyFirst) break;
+            }
+            if (last < text.length) inserts.push(document.createTextNode(text.slice(last)));
+            for (const piece of inserts) parent.insertBefore(piece, node);
+            parent.removeChild(node);
+        }
+    }
+
+    /** scopeRoot 内の .watchoi-link / .id-link にホバーハンドラを取付ける。
+     *  ポップアップは anchor / 返信件数バッジ と同じ仕組み (.anchor-popup) を使い、入れ子表示も対応。 */
+    function attachMetaHoverHandlers(scopeRoot, level) {
+        scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]').forEach(function (el) {
+            el.addEventListener('mouseenter', function () {
+                cancelCloseAt(level);
+                openMetaListPopup(el, el.dataset.watchoiList, level);
+            });
+            el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+        });
+        scopeRoot.querySelectorAll('.id-link[data-id-list]').forEach(function (el) {
+            el.addEventListener('mouseenter', function () {
+                cancelCloseAt(level);
+                openMetaListPopup(el, el.dataset.idList, level);
+            });
+            el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+        });
+    }
+
+    /** ID / ワッチョイホバー用ポップアップ。data-*-list の "3,7,12" を読んでレスを並べるだけ。
+     *  既存 buildPopupContentFromList を再利用する (= anchor/返信ホバーと見た目が揃う)。 */
+    function openMetaListPopup(target, listStr, level) {
+        closeFrom(level);
+        const list = (listStr || '').split(',')
+            .map(function (s) { return parseInt(s, 10); })
+            .filter(function (n) { return !isNaN(n); });
+        if (list.length === 0) return;
+        const el = document.createElement('div');
+        el.className = 'anchor-popup';
+        el.appendChild(buildPopupContentFromList(list));
+        document.body.appendChild(el);
+        positionPopup(el, target);
+        el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
+        el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+        // 入れ子で popup 内のレスにも meta 装飾とアンカー hover を付ける
+        attachAnchorHandlers(el, level + 1);
+        attachMetaHoverHandlers(el, level + 1);
+        popups.push({ el: el, anchor: target, level: level });
     }
 
 
@@ -1606,6 +1803,12 @@
         updateRichScrollbar();
         updateReadUpToBand();
         updateReadMarkScrollbarMarker();
+        markNewPosts();
+        // 増分追加で同 ID/ワッチョイの件数が変わるので、既存装飾を破棄して全体を再装飾する。
+        // (新規装飾だけだと、既に decoration 済の post も "5 件超え → 赤化" 等のしきい値変化に追従できない)
+        clearMetaDecorations(root);
+        recomputeMetaMaps();
+        decorateMeta(root);
     };
 
     window.setViewMode = function (mode) {
@@ -1630,6 +1833,12 @@
                     if (typeof msg.showReadMark         === 'boolean') {
                         showReadMark = msg.showReadMark;
                         document.body.classList.toggle('no-read-mark', !showReadMark);
+                    }
+                    if (typeof msg.idHighlightThreshold === 'number' && msg.idHighlightThreshold !== ID_HIGHLIGHT_THRESHOLD) {
+                        ID_HIGHLIGHT_THRESHOLD = msg.idHighlightThreshold;
+                        // しきい値変化で id-many クラスの付与判定が変わるので decoration を再計算
+                        clearMetaDecorations();
+                        decorateMeta();
                     }
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();

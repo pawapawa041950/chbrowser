@@ -9,12 +9,17 @@ namespace ChBrowser.Services.Shortcuts;
 /// <summary>マウスジェスチャー認識器 (Phase 15)。指定 <see cref="Window"/> 上での右ドラッグを追跡し、
 /// 一定距離移動するごとに ↑↓←→ の 4 方向に量子化、連続同方向はマージして方向列を生成する。
 ///
-/// <para>右ドラッグ <b>開始時点のペイン</b>を <see cref="ShortcutAction.Category"/> 名 (= "スレ一覧表示領域" 等) で判定し、
-/// 認識完了時に <see cref="ShortcutManager.DispatchGesture"/> へ (start category, gesture) を渡す。
+/// <para>右ドラッグ <b>開始時点のペイン</b>を <see cref="ShortcutAction.Category"/> 名 (= "スレ一覧表示領域" 等)
+/// で判定し、認識完了時に <see cref="ShortcutManager.DispatchGesture"/> へ (start category, gesture) を渡す。
 /// 同じジェスチャー文字列でも開始ペインが違えば別アクションが起動するスコープになっている。</para>
 ///
-/// <para>制約: WebView2 (HwndHost) 内の右ドラッグは Win32 サーフェスに吸われるため WPF イベントが届かず、
-/// この recognizer は動作しない。WebView2 内で使いたい場合は JS 経由の通知経路を別途追加する必要がある。</para></summary>
+/// <para>WebView2 (HwndHost) 跨ぎ: 通常 WebView2 は Win32 surface でマウス入力を吸収するため、
+/// WPF 側で開始したジェスチャーがカーソル WebView 進入時点で止まる。これを防ぐため右押下時に
+/// <see cref="UIElement.CaptureMouse"/> でウィンドウ HWND に capture を取り、WebView2 の子 HWND が
+/// マウス入力を奪わないようにする。<see cref="UIElement.LostMouseCapture"/> で graceful cancel。</para>
+///
+/// <para>WebView 内で開始したジェスチャー (= 右押下を WPF が観測しない) は、各 WebView2 の
+/// <c>shortcut-bridge.js</c> がドキュメントレベルで認識する。こちらは無関与。</para></summary>
 public sealed class GestureRecognizer
 {
     private readonly Window          _window;
@@ -34,6 +39,7 @@ public sealed class GestureRecognizer
         window.PreviewMouseRightButtonDown += OnRightDown;
         window.PreviewMouseMove            += OnMove;
         window.PreviewMouseRightButtonUp   += OnRightUp;
+        window.LostMouseCapture            += OnLostCapture;
     }
 
     private void OnRightDown(object sender, MouseButtonEventArgs e)
@@ -45,12 +51,24 @@ public sealed class GestureRecognizer
         _startCategory   = CategoryResolver.Resolve(_startSource);
         // ステータスバー: ジェスチャー入力開始を通知 (= 空の方向列)
         _manager.NotifyGestureProgress(_startCategory, "");
+
+        // WebView2 (HwndHost) 跨ぎ対策: ウィンドウ HWND にマウスキャプチャを取り、
+        // カーソルが WebView2 の上に行っても mousemove が引き続き届くようにする。
+        // 失敗 (= 既に他要素が capture 中等) しても tracking は続行する (WPF 領域内では機能する)。
+        _window.CaptureMouse();
     }
 
     private void OnMove(object sender, MouseEventArgs e)
     {
         if (!_tracking) return;
-        if (e.RightButton != MouseButtonState.Pressed) return;
+
+        // capture が外れた等で右ボタン状態と乖離したら graceful にキャンセル
+        if (e.RightButton != MouseButtonState.Pressed)
+        {
+            StopTracking();
+            return;
+        }
+
         var p = e.GetPosition(_window);
         var dx = p.X - _lastSamplePoint.X;
         var dy = p.Y - _lastSamplePoint.Y;
@@ -63,7 +81,6 @@ public sealed class GestureRecognizer
         if (_directions.Count == 0 || _directions[^1] != dir)
         {
             _directions.Add(dir);
-            // ステータスバー: 現在の方向列を通知
             _manager.NotifyGestureProgress(_startCategory, new string(_directions.ToArray()));
         }
         _lastSamplePoint = p;
@@ -72,9 +89,7 @@ public sealed class GestureRecognizer
     private void OnRightUp(object sender, MouseButtonEventArgs e)
     {
         if (!_tracking) return;
-        _tracking = false;
-        // ステータスバー: ジェスチャー終了通知 (= 表示クリア)
-        _manager.NotifyGestureProgress(null, null);
+        StopTracking();
 
         if (_directions.Count == 0) return; // 移動なし → 通常の右クリック扱い
 
@@ -85,5 +100,21 @@ public sealed class GestureRecognizer
         // 認識した時のみ右ボタンアップを消費 (= コンテキストメニュー抑止)。
         if (_manager.DispatchGesture(_startCategory, gesture, _startSource))
             e.Handled = true;
+    }
+
+    /// <summary>capture が外部要因 (Alt+Tab / 別要素の Mouse.Capture / モーダル表示等) で
+    /// 失われた場合のクリーンアップ。tracking 中なら graceful cancel。</summary>
+    private void OnLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_tracking) StopTracking();
+    }
+
+    /// <summary>tracking 状態の終了処理を一箇所に集約。
+    /// 右上 / capture 喪失 / 右ボタン状態の乖離検知 すべてここを通る。</summary>
+    private void StopTracking()
+    {
+        _tracking = false;
+        if (_window.IsMouseCaptured) _window.ReleaseMouseCapture();
+        _manager.NotifyGestureProgress(null, null);
     }
 }

@@ -72,6 +72,36 @@
             <MenuItem Header="お気に入りチェック"        Click="FavCheckUpdates_Click" />
         </ContextMenu>
 
+        <!-- スレ一覧タブ右クリックメニュー (Phase 21)。
+             Tabs.cs の ThreadListTabItem_MouseRightButtonUp が PlacementTarget + DataContext を
+             明示的に積んでから IsOpen=true で popup する。Click ハンドラは MenuItem.DataContext から
+             タブ ViewModel を取り出す。x:Shared="False" で開くたびに新規 instance。 -->
+        <ContextMenu x:Key="ThreadListTabContextMenu" x:Shared="False"
+                     Opened="ThreadListTabContextMenu_Opened">
+            <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListTabFav_Click" />
+            <Separator />
+            <MenuItem Header="コピー">
+                <MenuItem               Header="タイトルコピー"        Click="ThreadListTabCopyTitle_Click" />
+                <MenuItem Tag="copyUrl" Header="URLコピー"             Click="ThreadListTabCopyUrl_Click" />
+                <MenuItem Tag="copyUrl" Header="タイトルとURLコピー"   Click="ThreadListTabCopyTitleAndUrl_Click" />
+            </MenuItem>
+        </ContextMenu>
+
+        <!-- スレ表示タブ右クリックメニュー (Phase 21)。 -->
+        <ContextMenu x:Key="ThreadTabContextMenu" x:Shared="False"
+                     Opened="ThreadTabContextMenu_Opened">
+            <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadTabFav_Click" />
+            <Separator />
+            <MenuItem Header="コピー">
+                <MenuItem Header="タイトルコピー"        Click="ThreadTabCopyTitle_Click" />
+                <MenuItem Header="URLコピー"             Click="ThreadTabCopyUrl_Click" />
+                <MenuItem Header="タイトルとURLコピー"   Click="ThreadTabCopyTitleAndUrl_Click" />
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="次スレ候補検索" Click="ThreadTabFindNext_Click" />
+            <MenuItem Header="ログ削除"       Click="ThreadTabDeleteLog_Click" />
+        </ContextMenu>
+
         <!-- ツールバー用アイコンボタン (Button をテンプレート化) -->
         <Style x:Key="ToolbarIconButton" TargetType="Button">
             <Setter Property="Width"               Value="28" />
@@ -376,10 +406,11 @@
                             </ControlTemplate>
                         </TabControl.Template>
                         <TabControl.ItemContainerStyle>
-                            <!-- Phase 11c: タブ動作 -->
+                            <!-- Phase 11c: タブ動作 / Phase 21: 右クリックメニュー -->
                             <Style TargetType="TabItem">
-                                <EventSetter Event="PreviewMouseDown"  Handler="ThreadListTabItem_PreviewMouseDown" />
-                                <EventSetter Event="MouseDoubleClick"  Handler="ThreadListTabItem_MouseDoubleClick" />
+                                <EventSetter Event="PreviewMouseDown"     Handler="ThreadListTabItem_PreviewMouseDown" />
+                                <EventSetter Event="MouseDoubleClick"     Handler="ThreadListTabItem_MouseDoubleClick" />
+                                <EventSetter Event="MouseRightButtonUp"   Handler="ThreadListTabItem_MouseRightButtonUp" />
                             </Style>
                         </TabControl.ItemContainerStyle>
                         <TabControl.ItemTemplate>
@@ -609,10 +640,11 @@
                             </ControlTemplate>
                         </TabControl.Template>
                         <TabControl.ItemContainerStyle>
-                            <!-- Phase 11c: タブ動作 -->
+                            <!-- Phase 11c: タブ動作 / Phase 21: 右クリックメニュー -->
                             <Style TargetType="TabItem">
-                                <EventSetter Event="PreviewMouseDown" Handler="ThreadTabItem_PreviewMouseDown" />
-                                <EventSetter Event="MouseDoubleClick" Handler="ThreadTabItem_MouseDoubleClick" />
+                                <EventSetter Event="PreviewMouseDown"     Handler="ThreadTabItem_PreviewMouseDown" />
+                                <EventSetter Event="MouseDoubleClick"     Handler="ThreadTabItem_MouseDoubleClick" />
+                                <EventSetter Event="MouseRightButtonUp"   Handler="ThreadTabItem_MouseRightButtonUp" />
                             </Style>
                         </TabControl.ItemContainerStyle>
                         <TabControl.ItemTemplate>

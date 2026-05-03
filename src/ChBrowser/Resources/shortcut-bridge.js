@@ -45,11 +45,24 @@
         const sendPaneActivated = opts.sendPaneActivated !== false;
 
         const bindings = new Map();
+        // ジェスチャー入力中フラグ。WebView 内で右下げを観測したときだけ true になる。
+        // 単純な右クリック / 修飾キー付き右クリック等は対象外 (= まだ down → up 直後に判定する)。
         let rightDragging = false;
         let suppressNextContext = false;
         let lastSampleX = 0, lastSampleY = 0;
         const directions = [];
         const SAMPLE_DISTANCE = 18;
+
+        // 右ボタンが現在押下されているかを Pointer Event の buttons フィールドから判定する。
+        // ブラウザ環境では Win32 の SetCapture 相当が無いので、WebView の document を出ると
+        // mouseup を観測できない場合がある。次に届く mousemove で buttons & 2 = 0 なら
+        // 「外で離した」と判断して gesture state をクリーンアップする。
+        function isRightHeld(e) { return typeof e.buttons === 'number' && (e.buttons & 2) !== 0; }
+
+        function resetGesture() {
+            rightDragging = false;
+            directions.length = 0;
+        }
 
         // C# からの setShortcutBindings 受信は各ペインの主 JS 側で扱うのではなく bridge 側で受ける。
         // ペイン JS の早期 return (tbody/root 不在等) 時にも binding 反映が漏れないようにするため。
@@ -154,11 +167,10 @@
                 return;
             }
 
-            // 右ボタン押下中の検出: bridge 内で観測した rightDragging だけでなく、
-            // event.buttons の MK_RBUTTON フラグ (= 2) もチェックする。タブストリップで右下げ → カーソルが
-            // WebView に入って中クリック、のように down イベントを跨いだケースでもチョード判定が成立するように。
-            var rightActive = rightDragging || (typeof e.buttons === 'number' && (e.buttons & 2) !== 0);
-            if (rightActive && e.button === 1) {
+            // 右ボタン押下中の判定は event.buttons (= MK_RBUTTON フラグ) を直接見る。
+            // bridge 内 rightDragging を使わない理由: タブストリップで右下げ → カーソルが
+            // WebView に入って中クリック、のように WebView 側で down を観測しないケースがあるため。
+            if (isRightHeld(e) && e.button === 1) {
                 if (trySuppressAndDispatch('shortcut', '右クリック+中ボタン', e)) return;
             }
 
@@ -178,6 +190,13 @@
 
         document.addEventListener('mousemove', function(e) {
             if (!rightDragging) return;
+            // WebView 外で右ボタンを離されたケース: mouseup を観測できないため、
+            // 戻ってきた mousemove で右ボタンが上がっていたら gesture を取消す (state stuck の防止)。
+            if (!isRightHeld(e)) {
+                resetGesture();
+                postEnd();
+                return;
+            }
             const dx = e.clientX - lastSampleX;
             const dy = e.clientY - lastSampleY;
             const dist = Math.sqrt(dx * dx + dy * dy);
@@ -196,11 +215,11 @@
         document.addEventListener('mouseup', function(e) {
             if (e.button !== 2) return;
             if (!rightDragging) return;
-            rightDragging = false;
-            postEnd();  // ジェスチャー終了通知 (= ステータスバー表示クリア)
-            if (directions.length === 0) return;
-
             const gs = directions.join('');
+            resetGesture();
+            postEnd();  // ジェスチャー終了通知 (= ステータスバー表示クリア)
+            if (gs.length === 0) return;
+
             suppressNextContext = true;
             e.preventDefault();
             e.stopPropagation();
@@ -224,10 +243,9 @@
 
         document.addEventListener('wheel', function(e) {
             const dir = e.deltaY < 0 ? 'ホイールアップ' : 'ホイールダウン';
-            // mousedown 時と同じく、bridge 内 rightDragging に加えて event.buttons の MK_RBUTTON も
-            // チェックして、WPF 側で右ダウン → JS 側で wheel という流れでもチョードが成立するように。
-            var rightActive = rightDragging || (typeof e.buttons === 'number' && (e.buttons & 2) !== 0);
-            if (rightActive) {
+            // 右ホールド中なら "右クリック+ホイール..." を優先 (event.buttons で判定: WPF 側で右下げ →
+            // JS 側で wheel という流れでもチョードが成立する)。
+            if (isRightHeld(e)) {
                 if (trySuppressAndDispatch('shortcut', '右クリック+' + dir, e)) return;
             }
             const desc = buildModifiers(e) + dir;

@@ -31,6 +31,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
     [ObservableProperty] private bool   _showReadMark          = true;
+    [ObservableProperty] private int    _idHighlightThreshold  = 5;
     [ObservableProperty] private int    _cacheMaxMb            = 1024;
     [ObservableProperty] private int    _viewerThumbnailSize   = 80;
 
@@ -137,6 +138,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
         ShowReadMark                 = initial.ShowReadMark;
+        IdHighlightThreshold         = initial.IdHighlightThreshold;
         CacheMaxMb                   = initial.CacheMaxMb;
         ViewerThumbnailSize          = initial.ViewerThumbnailSize;
         FavoritesOpenOnSingleClick   = initial.FavoritesOpenOnSingleClick;
@@ -229,6 +231,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
         ShowReadMark                = ShowReadMark,
+        IdHighlightThreshold        = IdHighlightThreshold,
         CacheMaxMb                  = CacheMaxMb,
         ViewerThumbnailSize         = ViewerThumbnailSize,
         FavoritesOpenOnSingleClick  = FavoritesOpenOnSingleClick,

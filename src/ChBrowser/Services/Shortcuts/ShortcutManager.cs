@@ -72,12 +72,17 @@ public sealed class ShortcutManager
         _appliedKeyBindingsByWindow[mainWindow] = new();
 
         // マウス操作はバインドが空のときも一度だけ subscribe (= 再 Apply で着脱しない、ディスパッチ時に dictionary lookup)。
-        // PreviewMouseDown は左右中すべてのボタン押下、PreviewMouseUp は右ボタンのチョード状態解除、
-        // PreviewMouseWheel はホイール回転で発火。
+        // PreviewMouseDown は左右中すべてのボタン押下で、PreviewMouseWheel はホイール回転で発火。
+        // 右ボタンの hold 状態は Mouse.RightButton を直接参照するため独自トラッキングは不要。
         _mainWindow.PreviewMouseDown  += OnPreviewMouseDown;
-        _mainWindow.PreviewMouseUp    += OnPreviewMouseUp;
         _mainWindow.PreviewMouseWheel += OnPreviewMouseWheel;
     }
+
+    /// <summary>右ボタンが現在押下中か (Win32 のキー状態を直接参照)。
+    /// WPF 側で右下げを観測したかどうかとは独立 (= WebView2 内で right-down → タブストリップで中クリック、
+    /// のような境界跨ぎでも正しく true になる)。</summary>
+    private static bool RightButtonHeld
+        => Mouse.RightButton == MouseButtonState.Pressed;
 
     /// <summary>ビューアウィンドウ (= 別 Window) を ShortcutManager に登録 (Phase 16+)。
     /// "ビューアウィンドウ" カテゴリの KeyBinding がここへ登録される。
@@ -184,12 +189,9 @@ public sealed class ShortcutManager
         catch (Exception ex) { Debug.WriteLine($"[ShortcutManager] dispatch '{actionId}' failed: {ex.Message}"); return false; }
     }
 
-    // 右クリックチョード検出用: 右ボタンが押下中かどうか。
-    private bool _rightHeld;
-
     /// <summary>マウスボタン押下。
     /// <list type="bullet">
-    /// <item><description>右ボタン → チョードフラグを立てるだけ (= ジェスチャーかチョードか単発右クリックかは離した時点で確定)</description></item>
+    /// <item><description>右ボタン → 何もしない (= 単発右クリック / ジェスチャー / チョードの判定は離した時点 / 後続の入力で確定)</description></item>
     /// <item><description>右ホールド中 + 中ボタン → "右クリック+中ボタン" を試行 (失敗したら通常の中クリック処理にフォールスルー)</description></item>
     /// <item><description>左ボタン: ClickCount が 2 で「ダブルクリック」、3 で「トリプルクリック」 (単発左クリックは binding 不可)</description></item>
     /// <item><description>中ボタン: 修飾キー + 「中クリック」</description></item>
@@ -197,19 +199,11 @@ public sealed class ShortcutManager
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         var btn = e.ChangedButton;
-
-        if (btn == MouseButton.Right)
-        {
-            _rightHeld = true;
-            return;
-        }
+        if (btn == MouseButton.Right) return;
 
         var category = CategoryResolver.Resolve(e.OriginalSource as DependencyObject);
 
-        // 右ボタン押下中の検出: 自分が観測した down 以外に、現在の Mouse.RightButton 状態も見る。
-        // WebView 内で右下げ → タブストリップで中クリック、のような境界跨ぎでも成立するように。
-        var rightActive = _rightHeld || Mouse.RightButton == MouseButtonState.Pressed;
-        if (rightActive && btn == MouseButton.Middle)
+        if (RightButtonHeld && btn == MouseButton.Middle)
         {
             if (DispatchScoped(_inputsByCategory, category, "右クリック+中ボタン", e.OriginalSource)) { e.Handled = true; return; }
             // 未割当ならフォールスルー (= 通常の中クリック処理を試す)
@@ -232,11 +226,6 @@ public sealed class ShortcutManager
         if (DispatchScoped(_inputsByCategory, category, key, e.OriginalSource)) e.Handled = true;
     }
 
-    private void OnPreviewMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton == MouseButton.Right) _rightHeld = false;
-    }
-
     /// <summary>ホイール回転 — Delta&gt;0 で「ホイールアップ」、それ以外で「ホイールダウン」。
     /// 右ホールド中なら「右クリック+ホイール...」を優先、未割当なら修飾キー組合せ版を試す。
     /// 発生位置のペインでスコープされる: 例えばスレ一覧タブストリップ上のホイールは
@@ -246,9 +235,7 @@ public sealed class ShortcutManager
         var dir = e.Delta > 0 ? "ホイールアップ" : "ホイールダウン";
         var category = CategoryResolver.Resolve(e.OriginalSource as DependencyObject);
 
-        // 右ボタン押下中の検出は OnPreviewMouseDown と同じ補強。
-        var rightActive = _rightHeld || Mouse.RightButton == MouseButtonState.Pressed;
-        if (rightActive)
+        if (RightButtonHeld)
         {
             if (DispatchScoped(_inputsByCategory, category, "右クリック+" + dir, e.OriginalSource)) { e.Handled = true; return; }
         }

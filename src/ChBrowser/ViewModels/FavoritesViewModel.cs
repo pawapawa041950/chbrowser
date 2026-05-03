@@ -203,6 +203,17 @@ public sealed class FavoritesViewModel : ObservableObject
         return null;
     }
 
+    /// <summary>ツリーから指定板の ViewModel を 1 件返す (重複登録は想定しないが、最初に見つかったもの)。</summary>
+    public FavoriteBoardViewModel? FindBoard(string host, string directoryName)
+    {
+        foreach (var vm in WalkAll())
+            if (vm is FavoriteBoardViewModel b
+                && b.Model.Host == host
+                && b.Model.DirectoryName == directoryName)
+                return b;
+        return null;
+    }
+
     /// <summary>お気に入り済みスレ全集合 (key tuple)。スレ一覧描画時の bulk lookup 用。</summary>
     public HashSet<(string Host, string Dir, string Key)> CollectFavoriteThreadKeys()
     {

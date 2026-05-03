@@ -28,7 +28,7 @@ public partial class ImageViewerWindow : Window
         _imageCache  = imageCache;
 
         // VM のキーボードショートカットからもメニューと同じ動作を実行できるように Window 側のロジックを配線
-        vm.SaveImageRequested     = url => SaveImageWithDialog(url);
+        vm.SaveImageRequested     = url => _ = SaveImageWithDialog(url);
         vm.CopyUrlRequested       = url => CopyUrl(url);
         vm.OpenInBrowserRequested = url => OpenInBrowser(url);
 
