@@ -322,10 +322,50 @@
                       PreviewMouseLeftButtonDown="ThreadListPane_PreviewMouseLeftButtonDown">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <TabControl Grid.Row="0"
+                    <!-- スレ一覧用ツールバー (タブの上)。
+                         右寄せ。新規スレ立てなど、スレ一覧タブに関する操作ボタンをここに集める。 -->
+                    <Border Grid.Row="0"
+                            Background="{x:Static SystemColors.ControlBrush}"
+                            BorderBrush="{x:Static SystemColors.ControlDarkBrush}"
+                            BorderThickness="0,0,0,1">
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right"
+                                    Margin="4,2">
+                            <!-- 板アクション (新規スレ立て)。
+                                 SelectedThreadListTab が板タブ (IsBoardTab=true) のときだけ有効。 -->
+                            <StackPanel Orientation="Horizontal">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                                <Setter Property="IsEnabled" Value="True" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Button Style="{StaticResource ToolbarIconButton}"
+                                        Click="NewThreadButton_Click"
+                                        ToolTip="この板に新規スレッドを立てる">
+                                    <Grid Width="16" Height="16">
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                              StrokeThickness="1.4"
+                                              StrokeLineJoin="Round"
+                                              StrokeStartLineCap="Round"
+                                              StrokeEndLineCap="Round"
+                                              Fill="Transparent"
+                                              Data="M 3,3 L 11,3 L 13,5 L 13,13 L 3,13 Z M 8,7 L 8,11 M 6,9 L 10,9" />
+                                    </Grid>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TabControl Grid.Row="1"
                                 ItemsSource="{Binding ThreadListTabs}"
                                 SelectedItem="{Binding SelectedThreadListTab}"
                                 BorderThickness="0">
@@ -362,7 +402,7 @@
                         </TabControl.ItemTemplate>
                     </TabControl>
 
-                    <ItemsControl Grid.Row="1" ItemsSource="{Binding ThreadListTabs}">
+                    <ItemsControl Grid.Row="2" ItemsSource="{Binding ThreadListTabs}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <Grid />
@@ -388,46 +428,16 @@
                               ResizeDirection="Rows"
                               Background="{x:Static SystemColors.ControlBrush}" />
 
-                <!-- 中央ツールバー (スレ表示操作用、今後ボタンを追加) -->
+                <!-- 中央ツールバー (スレ表示操作用)。右寄せ。
+                     新規スレ立てボタンはスレ一覧タブ上のツールバーに移動済み。 -->
                 <Border Grid.Row="2"
                         Background="{x:Static SystemColors.ControlBrush}"
                         BorderBrush="{x:Static SystemColors.ControlDarkBrush}"
                         BorderThickness="0,0,0,1">
-                    <DockPanel Margin="4,2">
-
-                        <!-- 板アクション (新規スレ立て)。
-                             SelectedThreadListTab が板タブ (Board != null) のときだけ有効。 -->
-                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
-                                    <Setter Property="IsEnabled" Value="False" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
-                                            <Setter Property="IsEnabled" Value="True" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </StackPanel.Style>
-                            <Button Style="{StaticResource ToolbarIconButton}"
-                                    Click="NewThreadButton_Click"
-                                    ToolTip="この板に新規スレッドを立てる">
-                                <Grid Width="16" Height="16">
-                                    <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                          StrokeThickness="1.4"
-                                          StrokeLineJoin="Round"
-                                          StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round"
-                                          Fill="Transparent"
-                                          Data="M 3,3 L 11,3 L 13,5 L 13,13 L 3,13 Z M 8,7 L 8,11 M 6,9 L 10,9" />
-                                </Grid>
-                            </Button>
-                            <Border Width="1"
-                                    Margin="4,2"
-                                    Background="{x:Static SystemColors.ControlDarkBrush}" />
-                        </StackPanel>
-
-                        <!-- スレ表示アクション (既存): SelectedThreadTab=null なら disabled -->
-                        <StackPanel Orientation="Horizontal">
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Margin="4,2">
+                        <!-- スレ表示アクション: SelectedThreadTab=null なら disabled -->
                         <StackPanel.Style>
                             <Style TargetType="StackPanel">
                                 <Style.Triggers>
@@ -570,8 +580,7 @@
                             <TextBlock Text="★" FontSize="14" Foreground="#e6b800"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
-                        </StackPanel>
-                    </DockPanel>
+                    </StackPanel>
                 </Border>
 
                 <!-- 右下: スレ本文エリア
