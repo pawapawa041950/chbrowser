@@ -3,15 +3,18 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using ChBrowser.Views.Panes;
 
 namespace ChBrowser.Services.Shortcuts;
 
-/// <summary>WPF visual から、所属するペインの <see cref="ShortcutAction.Category"/> 文字列を解決する (Phase 15)。
+/// <summary>WPF visual から、所属するペインの <see cref="ShortcutAction.Category"/> 文字列を解決する。
 /// マウスジェスチャー / マウス操作のディスパッチを「開始位置のペイン」にスコープするために使う。
 ///
-/// <para>判定ルール: 名前付きペインルート (<c>ThreadListPane</c> / <c>ThreadPane</c> / <c>FavoritesWebView</c> /
-/// <c>BoardListWebView</c>) に到達するまでの間に <see cref="TabPanel"/> / <see cref="TabItem"/> を通過していたら
-/// 「タブ領域」、そうでなければ「表示領域」を返す。どこにも該当しなければ「メインウィンドウ」(= chrome)。</para></summary>
+/// <para>判定ルール (Phase 23 docking 化以降): 4 ペインの UserControl 型 (<see cref="FavoritesPane"/> /
+/// <see cref="BoardListPane"/> / <see cref="ThreadListPane"/> / <see cref="ThreadDisplayPane"/>) に
+/// 到達するまでツリーを遡る。スレ系の 2 ペインだけ追加で「ヘッダ部分 (タブストリップ含む) / ボディ部分」を
+/// 区別するため <see cref="TabPanel"/> / <see cref="TabItem"/> 通過フラグを保持する。
+/// どこにも該当しなければ「メインウィンドウ」(= chrome / メニューバー / アドレスバー上)。</para></summary>
 public static class CategoryResolver
 {
     public static string Resolve(DependencyObject? source)
@@ -22,19 +25,12 @@ public static class CategoryResolver
         {
             if (cur is TabItem || cur is TabPanel) passedTabHeader = true;
 
-            if (cur is FrameworkElement fe)
+            switch (cur)
             {
-                switch (fe.Name)
-                {
-                    case "ThreadListPane":
-                        return passedTabHeader ? "スレ一覧のタブ領域" : "スレ一覧表示領域";
-                    case "ThreadPane":
-                        return passedTabHeader ? "スレッドタブ表示領域" : "スレッド表示領域";
-                    case "FavoritesWebView":
-                        return "お気に入りペイン";
-                    case "BoardListWebView":
-                        return "板一覧ペイン";
-                }
+                case FavoritesPane:     return "お気に入りペイン";
+                case BoardListPane:     return "板一覧ペイン";
+                case ThreadListPane:    return passedTabHeader ? "スレ一覧のタブ領域"     : "スレ一覧表示領域";
+                case ThreadDisplayPane: return passedTabHeader ? "スレッドタブ表示領域"   : "スレッド表示領域";
             }
             cur = GetAnyParent(cur);
         }

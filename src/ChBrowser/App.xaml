@@ -7,5 +7,51 @@
         <!-- 共通フォント定義: スレ本文ペインは MS P ゴシック (AA 対応) + Segoe UI Emoji フォールバック -->
         <FontFamily x:Key="ThreadFont">MS Pゴシック, Segoe UI Emoji</FontFamily>
 
+        <!-- ペインの色 (Phase 23: docking 化に伴い 4 ペインの境界を視覚的に出すため定義)。
+             4 ペインの UserControl が共通で参照する。色を変えたければここを 1 箇所変えれば全 pane に反映される。 -->
+        <SolidColorBrush x:Key="PaneBorderBrush"     Color="#B0B0B0" />
+        <SolidColorBrush x:Key="PaneHeaderBackground" Color="#E0E0E0" />
+
+        <!-- ツールバー用アイコンボタン (Phase 23: Window.Resources から App scope に移動)。
+             各ペインの UserControl から StaticResource で参照されるが、UserControl の InitializeComponent
+             は Window logical tree に attach される前に走るため、Window.Resources 配下に置くと
+             StaticResource resolution が失敗する。Application scope ならどの構築タイミングでも見つかる。 -->
+        <Style x:Key="ToolbarIconButton" TargetType="Button">
+            <Setter Property="Width"               Value="28" />
+            <Setter Property="Height"              Value="24" />
+            <Setter Property="Padding"             Value="0" />
+            <Setter Property="Margin"              Value="1,0" />
+            <Setter Property="Background"          Value="Transparent" />
+            <Setter Property="BorderBrush"         Value="Transparent" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="2"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#EAF1F8" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background"  Value="#CCE5FF" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#88B0DD" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Application.Resources>
 </Application>

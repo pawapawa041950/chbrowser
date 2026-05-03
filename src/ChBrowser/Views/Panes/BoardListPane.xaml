@@ -1,0 +1,35 @@
+<UserControl x:Class="ChBrowser.Views.Panes.BoardListPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             xmlns:ctrl="clr-namespace:ChBrowser.Controls"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
+    <UserControl.Resources>
+        <!-- 板一覧 WebView の右クリックで popup する ContextMenu (Phase 14a)。
+             BoardListWebView_WebMessageReceived が JS の contextMenu メッセージを受けて popup する。 -->
+        <ContextMenu x:Key="BoardContextMenu" x:Shared="False">
+            <MenuItem Header="お気に入りに追加" Click="AddBoardToFavorites_Click" />
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
+        <DockPanel>
+            <DockPanel x:Name="HeaderBar"
+                       DockPanel.Dock="Top"
+                       Background="{StaticResource PaneHeaderBackground}"
+                       LastChildFill="True">
+                <Border DockPanel.Dock="Bottom" Height="1" Background="{StaticResource PaneBorderBrush}" />
+                <TextBlock Text="板一覧" Padding="6,4" FontWeight="SemiBold" />
+            </DockPanel>
+            <wv2:WebView2 x:Name="BoardListWebView"
+                          ctrl:WebView2Helper.Html="{Binding BoardListHtml}"
+                          ctrl:WebView2Helper.PaneConfigJson="{Binding BoardListConfigJson}"
+                          ctrl:WebView2Helper.PaneShortcutsJson="{Binding BoardListShortcutsJson}"
+                          WebMessageReceived="BoardListWebView_WebMessageReceived" />
+        </DockPanel>
+    </Border>
+</UserControl>

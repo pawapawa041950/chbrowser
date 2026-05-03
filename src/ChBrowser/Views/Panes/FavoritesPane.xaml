@@ -1,0 +1,92 @@
+<UserControl x:Class="ChBrowser.Views.Panes.FavoritesPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             xmlns:ctrl="clr-namespace:ChBrowser.Controls"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
+    <UserControl.Resources>
+        <!-- お気に入りペイン (Phase 14b) のコンテキストメニュー群。
+             FavoritesWebView_WebMessageReceived が contextMenu メッセージで開く対象を決め、
+             Tag に対応する FavoriteRef を積んでから IsOpen=true で popup する。 -->
+        <ContextMenu x:Key="FavoriteFolderContextMenu" x:Shared="False">
+            <MenuItem Header="すべて開く"   Click="FavOpenAll_Click" />
+            <MenuItem Header="板として開く" Click="FavOpenAsBoard_Click" />
+            <Separator />
+            <MenuItem Header="新規フォルダ" Click="FavNewFolderHere_Click" />
+            <MenuItem Header="名前変更"     Click="FavRename_Click" />
+            <MenuItem Header="削除"         Click="FavDelete_Click" />
+            <Separator />
+            <MenuItem Header="上へ"         Click="FavMoveUp_Click" />
+            <MenuItem Header="下へ"         Click="FavMoveDown_Click" />
+        </ContextMenu>
+
+        <ContextMenu x:Key="FavoriteBoardContextMenu" x:Shared="False">
+            <MenuItem Header="削除" Click="FavDelete_Click" />
+            <Separator />
+            <MenuItem Header="上へ" Click="FavMoveUp_Click" />
+            <MenuItem Header="下へ" Click="FavMoveDown_Click" />
+        </ContextMenu>
+
+        <ContextMenu x:Key="FavoriteThreadContextMenu" x:Shared="False">
+            <MenuItem Header="削除" Click="FavDelete_Click" />
+            <Separator />
+            <MenuItem Header="上へ" Click="FavMoveUp_Click" />
+            <MenuItem Header="下へ" Click="FavMoveDown_Click" />
+        </ContextMenu>
+
+        <!-- 「お気に入り」仮想ルートフォルダの右クリックメニュー。FavoriteRef.Tag は null。 -->
+        <ContextMenu x:Key="FavoriteVirtualRootContextMenu" x:Shared="False">
+            <MenuItem Header="すべて開く"                Click="FavOpenAll_Click" />
+            <MenuItem Header="板として開く"              Click="FavOpenAsBoard_Click" />
+            <Separator />
+            <MenuItem Header="新規フォルダ (ルート直下)" Click="FavNewFolderRoot_Click" />
+            <MenuItem Header="お気に入りチェック"        Click="FavCheckUpdates_Click" />
+        </ContextMenu>
+
+        <!-- 旧 FavoriteRootContextMenu (= 空エリア用)。仮想ルートで覆われるため通常は発火しないが fallback として残す。 -->
+        <ContextMenu x:Key="FavoriteRootContextMenu" x:Shared="False">
+            <MenuItem Header="新規フォルダ (ルート直下)" Click="FavNewFolderRoot_Click" />
+            <Separator />
+            <MenuItem Header="お気に入りチェック"        Click="FavCheckUpdates_Click" />
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
+        <DockPanel>
+            <!-- ヘッダ (タイトル + 右端のリフレッシュボタン)。Phase 23: ヘッダ全体がドラッグハンドル。
+                 ヘッダ下端に 1px ライン (Border) を入れて本体との区切りを明示。 -->
+            <DockPanel x:Name="HeaderBar"
+                       DockPanel.Dock="Top"
+                       Background="{StaticResource PaneHeaderBackground}"
+                       LastChildFill="True">
+                <Border DockPanel.Dock="Bottom" Height="1" Background="{StaticResource PaneBorderBrush}" />
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource ToolbarIconButton}"
+                        Click="FavCheckUpdates_Click"
+                        ToolTip="お気に入りチェック (登録スレに新着があるか確認 → 更新スレを開く)">
+                    <Grid Width="16" Height="16">
+                        <!-- 270度の円弧 (時計回りに右→下→左→上) + 開始端の L 字テール (= 矢印の根本)。
+                             描画は 16x16 viewport いっぱいに。 -->
+                        <Path Stroke="#3070B0"
+                              StrokeThickness="1.6"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              Fill="Transparent"
+                              Data="M 13.5,8 A 5.5,5.5 0 1 1 8,2.5 L 11.5,2.5 M 8,2.5 L 8,6" />
+                    </Grid>
+                </Button>
+                <TextBlock Text="お気に入り" Padding="6,4" FontWeight="SemiBold" />
+            </DockPanel>
+            <wv2:WebView2 x:Name="FavoritesWebView"
+                          ctrl:WebView2Helper.Html="{Binding FavoritesHtml}"
+                          ctrl:WebView2Helper.PaneConfigJson="{Binding FavoritesConfigJson}"
+                          ctrl:WebView2Helper.PaneShortcutsJson="{Binding FavoritesShortcutsJson}"
+                          WebMessageReceived="FavoritesWebView_WebMessageReceived" />
+        </DockPanel>
+    </Border>
+</UserControl>

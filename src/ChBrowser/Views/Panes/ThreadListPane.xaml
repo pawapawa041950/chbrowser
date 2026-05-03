@@ -1,0 +1,132 @@
+<UserControl x:Class="ChBrowser.Views.Panes.ThreadListPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             xmlns:ctrl="clr-namespace:ChBrowser.Controls"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+             GotKeyboardFocus="Pane_GotKeyboardFocus"
+             PreviewMouseLeftButtonDown="Pane_PreviewMouseLeftButtonDown">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <!-- スレ一覧タブ右クリックメニュー (Phase 21)。
+             ThreadListTabItem_MouseRightButtonUp が PlacementTarget + DataContext を積んで popup する。 -->
+        <ContextMenu x:Key="ThreadListTabContextMenu" x:Shared="False"
+                     Opened="ThreadListTabContextMenu_Opened">
+            <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListTabFav_Click" />
+            <Separator />
+            <MenuItem Header="コピー">
+                <MenuItem               Header="タイトルコピー"        Click="ThreadListTabCopyTitle_Click" />
+                <MenuItem Tag="copyUrl" Header="URLコピー"             Click="ThreadListTabCopyUrl_Click" />
+                <MenuItem Tag="copyUrl" Header="タイトルとURLコピー"   Click="ThreadListTabCopyTitleAndUrl_Click" />
+            </MenuItem>
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ペインヘッダ + ツールバー (新規スレ立て等)。Phase 23: ヘッダ部分がドラッグハンドル。 -->
+        <Border x:Name="HeaderBar"
+                Grid.Row="0"
+                Background="{StaticResource PaneHeaderBackground}"
+                BorderBrush="{StaticResource PaneBorderBrush}"
+                BorderThickness="0,0,0,1">
+            <DockPanel Margin="4,2">
+                <TextBlock Text="スレッド一覧" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
+                <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効 -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="IsEnabled" Value="False" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                    <Setter Property="IsEnabled" Value="True" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Click="NewThreadButton_Click"
+                            ToolTip="この板に新規スレッドを立てる">
+                        <Grid Width="16" Height="16">
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Fill="Transparent"
+                                  Data="M 3,3 L 11,3 L 13,5 L 13,13 L 3,13 Z M 8,7 L 8,11 M 6,9 L 10,9" />
+                        </Grid>
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <TabControl Grid.Row="1"
+                    ItemsSource="{Binding ThreadListTabs}"
+                    SelectedItem="{Binding SelectedThreadListTab}"
+                    BorderThickness="0">
+            <TabControl.Template>
+                <ControlTemplate TargetType="TabControl">
+                    <TabPanel IsItemsHost="True"
+                              Background="{x:Static SystemColors.ControlBrush}" />
+                </ControlTemplate>
+            </TabControl.Template>
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <EventSetter Event="PreviewMouseDown"     Handler="ThreadListTabItem_PreviewMouseDown" />
+                    <EventSetter Event="MouseDoubleClick"     Handler="ThreadListTabItem_MouseDoubleClick" />
+                    <EventSetter Event="MouseRightButtonUp"   Handler="ThreadListTabItem_MouseRightButtonUp" />
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right"
+                                Content="×"
+                                Command="{Binding CloseCommand}"
+                                Width="16" Height="16"
+                                Margin="6,0,0,0"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                ToolTip="閉じる" />
+                        <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+                    </DockPanel>
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+        </TabControl>
+
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding ThreadListTabs}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Grid />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
+                    <wv2:WebView2 ctrl:WebView2Helper.Html="{Binding Html}"
+                                  ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
+                                  ctrl:WebView2Helper.FavoritedUpdate="{Binding FavoritedUpdate}"
+                                  ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  WebMessageReceived="ThreadListWebView_WebMessageReceived"
+                                  Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Grid>
+    </Border>
+</UserControl>

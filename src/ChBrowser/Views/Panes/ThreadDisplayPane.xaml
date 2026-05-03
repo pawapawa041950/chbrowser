@@ -1,0 +1,262 @@
+<UserControl x:Class="ChBrowser.Views.Panes.ThreadDisplayPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             xmlns:ctrl="clr-namespace:ChBrowser.Controls"
+             xmlns:conv="clr-namespace:ChBrowser.Converters"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+             GotKeyboardFocus="Pane_GotKeyboardFocus"
+             PreviewMouseLeftButtonDown="Pane_PreviewMouseLeftButtonDown">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <conv:LogMarkStateToBrushConverter x:Key="LogMarkBrush" />
+
+        <!-- スレ表示タブ右クリックメニュー (Phase 21)。 -->
+        <ContextMenu x:Key="ThreadTabContextMenu" x:Shared="False"
+                     Opened="ThreadTabContextMenu_Opened">
+            <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadTabFav_Click" />
+            <Separator />
+            <MenuItem Header="コピー">
+                <MenuItem Header="タイトルコピー"        Click="ThreadTabCopyTitle_Click" />
+                <MenuItem Header="URLコピー"             Click="ThreadTabCopyUrl_Click" />
+                <MenuItem Header="タイトルとURLコピー"   Click="ThreadTabCopyTitleAndUrl_Click" />
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="次スレ候補検索" Click="ThreadTabFindNext_Click" />
+            <MenuItem Header="ログ削除"       Click="ThreadTabDeleteLog_Click" />
+        </ContextMenu>
+    </UserControl.Resources>
+
+    <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ペインヘッダ + ツールバー (差分取得 / 書込 / モード切替 / 削除 / お気に入り)。Phase 23 で
+             旧 MainWindow の中央ツールバー (スレ一覧とスレ表示の間) を本ペインのトップに統合。 -->
+        <Border x:Name="HeaderBar"
+                Grid.Row="0"
+                Background="{StaticResource PaneHeaderBackground}"
+                BorderBrush="{StaticResource PaneBorderBrush}"
+                BorderThickness="0,0,0,1">
+            <DockPanel Margin="4,2">
+                <TextBlock Text="スレッド表示" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedThreadTab}" Value="{x:Null}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+
+                    <!-- 差分取得 (refresh アイコン: 270度の円弧 + 矢印の根本 L 字テール、16x16 viewport) -->
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Command="{Binding SelectedThreadTab.RefreshCommand}"
+                            ToolTip="このスレの差分を取得 (新着レスを末尾に追加)">
+                        <Grid Width="16" Height="16">
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Fill="Transparent"
+                                  Data="M 13.5,8 A 5.5,5.5 0 1 1 8,2.5 L 11.5,2.5 M 8,2.5 L 8,6" />
+                        </Grid>
+                    </Button>
+
+                    <!-- 書き込み -->
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Command="{Binding SelectedThreadTab.WriteCommand}"
+                            ToolTip="このスレに書き込む">
+                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeLineJoin="Round"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Fill="Transparent"
+                              Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
+                    </Button>
+
+                    <!-- 表示モード切替 -->
+                    <Button Command="{Binding SelectedThreadTab.CycleViewModeCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="ToolTip" Value="表示モードを切替" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Flat}">
+                                        <Setter Property="ToolTip" Value="現在: レス順表示 (クリック → ツリー (重複あり))" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Tree}">
+                                        <Setter Property="ToolTip" Value="現在: ツリー表示 (重複あり) (クリック → ツリー (重複なし))" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.DedupTree}">
+                                        <Setter Property="ToolTip" Value="現在: ツリー表示 (重複なし) (クリック → レス順表示)" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <Grid Width="16" Height="20">
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Data="M3,5 L13,5 M3,10 L13,10 M3,15 L13,15">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode, FallbackValue={x:Static vm:ThreadViewMode.Flat}}"
+                                                         Value="{x:Static vm:ThreadViewMode.Flat}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Data="M5,3 L5,17 M5,7 L11,7 M5,12 L11,12 M5,16 L11,16">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}"
+                                                         Value="{x:Static vm:ThreadViewMode.Tree}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Data="M3,3 L3,6 L6,6 L6,10 L9,10 L9,14 L12,14">
+                                <Path.Style>
+                                    <Style TargetType="Path">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}"
+                                                         Value="{x:Static vm:ThreadViewMode.DedupTree}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
+
+                    <!-- ログ削除 -->
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Command="{Binding SelectedThreadTab.DeleteCommand}"
+                            ToolTip="このスレのログを削除してタブを閉じる">
+                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.2"
+                              StrokeLineJoin="Round"
+                              Data="M6,3 L10,3 L10,5 L6,5 Z M3,5 L13,5 M5,5 L5,16 L11,16 L11,5 M7,8 L7,13 M9,8 L9,13" />
+                    </Button>
+
+                    <!-- お気に入りトグル (★) -->
+                    <Button Command="{Binding SelectedThreadTab.AddToFavoritesCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="ToolTip" Value="このスレをお気に入りに追加" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedThreadTab.IsFavorited}" Value="True">
+                                        <Setter Property="ToolTip"     Value="このスレをお気に入りから外す" />
+                                        <Setter Property="Background"  Value="#CCE5FF" />
+                                        <Setter Property="BorderBrush" Value="#88B0DD" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock Text="★" FontSize="14" Foreground="#e6b800"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <TabControl Grid.Row="1"
+                    ItemsSource="{Binding ThreadTabs}"
+                    SelectedItem="{Binding SelectedThreadTab}"
+                    BorderThickness="0">
+            <TabControl.Template>
+                <ControlTemplate TargetType="TabControl">
+                    <TabPanel IsItemsHost="True"
+                              Background="{x:Static SystemColors.ControlBrush}" />
+                </ControlTemplate>
+            </TabControl.Template>
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <EventSetter Event="PreviewMouseDown"     Handler="ThreadTabItem_PreviewMouseDown" />
+                    <EventSetter Event="MouseDoubleClick"     Handler="ThreadTabItem_MouseDoubleClick" />
+                    <EventSetter Event="MouseRightButtonUp"   Handler="ThreadTabItem_MouseRightButtonUp" />
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:ThreadTabViewModel}">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right"
+                                Content="×"
+                                Command="{Binding CloseCommand}"
+                                Width="16" Height="16"
+                                Margin="6,0,0,0"
+                                Padding="0"
+                                FontSize="10"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                ToolTip="閉じる" />
+                        <Grid DockPanel.Dock="Left" Width="14" Height="14" Margin="2,0,4,0" VerticalAlignment="Center">
+                            <TextBlock Text="★" FontSize="14" Foreground="#B3E6B800"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding IsFavorited, Converter={StaticResource BoolToVis}}" />
+                            <Ellipse Width="8" Height="8"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                                     Fill="{Binding State, Converter={StaticResource LogMarkBrush}}" />
+                        </Grid>
+                        <TextBlock Text="{Binding Header}"
+                                   VerticalAlignment="Center"
+                                   ToolTip="{Binding Header}" />
+                    </DockPanel>
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+        </TabControl>
+
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding ThreadTabs}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Grid />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:ThreadTabViewModel}">
+                    <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
+                                  ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
+                                  ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  WebMessageReceived="ThreadViewWebView_WebMessageReceived"
+                                  Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Grid>
+    </Border>
+</UserControl>

@@ -10,40 +10,45 @@ using ChBrowser.ViewModels;
 namespace ChBrowser;
 
 /// <summary>メインウィンドウのコードビハインド。
-/// 機能領域別に partial 分割している:
-/// <list type="bullet">
-/// <item><description><see cref="MainWindow"/> (本ファイル): ctor / DataContext 連携 / レイアウト保存復元 / メニュー → ウィンドウ起動</description></item>
-/// <item><description><c>MainWindow.AddressBar.cs</c>: アドレスバー (フォーカス・Enter・Esc・貼り付け移動)</description></item>
-/// <item><description><c>MainWindow.Tabs.cs</c>: タブ系 / ペインフォーカス系のイベント</description></item>
-/// <item><description><c>MainWindow.WebMessages.cs</c>: 4 ペインの WebView2 postMessage 受信ハンドラとコンテキストメニュー popup</description></item>
-/// </list></summary>
+/// Phase 23 で大幅再構成: ペイン本体は <c>Views/Panes/*.xaml</c> 4 つの UserControl に分離し、
+/// MainWindow は「ウィンドウ chrome (メニュー / アドレスバー / ステータスバー) + 4 ペインを binary tree
+/// レイアウトで配置するカスタム Panel」だけを持つ。
+///
+/// <para>partial 分割: 本ファイル (core + メニュー) / MainWindow.AddressBar.cs (アドレスバー)。
+/// 旧 MainWindow.Tabs.cs / MainWindow.WebMessages.cs はペインの UserControl に移動して撤去。</para></summary>
 public partial class MainWindow : Window
 {
-    /// <summary>App.OnStartup で設定される。imageMetaRequest メッセージの処理に使う。</summary>
+    /// <summary>App.OnStartup で設定される。imageMetaRequest の処理に使う (ThreadDisplayPane が参照)。</summary>
     public ImageMetaService? ImageMetaService { get; set; }
 
-    /// <summary>App.OnStartup で設定される。imageMetaRequest 時にローカルキャッシュ済みかを判定する。</summary>
+    /// <summary>App.OnStartup で設定される。imageMetaRequest 時にローカルキャッシュ済かを判定する。</summary>
     public ImageCacheService? ImageCacheService { get; set; }
 
     /// <summary>App.OnStartup で設定される。x.com / pixiv 等のページ URL を実体画像 URL に展開する。</summary>
     public UrlExpander? UrlExpander { get; set; }
 
-    /// <summary>App.OnStartup で設定される。ウィンドウ位置/サイズ/ペイン幅の永続化用。</summary>
+    /// <summary>App.OnStartup で設定される。ウィンドウ位置/サイズ/ペインレイアウトの永続化用。</summary>
     public LayoutStorage? LayoutStorage { get; set; }
 
     private MainViewModel? _vm;
 
-    /// <summary>設定ウィンドウのシングルトン参照。二重起動を防ぐ + 既に開いていれば前面化のみ。</summary>
+    /// <summary>設定ウィンドウのシングルトン参照。</summary>
     private Views.SettingsWindow? _settingsWindow;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContextChanged += MainWindow_DataContextChanged;
+        Loaded             += MainWindow_Loaded;
     }
 
-    /// <summary>DataContext として MainViewModel が設定されたら、AddressBarUrl の PropertyChanged を購読して
-    /// アドレスバー表示を同期する。<see cref="App"/> 側で DataContext が設定されるため、ここでは reactive に拾う。</summary>
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        // デフォルトレイアウトをロード時に流し込む (LayoutStorage から後で上書きする可能性あり)。
+        // OnSourceInitialized よりも後 (= visual tree 構築後) に呼ばないと AdornerLayer が無くて D&D 装飾が機能しない。
+        if (LayoutHost.Layout is null) LayoutHost.Layout = PaneLayoutOps.BuildDefault();
+    }
+
     private void MainWindow_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (_vm is not null) _vm.PropertyChanged -= Vm_PropertyChanged;
@@ -57,8 +62,6 @@ public partial class MainWindow : Window
     // ウィンドウのレイアウト保存・復元
     // -----------------------------------------------------------------
 
-    /// <summary>HWND が確保された直後 (まだ Show 前) にレイアウトを当てる。
-    /// XAML で指定したデフォルト値を上書きするので、Show 時点でユーザーの最後のサイズで開く。</summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -68,7 +71,6 @@ public partial class MainWindow : Window
         ApplyLayout(state);
     }
 
-    /// <summary>クローズ時に現在のレイアウトを書き出す。</summary>
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
@@ -79,48 +81,66 @@ public partial class MainWindow : Window
 
     private void ApplyLayout(LayoutState s)
     {
-        // 値の妥当性を軽くチェック (NaN / 負値 / 異常に大きい値はスルー)
         if (IsFinitePositive(s.WindowWidth)  && s.WindowWidth  >= MinWidth)  Width  = s.WindowWidth;
         if (IsFinitePositive(s.WindowHeight) && s.WindowHeight >= MinHeight) Height = s.WindowHeight;
         if (IsFinite(s.WindowLeft)) Left = s.WindowLeft;
         if (IsFinite(s.WindowTop))  Top  = s.WindowTop;
 
-        if (IsFinitePositive(s.BoardListWidth))      ColBoardList.Width   = new GridLength(s.BoardListWidth);
-        if (IsFinitePositive(s.ThreadListHeight))    RowThreadList.Height = new GridLength(s.ThreadListHeight);
-        if (IsFinitePositive(s.FavoritesPaneHeight)) RowFavorites.Height  = new GridLength(s.FavoritesPaneHeight);
+        // ペインレイアウト: 保存値が valid (= 4 leaf 揃ってる) ならそれを採用、
+        // null / 不正 ならデフォルトレイアウト。
+        var pane = s.PaneLayout;
+        LayoutHost.Layout = (pane is not null && pane.IsValidFullLayout())
+            ? pane
+            : PaneLayoutOps.BuildDefault();
 
-        // 最大化は最後に当てる (Width/Height/Left/Top は RestoreBounds になる)
         if (s.WindowMaximized) WindowState = WindowState.Maximized;
     }
 
     private LayoutState CaptureLayout()
     {
-        // 最大化中は RestoreBounds (= 通常時の bounds) を保存する。
         var bounds = WindowState == WindowState.Maximized
             ? RestoreBounds
             : new Rect(Left, Top, Width, Height);
 
         return new LayoutState(
-            WindowLeft:          bounds.Left,
-            WindowTop:           bounds.Top,
-            WindowWidth:         bounds.Width,
-            WindowHeight:        bounds.Height,
-            WindowMaximized:     WindowState == WindowState.Maximized,
-            BoardListWidth:      ColBoardList.ActualWidth,
-            ThreadListHeight:    RowThreadList.ActualHeight,
-            FavoritesPaneHeight: RowFavorites.ActualHeight);
+            WindowLeft:      bounds.Left,
+            WindowTop:       bounds.Top,
+            WindowWidth:     bounds.Width,
+            WindowHeight:    bounds.Height,
+            WindowMaximized: WindowState == WindowState.Maximized,
+            PaneLayout:      LayoutHost.Layout?.Clone());
     }
 
     private static bool IsFinite(double v)         => !double.IsNaN(v) && !double.IsInfinity(v);
     private static bool IsFinitePositive(double v) => IsFinite(v) && v > 0;
 
+    /// <summary>ペインレイアウトが変わった (drag / drop / splitter リサイズ) 通知。
+    /// 即時保存はしない (= ウィンドウ閉じる時に <see cref="OnClosing"/> でまとめて保存)。
+    /// 必要に応じてここで debounce 保存を入れることも可能。</summary>
+    private void LayoutHost_LayoutChanged(object? sender, EventArgs e)
+    {
+        // 現状は no-op。OnClosing で保存される。
+    }
+
     // -----------------------------------------------------------------
-    // メニュー → ウィンドウ起動 / 終了
+    // メニュー → ウィンドウ起動 / 終了 / 各種アクション
     // -----------------------------------------------------------------
 
     private void ExitMenu_Click(object sender, RoutedEventArgs e) => Close();
 
-    /// <summary>ツール → 設定... モードレス + シングルトンで開く (Phase 11)。</summary>
+    /// <summary>ファイルメニュー → 「お気に入りチェック」。<see cref="MainViewModel.CheckFavoritesAsync"/> を fire-and-forget。</summary>
+    private void MenuFavCheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        _ = (DataContext as MainViewModel)?.CheckFavoritesAsync();
+    }
+
+    /// <summary>表示メニュー → 「ペインレイアウトをリセット」。デフォルトレイアウトに戻す。</summary>
+    private void ResetLayoutMenu_Click(object sender, RoutedEventArgs e)
+    {
+        LayoutHost.Layout = PaneLayoutOps.BuildDefault();
+    }
+
+    /// <summary>ツール → 設定...</summary>
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_settingsWindow is { IsVisible: true })
@@ -135,13 +155,13 @@ public partial class MainWindow : Window
         _settingsWindow.Show();
     }
 
-    /// <summary>ツール → NG 設定... NG マネージャをモードレス + シングルトンで開く (Phase 13)。</summary>
+    /// <summary>ツール → NG 設定...</summary>
     private void OpenNgWindow_Click(object sender, RoutedEventArgs e)
     {
         if (Application.Current is App app) app.ShowNgWindow();
     }
 
-    /// <summary>ツール → ショートカット &amp; ジェスチャー... (Phase 15)。</summary>
+    /// <summary>ツール → ショートカット &amp; ジェスチャー...</summary>
     private void OpenShortcutsWindow_Click(object sender, RoutedEventArgs e)
     {
         if (Application.Current is App app) app.ShowShortcutsWindow();
