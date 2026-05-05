@@ -75,11 +75,7 @@ public sealed class DonguriService
 
     /// <summary>メール認証でログインを試みる。成功したら ログイン Cookie が <see cref="CookieJar"/> に格納される。
     /// 既存の MonazillaClient の <see cref="HttpClient"/> を経由する (= UA / Timeout は共通設定が乗る)。
-    /// メアドかパスワードが空ならただちに <see cref="DonguriLoginOutcome.InvalidCredentials"/> を返す。
-    ///
-    /// <para>診断のため request / response の中身を <see cref="Debug.WriteLine"/> に流す:
-    /// 送信 URL、ステータス、最終 URL (リダイレクト後)、全レスポンスヘッダ、ボディ先頭 1000 文字。
-    /// Visual Studio の Output (デバッグ) で確認できる。</para></summary>
+    /// メアドかパスワードが空ならただちに <see cref="DonguriLoginOutcome.InvalidCredentials"/> を返す。</summary>
     public async Task<DonguriLoginResult> LoginAsync(HttpClient http, string email, string password, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
@@ -89,12 +85,9 @@ public sealed class DonguriService
         {
             using var loginHttp = CreateNonRedirectingHttpClient(http);
             using var req       = BuildLoginRequest(email, password);
-
-            LogLoginRequest(req);
-            using var resp = await loginHttp.SendAsync(req, ct).ConfigureAwait(false);
+            using var resp      = await loginHttp.SendAsync(req, ct).ConfigureAwait(false);
             MergeFromResponse(resp);
             var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            LogLoginResponse(resp, body);
 
             var result = ClassifyLoginResponse(resp, body);
             if (result.Outcome == DonguriLoginOutcome.Success)
@@ -185,33 +178,6 @@ public sealed class DonguriService
         || body.Contains("失敗",           StringComparison.Ordinal)
         || body.Contains("invalid",        StringComparison.OrdinalIgnoreCase);
 
-    // ---- 診断用ログ ---------------------------------------------------------
-
-    private static void LogLoginRequest(HttpRequestMessage req)
-    {
-        Debug.WriteLine("==== [DonguriService] LOGIN ATTEMPT =====================");
-        Debug.WriteLine($"[DonguriService] POST {req.RequestUri}  (no-redirect)");
-        if (req.Headers.TryGetValues("Cookie", out var reqCookies))
-            Debug.WriteLine($"[DonguriService]   Request Cookie: {string.Join("; ", reqCookies)}");
-        else
-            Debug.WriteLine("[DonguriService]   Request Cookie: (none)");
-    }
-
-    private static void LogLoginResponse(HttpResponseMessage resp, string body)
-    {
-        Debug.WriteLine($"[DonguriService] <- HTTP {(int)resp.StatusCode} {resp.StatusCode}");
-        Debug.WriteLine($"[DonguriService]   Final URL: {resp.RequestMessage?.RequestUri}");
-        Debug.WriteLine("[DonguriService]   Response Headers:");
-        foreach (var h in resp.Headers)
-            Debug.WriteLine($"[DonguriService]     {h.Key}: {string.Join(" | ", h.Value)}");
-        Debug.WriteLine("[DonguriService]   Response Content Headers:");
-        foreach (var h in resp.Content.Headers)
-            Debug.WriteLine($"[DonguriService]     {h.Key}: {string.Join(" | ", h.Value)}");
-        var preview = body.Length > 1000 ? body[..1000] + " …(truncated " + body.Length + " chars)" : body;
-        Debug.WriteLine("[DonguriService]   Body (first 1000 chars):");
-        Debug.WriteLine(preview.Replace("\r", "").Replace("\n", "\\n"));
-        Debug.WriteLine("=========================================================");
-    }
 
     public CookieJar Cookies => _jar;
 

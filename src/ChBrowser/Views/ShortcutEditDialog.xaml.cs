@@ -3,10 +3,11 @@ using System.Windows.Input;
 
 namespace ChBrowser.Views;
 
-/// <summary>ショートカット編集ダイアログ (Phase 15、現状はスタブ)。
+/// <summary>ショートカット編集ダイアログ (Phase 15)。
 /// キャプチャ領域にフォーカスを当てて新しいキーコンビネーションを押すと <see cref="LiveCaptureText"/> に表示される。
-/// OK で <see cref="DialogResult"/>=true、<see cref="NewBinding"/> プロパティに記録された文字列が入る (= 呼び出し元で代入する想定)。
-/// 永続化と実機能への適用は後続フェーズ。</summary>
+/// OK で <see cref="DialogResult"/>=true、<see cref="NewBinding"/> プロパティに記録された文字列が入る。
+/// 呼出元 (ShortcutsWindow.EditShortcut_Click) が衝突検査を通したうえで <see cref="ShortcutItem"/> に代入し、
+/// 「保存」で <c>shortcuts.json</c> へ永続化される。</summary>
 public partial class ShortcutEditDialog : Window
 {
     public string ActionName  { get; }
@@ -27,7 +28,7 @@ public partial class ShortcutEditDialog : Window
     }
 
     /// <summary>キーキャプチャ — 修飾キー単独 (Ctrl 等) を除いた最初の有効キーで割り当て確定。
-    /// スタブなのでこのダイアログ内では即時 NewBinding に反映するだけ、永続化はしない。</summary>
+    /// 永続化は呼出元の ShortcutsWindow が ShortcutItem に書き戻して「保存」で行う。</summary>
     private void CaptureArea_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         var key = e.Key == Key.System ? e.SystemKey : e.Key;

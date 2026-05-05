@@ -111,10 +111,13 @@
             var snapshot = ths.map(function(t) {
                 return { th: t, border: t.getBoundingClientRect().width, pad: paddingX(t) };
             });
+            // border-box 値 + delta を content-box の style.width に書き戻すヘルパ。
+            // padding を引いた値で設定しないと開始時点で padding 分だけ境界が飛ぶ。
+            function applyWidth(snap, deltaBorder) {
+                snap.th.style.width = Math.max(0, snap.border + deltaBorder - snap.pad) + 'px';
+            }
             // 全列を現在のレンダー幅で固定 (これで table の自動スケールが止まる)
-            snapshot.forEach(function(s) {
-                s.th.style.width = Math.max(0, s.border - s.pad) + 'px';
-            });
+            snapshot.forEach(function(s) { applyWidth(s, 0); });
 
             var aSnap = snapshot[idx];      // 左側 = ドラッグ中の th
             var bSnap = snapshot[idx + 1];  // 右側 = 隣の th
@@ -125,8 +128,8 @@
                 // 両列とも MIN を割らないようにクランプ
                 if (aSnap.border + dx < MIN_COL_WIDTH) dx = MIN_COL_WIDTH - aSnap.border;
                 if (bSnap.border - dx < MIN_COL_WIDTH) dx = bSnap.border - MIN_COL_WIDTH;
-                aSnap.th.style.width = Math.max(0, aSnap.border + dx - aSnap.pad) + 'px';
-                bSnap.th.style.width = Math.max(0, bSnap.border - dx - bSnap.pad) + 'px';
+                applyWidth(aSnap,  dx);
+                applyWidth(bSnap, -dx);
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);

@@ -47,57 +47,58 @@ public partial class ShortcutsWindow : Window
 
     // -------------------------------------------------------------------------
     // 編集ボタン → 各 EditDialog → 衝突検査 → 反映 / 拒否 メッセージ
+    //
+    // 3 種 (キー / マウス / ジェスチャー) で完全に同じ流れなので、共通ヘルパ <see cref="EditBindingCell"/>
+    // にまとめて、ダイアログ生成と「現在値 / 反映先」の getter/setter だけ呼出側が渡す形にする。
     // -------------------------------------------------------------------------
 
     /// <summary>ショートカット (キーボード) — アプリ全体で 1 つのアクションにしか割り当てられない。</summary>
     private void EditShortcut_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { DataContext: ShortcutItem item }) return;
-        var dlg = new ShortcutEditDialog(item.Action, item.Shortcut) { Owner = this };
-        if (dlg.ShowDialog() != true) return;
-        if (dlg.NewBinding == item.Shortcut) return;
-
-        if (FindBindingConflict(item, dlg.NewBinding, BindingKind.Shortcut) is { } conflict)
-        {
-            ShowConflictMessage(conflict, BindingKind.Shortcut);
-            return;
-        }
-        item.Shortcut = dlg.NewBinding;
-        _vm.MarkDirty();
-    }
+        => EditBindingCell(sender, BindingKind.Shortcut,
+                           item => item.Shortcut,
+                           (item, v) => item.Shortcut = v,
+                           item => { var d = new ShortcutEditDialog(item.Action, item.Shortcut); return (d, () => d.NewBinding); });
 
     /// <summary>マウス操作 — 同じカテゴリ内で重複不可、加えて「全体」とペインカテゴリ間でも重複不可。
     /// (= 別ペイン同士で同じ操作を使うのは OK = スコープが分かれているため衝突しない)</summary>
     private void EditMouse_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { DataContext: ShortcutItem item }) return;
-        var dlg = new MouseEditDialog(item.Action, item.Mouse) { Owner = this };
-        if (dlg.ShowDialog() != true) return;
-        if (dlg.NewBinding == item.Mouse) return;
-
-        if (FindBindingConflict(item, dlg.NewBinding, BindingKind.Mouse) is { } conflict)
-        {
-            ShowConflictMessage(conflict, BindingKind.Mouse);
-            return;
-        }
-        item.Mouse = dlg.NewBinding;
-        _vm.MarkDirty();
-    }
+        => EditBindingCell(sender, BindingKind.Mouse,
+                           item => item.Mouse,
+                           (item, v) => item.Mouse = v,
+                           item => { var d = new MouseEditDialog(item.Action, item.Mouse);    return (d, () => d.NewBinding); });
 
     /// <summary>マウスジェスチャー — マウス操作と同じ衝突ルール。</summary>
     private void EditGesture_Click(object sender, RoutedEventArgs e)
+        => EditBindingCell(sender, BindingKind.Gesture,
+                           item => item.Gesture,
+                           (item, v) => item.Gesture = v,
+                           item => { var d = new GestureEditDialog(item.Action, item.Gesture); return (d, () => d.NewBinding); });
+
+    /// <summary>3 種共通のセル編集フロー: sender→item キャスト → ダイアログ表示 → 衝突検査 → 反映。
+    /// <paramref name="dialogFactory"/> はダイアログ本体と「OK 後の新値を取り出す Func」をペアで返す
+    /// (各 EditDialog の <c>NewBinding</c> プロパティ型は共通だが基底型 / interface を切るほどではないため
+    /// クロージャで吸収)。</summary>
+    private void EditBindingCell(
+        object sender,
+        BindingKind kind,
+        System.Func<ShortcutItem, string>                            getCurrent,
+        System.Action<ShortcutItem, string>                          setNew,
+        System.Func<ShortcutItem, (Window dialog, System.Func<string> getNew)> dialogFactory)
     {
         if (sender is not Button { DataContext: ShortcutItem item }) return;
-        var dlg = new GestureEditDialog(item.Action, item.Gesture) { Owner = this };
+        var (dlg, getNew) = dialogFactory(item);
+        dlg.Owner = this;
         if (dlg.ShowDialog() != true) return;
-        if (dlg.NewBinding == item.Gesture) return;
 
-        if (FindBindingConflict(item, dlg.NewBinding, BindingKind.Gesture) is { } conflict)
+        var newBinding = getNew();
+        if (newBinding == getCurrent(item)) return;
+
+        if (FindBindingConflict(item, newBinding, kind) is { } conflict)
         {
-            ShowConflictMessage(conflict, BindingKind.Gesture);
+            ShowConflictMessage(conflict, kind);
             return;
         }
-        item.Gesture = dlg.NewBinding;
+        setNew(item, newBinding);
         _vm.MarkDirty();
     }
 

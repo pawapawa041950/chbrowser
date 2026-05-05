@@ -40,9 +40,8 @@ public static class ShortcutRegistry
         new ShortcutAction("thread_list.scroll_bottom",          "スレ一覧表示領域", "最下部へスクロール",         "", "",                          "→↑"),
 
         // スレ一覧のタブ領域 (= 板タブのストリップ)。
-        // close_current / refresh_in_tab の DefaultMouse は旧 AppConfig の click action 既定値を引き継ぐ
-        // (中クリック=close / ダブルクリック=refresh)。close_others / close_left / close_right は
-        // 旧 click action 設定の "closeOthers" / "closeLeft" / "closeRight" を移設したもの。
+        // タブストリップ系の DefaultMouse は旧「タブ動作」設定からの移設。中クリック=閉じる、ダブルクリック=更新、
+        // ホイール上下=タブ送り、close_others / close_left / close_right は元 click action 識別子から引き継ぎ。
         new ShortcutAction("thread_list.close_current",  "スレ一覧のタブ領域", "現在のスレ一覧タブを閉じる",     "", "中クリック",     ""),
         new ShortcutAction("thread_list.close_others",   "スレ一覧のタブ領域", "他のスレ一覧タブをすべて閉じる", "", "",               ""),
         new ShortcutAction("thread_list.close_left",     "スレ一覧のタブ領域", "左のスレ一覧タブをすべて閉じる", "", "",               ""),
@@ -61,10 +60,8 @@ public static class ShortcutRegistry
         new ShortcutAction("thread.next_tab_in_body",         "スレッド表示領域", "次のタブ",                   "", "右クリック+ホイールダウン", ""),
         new ShortcutAction("thread.prev_tab_in_body",         "スレッド表示領域", "前のタブ",                   "", "右クリック+ホイールアップ", ""),
 
-        // スレッドタブ表示領域 (= スレタブのストリップ)。
-        // close_current / refresh_in_tab の DefaultMouse は旧 AppConfig の click action 既定値を引き継ぐ。
-        // add_favorite / delete_log_in_tab / close_others / close_left / close_right は
-        // 旧 click action 設定の各 action 識別子を移設したもの。
+        // スレッドタブ表示領域 (= スレタブのストリップ)。スレ一覧のタブ領域と同じ移設方針 +
+        // スレタブ固有の add_favorite / delete_log_in_tab。
         new ShortcutAction("thread.close_current",       "スレッドタブ表示領域", "現在のタブを閉じる",     "", "中クリック",     ""),
         new ShortcutAction("thread.add_favorite",        "スレッドタブ表示領域", "お気に入りに追加",       "", "",               ""),
         new ShortcutAction("thread.delete_log_in_tab",   "スレッドタブ表示領域", "ログを削除",             "", "",               ""),

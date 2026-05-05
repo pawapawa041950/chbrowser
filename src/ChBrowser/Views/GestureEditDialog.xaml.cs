@@ -7,10 +7,10 @@ using System.Windows.Shapes;
 
 namespace ChBrowser.Views;
 
-/// <summary>マウスジェスチャー編集ダイアログ (Phase 15、現状はスタブ)。
-/// 描画キャンバス上で右ドラッグするとパスを描画し、簡易な方向認識 (↑↓←→) を表示する。
+/// <summary>マウスジェスチャー編集ダイアログ (Phase 15)。
+/// 描画キャンバス上で右ドラッグするとパスを描画し、方向認識 (↑↓←→) を表示する。
 /// OK で <see cref="DialogResult"/>=true、<see cref="NewBinding"/> に方向列が入る。
-/// 永続化と実機能への適用は後続フェーズ。</summary>
+/// 呼出元 (ShortcutsWindow.EditGesture_Click) が衝突検査を通したうえで反映し「保存」で永続化される。</summary>
 public partial class GestureEditDialog : Window
 {
     public string ActionName { get; }

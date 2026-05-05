@@ -221,7 +221,6 @@ public partial class App : Application
                 return;
             }
             var result = await donguri.LoginAsync(http.Http, email, password).ConfigureAwait(true);
-            Debug.WriteLine($"[App] donguri login outcome={result.Outcome} message='{result.Message}'");
             SetLoginStatus(vm, DonguriLoginStatusPrefix + FormatLoginOutcome(result));
         }
         catch (Exception ex)

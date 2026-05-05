@@ -28,8 +28,8 @@ public sealed record OwnPostChange(int Number, bool IsOwn);
 
 /// <summary>
 /// 1 スレッド = 1 タブ。WebView2 へは Posts (Post 列) を Bind し、HTML 構築は JS 側で行う。
-/// 表示モード (Flat/Tree/DedupTree) は今後 JS 側で実装予定。現状は Flat のみ動作、
-/// CycleViewModeCommand は state を切り替えるが描画は変わらない (スタブ)。
+/// 表示モード (Flat / Tree / DedupTree) はすべて JS 側で実装済 (thread.js)、
+/// <see cref="CycleViewModeCommand"/> でトグル → setViewMode メッセージで JS が再描画する。
 /// </summary>
 public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDisplayBinding
 {
