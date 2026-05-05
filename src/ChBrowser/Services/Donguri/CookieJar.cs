@@ -47,8 +47,9 @@ public sealed class CookieJar
         string         Value);
 
     /// <summary>指定 URL 向けに Cookie ヘッダ用の "name=value; name=value" 文字列を組み立てる。
-    /// 期限切れは除外。</summary>
-    public string BuildCookieHeader(Uri uri)
+    /// 期限切れは除外。<paramref name="namePredicate"/> が指定されていれば、それで真になる name の Cookie だけ採用する
+    /// (= 認証モードによる Cookie 取捨選択用)。</summary>
+    public string BuildCookieHeader(Uri uri, Func<string, bool>? namePredicate = null)
     {
         var now   = DateTimeOffset.UtcNow;
         var parts = new List<string>();
@@ -60,10 +61,18 @@ public sealed class CookieJar
                 if (e.Secure && uri.Scheme != Uri.UriSchemeHttps)      continue;
                 if (!HostMatches(uri.Host, e.Domain, e.IncludeSubdomains)) continue;
                 if (!uri.AbsolutePath.StartsWith(e.Path, StringComparison.Ordinal)) continue;
+                if (namePredicate is not null && !namePredicate(e.Name)) continue;
                 parts.Add($"{e.Name}={e.Value}");
             }
         }
         return string.Join("; ", parts);
+    }
+
+    /// <summary>ストア内の全 Cookie を削除する。設定 → 通信 → 「Cookie をすべて削除」から呼ばれる。
+    /// 永続化 (cookies.txt 書き換え) はこのメソッドではしない — 呼び出し側で <see cref="SaveAsync"/> を呼ぶ。</summary>
+    public void Clear()
+    {
+        lock (_lock) _store.Clear();
     }
 
     /// <summary><see cref="BuildCookieHeader"/> の結果を request の Cookie ヘッダにセット。

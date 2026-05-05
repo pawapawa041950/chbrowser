@@ -57,6 +57,105 @@
         });
     });
 
+    // 列リサイザ — 各 <th> の右端に <span class="col-resizer"> を差し込み、
+    // ドラッグで列幅を変更する。table-layout: fixed なので th.style.width が
+    // そのままその列の確定幅になる。最右の列はリサイザ無し (右に列が無いので)。
+    // 幅は localStorage("chbrowser.threadlist.colwidths") に data-sort キーで保存。
+    var WIDTH_KEY = 'chbrowser.threadlist.colwidths';
+    var MIN_COL_WIDTH = 24;
+
+    function loadSavedWidths() {
+        try {
+            var raw = localStorage.getItem(WIDTH_KEY);
+            if (!raw) return {};
+            var obj = JSON.parse(raw);
+            return (obj && typeof obj === 'object') ? obj : {};
+        } catch (_) { return {}; }
+    }
+    function saveWidths(map) {
+        try { localStorage.setItem(WIDTH_KEY, JSON.stringify(map)); } catch (_) {}
+    }
+
+    var savedWidths = loadSavedWidths();
+    var ths = Array.prototype.slice.call(document.querySelectorAll('thead th'));
+
+    function paddingX(el) {
+        var cs = window.getComputedStyle(el);
+        return (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    }
+
+    ths.forEach(function(th, idx) {
+        var key = th.dataset.sort;
+        if (key && savedWidths[key]) {
+            th.style.width = savedWidths[key] + 'px';
+        }
+        if (idx === ths.length - 1) return; // 最右列にはハンドル不要
+
+        var grip = document.createElement('span');
+        grip.className = 'col-resizer';
+        th.appendChild(grip);
+
+        grip.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            e.stopPropagation();   // ソート発火防止
+            //
+            // table-layout: fixed; width: 100% では、1 列の幅を変えると table 全体の
+            // 比例スケールが走り、他列の境界も動く。そこで全列を現在のレンダー幅で
+            // 固定したうえで、ドラッグ境界の左右 2 列だけを ±Δ で動かす方式にする。
+            //
+            // <th> は box-sizing: content-box (table cell の既定) で padding: 4px 8px。
+            // getBoundingClientRect は border-box を返すので、style.width に渡す値は
+            // padding を引いた content-box 値にしないと開始時点で padding ぶんずれる。
+            //
+            var startX = e.clientX;
+            var snapshot = ths.map(function(t) {
+                return { th: t, border: t.getBoundingClientRect().width, pad: paddingX(t) };
+            });
+            // 全列を現在のレンダー幅で固定 (これで table の自動スケールが止まる)
+            snapshot.forEach(function(s) {
+                s.th.style.width = Math.max(0, s.border - s.pad) + 'px';
+            });
+
+            var aSnap = snapshot[idx];      // 左側 = ドラッグ中の th
+            var bSnap = snapshot[idx + 1];  // 右側 = 隣の th
+            grip.classList.add('dragging');
+
+            function onMove(ev) {
+                var dx = ev.clientX - startX;
+                // 両列とも MIN を割らないようにクランプ
+                if (aSnap.border + dx < MIN_COL_WIDTH) dx = MIN_COL_WIDTH - aSnap.border;
+                if (bSnap.border - dx < MIN_COL_WIDTH) dx = bSnap.border - MIN_COL_WIDTH;
+                aSnap.th.style.width = Math.max(0, aSnap.border + dx - aSnap.pad) + 'px';
+                bSnap.th.style.width = Math.max(0, bSnap.border - dx - bSnap.pad) + 'px';
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+                grip.classList.remove('dragging');
+                // ドラッグ中はスケール抑止のため全列を inline width で固定したが、
+                // 操作した 2 列以外はクリアして CSS 既定 / title 吸収モードに戻す
+                // (window リサイズ時に title が伸縮するように)。
+                snapshot.forEach(function(s) {
+                    if (s !== aSnap && s !== bSnap) s.th.style.width = '';
+                });
+                // 保存対象はドラッグした 2 列のみ。
+                var aKey = aSnap.th.dataset.sort;
+                var bKey = bSnap.th.dataset.sort;
+                var aW   = parseInt(aSnap.th.style.width, 10);
+                var bW   = parseInt(bSnap.th.style.width, 10);
+                if (aKey && !isNaN(aW)) savedWidths[aKey] = aW;
+                if (bKey && !isNaN(bW)) savedWidths[bKey] = bW;
+                saveWidths(savedWidths);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+        });
+
+        // クリックがソート扱いされないように — mousedown で stopPropagation 済みだが
+        // click も念のため抑止 (Chromium 系は mousedown で防いでも click は飛ぶ場合がある)。
+        grip.addEventListener('click', function(e) { e.stopPropagation(); });
+    });
+
     function openTr(tr) {
         if (!window.chrome || !window.chrome.webview) return;
         // host/dir/key/title を全部送る (C# 側で Board と ThreadInfo を再構築するため、

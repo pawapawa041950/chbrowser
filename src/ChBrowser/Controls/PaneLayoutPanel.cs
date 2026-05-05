@@ -78,42 +78,49 @@ public class PaneLayoutPanel : Panel
 
     protected override Size MeasureOverride(Size availableSize)
     {
-        // 子の Measure は実際のサイズを我々が決めるので「大きめに」許容する。
-        var measure = new Size(
-            double.IsInfinity(availableSize.Width)  ? 0 : availableSize.Width,
-            double.IsInfinity(availableSize.Height) ? 0 : availableSize.Height);
+        // 各ペインに「そのペインが arrange 時に占有する幅」を計測時にも渡す。
+        // ウィンドウ全幅をそのまま渡すと、ペイン内部で WrapPanel 系の wrap 判定が
+        // 「まだ余裕ある」と誤認して折り返しが発生しなくなるため。
+        var size = ToFinite(availableSize);
+        RecomputeLayoutRects(size);
         foreach (UIElement child in InternalChildren)
         {
-            child.Measure(measure);
+            var rect = TryGetLeafRect(child);
+            child.Measure(rect.HasValue ? new Size(rect.Value.Width, rect.Value.Height) : new Size(0, 0));
         }
-        return measure;
+        return size;
     }
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        _leafRects.Clear();
-        _splitterRects.Clear();
-
-        var bounds = new Rect(0, 0, finalSize.Width, finalSize.Height);
-        if (_layout is not null)
-            ComputeLayout(_layout, bounds);
-
+        RecomputeLayoutRects(finalSize);
         foreach (UIElement child in InternalChildren)
         {
-            var paneId = GetPaneId(child);
-            if (paneId is PaneId pid && _leafRects.TryGetValue(pid, out var rect))
-            {
-                child.Arrange(rect);
-            }
-            else
-            {
-                // PaneId が割当てられていない / レイアウトに含まれない子は隠す
-                child.Arrange(new Rect(0, 0, 0, 0));
-            }
+            var rect = TryGetLeafRect(child);
+            // PaneId 未割当 / レイアウト不在の子は (0,0,0,0) に潰して非表示扱い。
+            child.Arrange(rect ?? new Rect(0, 0, 0, 0));
         }
-
         return finalSize;
     }
+
+    /// <summary>サイズ (Measure / Arrange のいずれか) を受け取って _leafRects と _splitterRects を再計算する。
+    /// 共通ロジック (旧実装で 2 メソッドに重複していた)。</summary>
+    private void RecomputeLayoutRects(Size size)
+    {
+        _leafRects.Clear();
+        _splitterRects.Clear();
+        if (_layout is not null)
+            ComputeLayout(_layout, new Rect(0, 0, size.Width, size.Height));
+    }
+
+    /// <summary>子の PaneId に対応する矩形を返す (= 未割当なら null)。</summary>
+    private Rect? TryGetLeafRect(UIElement child)
+        => GetPaneId(child) is PaneId pid && _leafRects.TryGetValue(pid, out var rect) ? rect : null;
+
+    /// <summary>infinity 成分を 0 にした Size を返す (= MeasureOverride で渡される無限大対策)。</summary>
+    private static Size ToFinite(Size s) => new(
+        double.IsInfinity(s.Width)  ? 0 : s.Width,
+        double.IsInfinity(s.Height) ? 0 : s.Height);
 
     /// <summary>レイアウトツリーを再帰的に走査して各 leaf の配置 Rect を <see cref="_leafRects"/> に登録、
     /// split 境界に対応する hit-test 用 Rect を <see cref="_splitterRects"/> に登録する。</summary>

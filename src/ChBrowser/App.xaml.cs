@@ -22,11 +22,18 @@ public partial class App : Application
     private MonazillaClient?   _monazilla;
     private ImageMetaService?  _imageMeta;
     private ImageCacheService? _imageCache;
+    private AiImageMetadataService? _aiImageMeta;
     private UrlExpander?       _urlExpander;
     private ConfigStorage?     _configStorage;
     private MainViewModel?     _mainVm;
+    private DonguriService?    _donguriService;
+    private KakikomiLog?       _kakikomiLog;
     private DataPaths?         _paths;
     private ThemeService?      _themeService;
+    /// <summary>現在開いている設定画面の VM (= 開いていれば non-null)。
+    /// ログイン試行時に <see cref="MainViewModel.DonguriLoginStatus"/> と同時にこちらの
+    /// <see cref="SettingsViewModel.DonguriLoginStatus"/> も更新するために使う。</summary>
+    private SettingsViewModel? _currentSettingsVm;
     private ChBrowser.Services.Ng.NgService? _ngService;
     private ChBrowser.Services.Storage.ShortcutStorage? _shortcutStorage;
     private ChBrowser.Services.Shortcuts.ShortcutManager? _shortcutManager;
@@ -57,7 +64,8 @@ public partial class App : Application
             // 保存処理用に ImageSaver (= ImageCacheService + HttpClient のラッパ) を注入。
             // _imageCache / _monazilla は OnStartup で確実にセットされている。
             var saver = new ImageSaver(_imageCache!, _monazilla!.Http);
-            _imageViewerWindow = new ImageViewerWindow(_imageViewerVm, saver, _imageCache!)
+            _imageViewerWindow = new ImageViewerWindow(_imageViewerVm, saver, _imageCache!, _aiImageMeta!,
+                                                       detailsPaneDefaultOpen: _currentConfig.ViewerDetailsPaneDefaultOpen)
             {
                 Owner = MainWindow,
             };
@@ -111,6 +119,7 @@ public partial class App : Application
         _imageMeta       = new ImageMetaService();
         _imageCache      = new ImageCacheService(paths);
         _imageCache.MaxBytes = (long)Math.Max(64, _currentConfig.CacheMaxMb) * 1024 * 1024;
+        _aiImageMeta     = new AiImageMetadataService(_imageCache);
         _urlExpander     = new UrlExpander();
 
         // テーマ (post.html / post.css) サービスを登録。
@@ -134,7 +143,13 @@ public partial class App : Application
         // どんぐり / 投稿 (Phase 8)
         var cookieJar      = new CookieJar(paths.DonguriCookiesPath);
         var donguriService = new DonguriService(cookieJar, paths);
-        var postClient     = new PostClient(_monazilla, donguriService);
+        _donguriService    = donguriService;
+        // 書き込みログ (kakikomi.txt) — 投稿成功時のみ append。常時占有しないので
+        // ユーザがメモ帳等で同時に編集 / 保存しても問題ない。
+        // ON/OFF は AppConfig.EnableKakikomiLog で切替可 (即時反映)。
+        var kakikomiLog    = new KakikomiLog(paths) { IsEnabled = _currentConfig.EnableKakikomiLog };
+        _kakikomiLog       = kakikomiLog;
+        var postClient     = new PostClient(_monazilla, donguriService, kakikomiLog);
 
         // NG (Phase 13)
         var ngStorage = new NgStorage(paths);
@@ -147,11 +162,12 @@ public partial class App : Application
 
         var window = new MainWindow
         {
-            DataContext       = mainVm,
-            ImageMetaService  = _imageMeta,
-            ImageCacheService = _imageCache,
-            UrlExpander       = _urlExpander,
-            LayoutStorage     = layoutStorage,
+            DataContext              = mainVm,
+            ImageMetaService         = _imageMeta,
+            ImageCacheService        = _imageCache,
+            AiImageMetadataService   = _aiImageMeta,
+            UrlExpander              = _urlExpander,
+            LayoutStorage            = layoutStorage,
         };
         MainWindow = window;
 
@@ -175,6 +191,68 @@ public partial class App : Application
 
         // 既存キャッシュがあれば即読み込み (await しない)
         _ = mainVm.InitializeAsync();
+
+        // どんぐりメール認証: 設定にメアドがあれば起動時にログインを試行 (await しない)。
+        // 進行状況は MainViewModel.DonguriLoginStatus に流してステータスバーに常時表示する。
+        _ = TryDonguriLoginAsync(donguriService, _currentConfig, mainVm);
+    }
+
+    /// <summary>ステータスバー表示用の先頭マーク。設定画面側では除いて表示する。</summary>
+    private const string DonguriLoginStatusPrefix = "🌰🔑 ";
+
+    /// <summary>どんぐりメール認証ログインを試行し、結果をステータスバー / 設定画面の両方に反映する。
+    /// 起動時 + 設定変更時 + 設定画面のログインボタン押下時に呼ばれる。</summary>
+    private static async Task TryDonguriLoginAsync(DonguriService donguri, AppConfig config, MainViewModel vm)
+    {
+        var email    = (config.DonguriEmail ?? "").Trim();
+        var password = config.DonguriPassword ?? "";
+        if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
+        {
+            SetLoginStatus(vm, "");
+            return;
+        }
+
+        SetLoginStatus(vm, DonguriLoginStatusPrefix + "ログイン試行中…");
+        try
+        {
+            if (Current is not App app || app._monazilla is not { } http)
+            {
+                SetLoginStatus(vm, DonguriLoginStatusPrefix + "(HttpClient 未準備)");
+                return;
+            }
+            var result = await donguri.LoginAsync(http.Http, email, password).ConfigureAwait(true);
+            Debug.WriteLine($"[App] donguri login outcome={result.Outcome} message='{result.Message}'");
+            SetLoginStatus(vm, DonguriLoginStatusPrefix + FormatLoginOutcome(result));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] donguri login failed: {ex.Message}");
+            SetLoginStatus(vm, DonguriLoginStatusPrefix + $"ログイン失敗 ({ex.Message})");
+        }
+    }
+
+    /// <summary>Outcome → ユーザに見せる短文。失敗系は <see cref="DonguriLoginResult.Message"/> を末尾に付けて
+    /// 「URL の問題か認証情報の問題か」を切り分け可能にする。</summary>
+    private static string FormatLoginOutcome(DonguriLoginResult r) => r.Outcome switch
+    {
+        DonguriLoginOutcome.Success            => "ログイン済",
+        DonguriLoginOutcome.InvalidCredentials => $"認証失敗 ({r.Message})",
+        DonguriLoginOutcome.NetworkError       => $"通信失敗 ({r.Message})",
+        _                                      => $"失敗 ({r.Message})",
+    };
+
+    /// <summary>MainViewModel と (もし開いていれば) SettingsViewModel の DonguriLoginStatus を同時更新する。
+    /// ステータスバーは 🌰🔑 マーク付き、設定画面は文字だけ表示。</summary>
+    private static void SetLoginStatus(MainViewModel mainVm, string text)
+    {
+        mainVm.DonguriLoginStatus = text;
+        if (Current is App app && app._currentSettingsVm is { } svm)
+        {
+            var stripped = text.StartsWith(DonguriLoginStatusPrefix, StringComparison.Ordinal)
+                ? text[DonguriLoginStatusPrefix.Length..]
+                : text;
+            svm.DonguriLoginStatus = string.IsNullOrEmpty(stripped) ? "未試行" : stripped;
+        }
     }
 
     /// <summary>各 action Id に対応するハンドラを組み立てる (Phase 15)。
@@ -190,11 +268,17 @@ public partial class App : Application
             ["main.refresh_board_list"]  = _ => { if (vm.RefreshBoardListCommand.CanExecute(null)) vm.RefreshBoardListCommand.Execute(null); },
             ["main.exit"]                = _ => Current.Shutdown(),
 
+            // ----- 全体 (画面のどこから入力しても発火するカテゴリ) -----
+            ["favorites.patrol"]         = _ => _ = vm.CheckFavoritesAsync(),
+
             // ----- スレ一覧 -----
             ["thread_list.refresh"]                 = RefreshThreadList,
             ["thread_list.refresh_in_tab"]          = RefreshThreadList,
             ["thread_list.close_current"]           = CloseThreadListTab,
             ["thread_list.close_current_in_body"]   = CloseThreadListTab,
+            ["thread_list.close_others"]            = src => { if (ResolveTargetThreadListTab(src, vm) is { } t) vm.ExecuteThreadListTabAction(t, "closeOthers"); },
+            ["thread_list.close_left"]              = src => { if (ResolveTargetThreadListTab(src, vm) is { } t) vm.ExecuteThreadListTabAction(t, "closeLeft");   },
+            ["thread_list.close_right"]             = src => { if (ResolveTargetThreadListTab(src, vm) is { } t) vm.ExecuteThreadListTabAction(t, "closeRight");  },
             ["thread_list.next_tab"]                = _ => CycleThreadListTab(vm, +1),
             ["thread_list.next_tab_in_body"]        = _ => CycleThreadListTab(vm, +1),
             ["thread_list.prev_tab"]                = _ => CycleThreadListTab(vm, -1),
@@ -217,6 +301,12 @@ public partial class App : Application
             {
                 if (ResolveTargetThreadTab(src, vm) is { } t) vm.DeleteThreadLog(t);
             },
+            // タブストリップ上のアクション (旧 click action 設定の移設)
+            ["thread.add_favorite"]                 = src => { if (ResolveTargetThreadTab(src, vm) is { } t) vm.ExecuteThreadTabAction(t, "addFavorite"); },
+            ["thread.delete_log_in_tab"]            = src => { if (ResolveTargetThreadTab(src, vm) is { } t) vm.ExecuteThreadTabAction(t, "deleteLog");   },
+            ["thread.close_others"]                 = src => { if (ResolveTargetThreadTab(src, vm) is { } t) vm.ExecuteThreadTabAction(t, "closeOthers"); },
+            ["thread.close_left"]                   = src => { if (ResolveTargetThreadTab(src, vm) is { } t) vm.ExecuteThreadTabAction(t, "closeLeft");   },
+            ["thread.close_right"]                  = src => { if (ResolveTargetThreadTab(src, vm) is { } t) vm.ExecuteThreadTabAction(t, "closeRight");  },
             // scroll_top / scroll_bottom は WebView 内の document.scrollTo を JS ローカルで処理するため、
             // C# 側の handler はバインディング一覧への登録目的の no-op (= JS には setShortcutBindings で descriptor が
             // push される。JS ブリッジは local actionId table を持って C# 経由なしで実行する)。
@@ -236,6 +326,11 @@ public partial class App : Application
             ["viewer.zoom_out"]     = _ => { },
             ["viewer.rotate_right"] = _ => { },
             ["viewer.rotate_left"]  = _ => { },
+            // 画像詳細ペインの toggle は ImageViewerWindow にメソッドを生やしてそちらで処理。
+            ["viewer.toggle_details"] = _ =>
+            {
+                if (Current is App app && app._imageViewerWindow is { } vw) vw.ToggleDetailsPane();
+            },
         };
 
         void RefreshThreadList(object? src)
@@ -343,7 +438,7 @@ public partial class App : Application
         if (_configStorage is null || _imageCache is null || _paths is null || _monazilla is null || _mainVm is null || _themeService is null)
             throw new InvalidOperationException("App services are not yet initialized");
 
-        return new SettingsViewModel(
+        var vm = new SettingsViewModel(
             storage:               _configStorage,
             initial:               _currentConfig,
             applyCallback:         ApplyConfigImmediate,
@@ -355,7 +450,53 @@ public partial class App : Application
             openCssFileAction:        OpenCssFile,
             openThemeFolderAction:    () => OpenInExplorer(_themeService.ThemeFolderPath),
             reloadAllCssAction:       () => _mainVm!.ReloadAllPaneCss(_themeService),
-            extractDefaultCssAction:  ExtractDefaultThemeFiles);
+            extractDefaultCssAction:  ExtractDefaultThemeFiles,
+            clearCookiesAction:       ClearDonguriCookiesNow,
+            loginNowAction:           LoginDonguriNow);
+        _currentSettingsVm = vm;
+        // 起動時試行の最終状態を設定画面にも反映 (= ウィンドウ開いた瞬間に「ログイン済」/「認証失敗 (...)」が見える)。
+        if (_mainVm is not null) SetLoginStatus(_mainVm, _mainVm.DonguriLoginStatus);
+        return vm;
+    }
+
+    /// <summary>設定画面が閉じた時に MainWindow から呼ばれる。<see cref="_currentSettingsVm"/> をクリアする
+    /// (= 以後 SetLoginStatus が VM 死蔵参照を更新しないようにする)。</summary>
+    public void NotifySettingsClosed() => _currentSettingsVm = null;
+
+    /// <summary>設定画面の「今すぐログイン」ボタンから呼ばれる。
+    /// SettingsViewModel が事前に FlushPendingSave して config.json + _currentConfig を更新している前提。</summary>
+    private void LoginDonguriNow()
+    {
+        if (_donguriService is null || _mainVm is null) return;
+        _ = TryDonguriLoginAsync(_donguriService, _currentConfig, _mainVm);
+    }
+
+    /// <summary>設定 → 通信 → 「Cookie をすべて削除」ボタンで呼ばれる。
+    /// 確認ダイアログ → 全 Cookie 削除 + state.json リセット + ステータスバー再描画。
+    /// メール認証ログイン中だった場合はそれも切れるので、再ログインしたい場合は設定 → 認証で再保存される。</summary>
+    private void ClearDonguriCookiesNow()
+    {
+        if (_donguriService is null || _mainVm is null) return;
+        var confirm = MessageBox.Show(
+            MainWindow ?? Current.MainWindow,
+            "どんぐりの Cookie (acorn / MonaTicket / メール認証セッション 等) を全て削除します。\n" +
+            "削除後の最初の投稿で acorn が新しく発行されます。\n\n削除しますか?",
+            "Cookie 削除", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
+        if (confirm != MessageBoxResult.OK) return;
+        try
+        {
+            _donguriService.ClearAllAsync().GetAwaiter().GetResult();
+            // ステータスバー更新: acorn 表示 → 未取得、ログイン状態 → 空 (= 設定で再ログインしたら戻る)
+            _mainVm.RefreshDonguriStatusFromCookieJar();
+            _mainVm.DonguriLoginStatus = "";
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] ClearDonguriCookiesNow failed: {ex.Message}");
+            MessageBox.Show(MainWindow ?? Current.MainWindow,
+                $"削除に失敗しました: {ex.Message}", "Cookie 削除",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     /// <summary>指定 CSS ファイルを関連付けエディタで開く。
@@ -451,7 +592,15 @@ public partial class App : Application
     /// HiDPI / TimeoutSec は次回起動時反映なので「保存だけ」(値は SettingsViewModel が ConfigStorage.Save 済み)。</summary>
     private void ApplyConfigImmediate(AppConfig config)
     {
+        var prev = _currentConfig;
         _currentConfig = config;
+        // どんぐり認証の メアド/パスワード が変わったらバックグラウンドで再ログイン試行。
+        // 空 → 設定有 / 設定有 → 空 / 値変更 のどの遷移もカバー。
+        if (_donguriService is not null && _mainVm is not null
+            && (prev.DonguriEmail != config.DonguriEmail || prev.DonguriPassword != config.DonguriPassword))
+        {
+            _ = TryDonguriLoginAsync(_donguriService, config, _mainVm);
+        }
 
         // User-Agent: 即時反映 (進行中のリクエストに影響しないよう、新規リクエストから新 UA)
         try
@@ -477,6 +626,10 @@ public partial class App : Application
         // 画像キャッシュ上限
         if (_imageCache is not null)
             _imageCache.MaxBytes = (long)Math.Max(64, config.CacheMaxMb) * 1024 * 1024;
+
+        // kakikomi.txt の追記 ON/OFF (即時反映)
+        if (_kakikomiLog is not null)
+            _kakikomiLog.IsEnabled = config.EnableKakikomiLog;
 
         // ビューアサムネサイズ
         if (_imageViewerVm is not null)

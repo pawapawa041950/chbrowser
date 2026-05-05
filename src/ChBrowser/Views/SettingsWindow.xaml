@@ -50,14 +50,15 @@
         </Style>
 
         <!-- DataTemplate: SelectedCategory.Name に応じて右ペインの中身を切替。
-             カテゴリ追加 (お気に入り / タブ動作 等) は後続フェーズでここに追加する。 -->
+             新カテゴリを足すときは Triggers にも DataTrigger を追加する (= 下の Style.Triggers)。 -->
         <DataTemplate x:Key="GeneralTemplate">    <settings:GeneralPanel /> </DataTemplate>
         <DataTemplate x:Key="NetworkTemplate">    <settings:NetworkPanel /> </DataTemplate>
+        <DataTemplate x:Key="AuthTemplate">       <settings:AuthPanel /> </DataTemplate>
         <DataTemplate x:Key="FavoritesTemplate">  <settings:FavoritesPanel /> </DataTemplate>
         <DataTemplate x:Key="BoardListTemplate">  <settings:BoardListPanel /> </DataTemplate>
-        <DataTemplate x:Key="ThreadListTemplate"> <settings:ThreadListPanel /> </DataTemplate>
-        <DataTemplate x:Key="ThreadTemplate">     <settings:ThreadPanel /> </DataTemplate>
-        <DataTemplate x:Key="TabActionTemplate">  <settings:TabActionPanel /> </DataTemplate>
+        <DataTemplate x:Key="ThreadListTemplate">    <settings:ThreadListPanel /> </DataTemplate>
+        <DataTemplate x:Key="ThreadTemplate">        <settings:ThreadPanel /> </DataTemplate>
+        <DataTemplate x:Key="TabTemplate">           <settings:TabPanel /> </DataTemplate>
         <DataTemplate x:Key="ImageTemplate">      <settings:ImagePanel /> </DataTemplate>
         <DataTemplate x:Key="ViewerTemplate">     <settings:ViewerPanel /> </DataTemplate>
         <DataTemplate x:Key="DesignTemplate">     <settings:DesignPanel /> </DataTemplate>
@@ -178,6 +179,9 @@
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="通信">
                                         <Setter Property="ContentTemplate" Value="{StaticResource NetworkTemplate}" />
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="認証">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource AuthTemplate}" />
+                                    </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="お気に入り">
                                         <Setter Property="ContentTemplate" Value="{StaticResource FavoritesTemplate}" />
                                     </DataTrigger>
@@ -190,8 +194,8 @@
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="スレッド">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ThreadTemplate}" />
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="タブ動作">
-                                        <Setter Property="ContentTemplate" Value="{StaticResource TabActionTemplate}" />
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="タブ">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource TabTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="画像">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ImageTemplate}" />

@@ -12,12 +12,25 @@ public sealed record AppConfig
     /// <summary>"Unaware" or "PerMonitorV2"。次回起動時に反映 (= 起動直後の SetProcessDpiAwarenessContext)。</summary>
     public string HiDpiMode { get; init; } = "Unaware";
 
+    /// <summary>書き込み成功時に <c>data/kakikomi.txt</c> へ Jane Xeno 形式で追記するか。
+    /// 既定 ON。OFF にすると追記を行わない (既存ファイルには触らない)。即時反映。</summary>
+    public bool EnableKakikomiLog { get; init; } = true;
+
     // ---- 通信 ----
     /// <summary>カスタム User-Agent。空文字なら既定 (Monazilla/1.00 ChBrowser/&lt;ver&gt;)。即時反映。</summary>
     public string UserAgentOverride { get; init; } = "";
 
     /// <summary>HTTP タイムアウト (秒)。次回起動時に反映 (HttpClient.Timeout は実行中変更不可のため)。</summary>
     public int TimeoutSec { get; init; } = 30;
+
+    // ---- 認証 (どんぐりメール認証) ----
+    /// <summary>どんぐり (5ch) のメール認証アドレス。空文字なら認証無し (= 通常の acorn だけで投稿)。
+    /// 設定がある状態でアプリ起動するとバックグラウンドでログインを試行する。</summary>
+    public string DonguriEmail { get; init; } = "";
+
+    /// <summary>どんぐりログインのパスワード (現在は平文で config.json に保存)。
+    /// セキュア保管 (DPAPI 等) は後続で検討。空ならログイン試行はスキップ。</summary>
+    public string DonguriPassword { get; init; } = "";
 
     // ---- スレッド ----
     /// <summary>人気レス閾値 (= 被アンカー数 ≥ この値で赤マーカー)。即時反映 (setConfig メッセージ)。</summary>
@@ -47,6 +60,11 @@ public sealed record AppConfig
     /// <summary>ビューアウィンドウのタブサムネイルサイズ (px、正方形)。即時反映 (ImageViewerWindow XAML binding)。</summary>
     public int ViewerThumbnailSize { get; init; } = 80;
 
+    /// <summary>ビューアウィンドウを開いたとき、画像詳細ペイン (右側) をデフォルトで開いた状態にするか。
+    /// false なら閉じた状態 (アコーディオン帯だけ) で起動する。Tab / 帯クリックでいつでも開閉可。
+    /// 反映タイミング: ビューアウィンドウの初回生成時。既に開いている viewer は影響を受けない。</summary>
+    public bool ViewerDetailsPaneDefaultOpen { get; init; } = true;
+
     // ---- ペイン操作 (Phase 11b) ----
     /// <summary>お気に入りペインで 1 クリックで開く。OFF でダブルクリック動作。即時反映 (favorites.js への setConfig)。</summary>
     public bool FavoritesOpenOnSingleClick { get; init; } = true;
@@ -62,30 +80,22 @@ public sealed record AppConfig
     /// <summary>スレッド一覧ペインで 1 クリックで開く。OFF でダブルクリック動作。即時反映。</summary>
     public bool ThreadListOpenOnSingleClick { get; init; } = true;
 
-    // ---- タブ動作 (Phase 11c) ----
-    // アクション識別子: "none" / "close" / "refresh" / "addFavorite" / "deleteLog"
-    //                  / "closeOthers" / "closeLeft" / "closeRight"
-    // addFavorite / deleteLog はスレッドタブでのみ有効。スレ一覧タブで指定しても無視される。
+    // ---- タブ表示 (= 設定画面「タブ」カテゴリ) ----
+    // 旧 click action 設定 (Middle/Ctrl/Shift/Alt/DoubleClick) はショートカット & ジェスチャー
+    // 設定ウィンドウ側に移設済み (= スレ一覧のタブ領域 / スレッドタブ表示領域 カテゴリ)。
+    // タブ幅の WidthMode: "chars" (文字数) / "px" (ピクセル)。
 
-    /// <summary>スレ一覧タブの中クリック (ホイールクリック) アクション。</summary>
-    public string ThreadListTabMiddleClickAction { get; init; } = "close";
-    /// <summary>スレ一覧タブの Ctrl + 左クリックアクション。</summary>
-    public string ThreadListTabCtrlClickAction   { get; init; } = "none";
-    /// <summary>スレ一覧タブの Shift + 左クリックアクション。</summary>
-    public string ThreadListTabShiftClickAction  { get; init; } = "none";
-    /// <summary>スレ一覧タブの Alt + 左クリックアクション。</summary>
-    public string ThreadListTabAltClickAction    { get; init; } = "none";
-    /// <summary>スレ一覧タブの左ダブルクリックアクション。</summary>
-    public string ThreadListTabDoubleClickAction { get; init; } = "refresh";
+    /// <summary>スレ一覧タブの幅指定モード。"chars" = 文字数指定 / "px" = ピクセル指定。</summary>
+    public string ThreadListTabWidthMode { get; init; } = "chars";
+    /// <summary>スレ一覧タブの幅 (文字数)。WidthMode=chars のときに有効。</summary>
+    public int    ThreadListTabWidthChars { get; init; } = 15;
+    /// <summary>スレ一覧タブの幅 (px)。WidthMode=px のときに有効。</summary>
+    public int    ThreadListTabWidthPx    { get; init; } = 200;
 
-    /// <summary>スレッドタブの中クリック (ホイールクリック) アクション。</summary>
-    public string ThreadTabMiddleClickAction { get; init; } = "close";
-    /// <summary>スレッドタブの Ctrl + 左クリックアクション。</summary>
-    public string ThreadTabCtrlClickAction   { get; init; } = "none";
-    /// <summary>スレッドタブの Shift + 左クリックアクション。</summary>
-    public string ThreadTabShiftClickAction  { get; init; } = "none";
-    /// <summary>スレッドタブの Alt + 左クリックアクション。</summary>
-    public string ThreadTabAltClickAction    { get; init; } = "none";
-    /// <summary>スレッドタブの左ダブルクリックアクション。</summary>
-    public string ThreadTabDoubleClickAction { get; init; } = "refresh";
+    /// <summary>スレッドタブの幅指定モード。"chars" = 文字数指定 / "px" = ピクセル指定。</summary>
+    public string ThreadTabWidthMode { get; init; } = "chars";
+    /// <summary>スレッドタブの幅 (文字数)。WidthMode=chars のときに有効。</summary>
+    public int    ThreadTabWidthChars { get; init; } = 15;
+    /// <summary>スレッドタブの幅 (px)。WidthMode=px のときに有効。</summary>
+    public int    ThreadTabWidthPx    { get; init; } = 200;
 }

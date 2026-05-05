@@ -93,6 +93,22 @@
             </TextBox>
         </DockPanel>
 
+        <!-- 上ボタンバー (= Chrome ブックマークバー風)。
+             お気に入り直下に「上ボタン」フォルダがあり、その中に項目が入っている時だけ表示。
+             空 / フォルダ無しなら Collapsed (= 高さゼロでスペース取らない)。 -->
+        <panes:TopButtonsPane DockPanel.Dock="Top">
+            <panes:TopButtonsPane.Style>
+                <Style TargetType="panes:TopButtonsPane">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsTopButtonsBarVisible}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </panes:TopButtonsPane.Style>
+        </panes:TopButtonsPane>
+
         <!-- ステータスバー -->
         <StatusBar DockPanel.Dock="Bottom">
             <StatusBarItem><TextBlock Text="{Binding StatusMessage}" /></StatusBarItem>
@@ -111,6 +127,12 @@
             <Separator />
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Text="{Binding DonguriStatus}" ToolTip="acorn (どんぐり) Cookie の経過時間と推定 Lv (5 分で 1 上昇 / 約 3 時間で失効)" />
+            </StatusBarItem>
+            <Separator />
+            <!-- どんぐりメール認証のログイン状態 (空文字なら表示しない、メアド未設定時は表示無し) -->
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="{Binding DonguriLoginStatus}"
+                           ToolTip="どんぐりメール認証のログイン状態 (設定 → 認証 で構成)" />
             </StatusBarItem>
             <Separator />
             <StatusBarItem HorizontalAlignment="Right"><TextBlock x:Name="StatusTabCount"   Text="タブ 0" /></StatusBarItem>

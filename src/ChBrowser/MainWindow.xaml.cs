@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     /// <summary>App.OnStartup で設定される。imageMetaRequest 時にローカルキャッシュ済かを判定する。</summary>
     public ImageCacheService? ImageCacheService { get; set; }
 
+    /// <summary>App.OnStartup で設定される。スレ表示でのホバーポップアップ (AI 生成画像のメタ表示) で使う。</summary>
+    public AiImageMetadataService? AiImageMetadataService { get; set; }
+
     /// <summary>App.OnStartup で設定される。x.com / pixiv 等のページ URL を実体画像 URL に展開する。</summary>
     public UrlExpander? UrlExpander { get; set; }
 
@@ -151,7 +154,12 @@ public partial class MainWindow : Window
         if (Application.Current is not App app) return;
         var vm = app.CreateSettingsViewModel();
         _settingsWindow = new Views.SettingsWindow(vm) { Owner = this };
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Closed += (_, _) =>
+        {
+            _settingsWindow = null;
+            // App 側の参照もクリアして死蔵参照経由の DonguriLoginStatus 更新を防ぐ。
+            if (Application.Current is App a) a.NotifySettingsClosed();
+        };
         _settingsWindow.Show();
     }
 

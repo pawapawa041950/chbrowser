@@ -25,7 +25,23 @@
                    Margin="0,0,0,4" />
         <TextBox Text="{Binding TimeoutSec, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
                  Width="100"
-                 HorizontalAlignment="Left" />
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,16" />
+
+        <!-- Cookie 削除 (= acorn / MonaTicket / メール認証セッション 全部消す)。
+             5ch の挙動が不安定で書き込めない時の「Cookie 作り直し」用。 -->
+        <TextBlock Text="Cookie" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,8">
+            どんぐり (acorn / MonaTicket) およびメール認証セッションを含む全ての Cookie を削除します。
+            5ch の挙動が不安定で書き込めない時に「綺麗な状態」から acorn を取り直すために使います。
+        </TextBlock>
+        <Button Content="Cookie をすべて削除"
+                Width="180"
+                HorizontalAlignment="Left"
+                Padding="8,4"
+                Command="{Binding ClearCookiesCommand}" />
 
     </StackPanel>
 </UserControl>

@@ -43,21 +43,37 @@
                 BorderThickness="0,0,0,1">
             <DockPanel Margin="4,2">
                 <TextBlock Text="スレッド一覧" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
-                <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効 -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="IsEnabled" Value="False" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
-                                    <Setter Property="IsEnabled" Value="True" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <Button Style="{StaticResource ToolbarIconButton}"
-                            Click="NewThreadButton_Click"
+                    <!-- 更新 (= 選択中のスレ一覧タブを再取得)。タブ種別 (板 / 全ログ / お気に入り) を問わず動作する。
+                         SelectedThreadListTab が null なら無効化。 -->
+                    <Button Click="RefreshThreadListButton_Click"
+                            ToolTip="このスレ一覧タブを更新">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedThreadListTab}" Value="{x:Null}">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock Text="🔄" FontSize="13"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+
+                    <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効。 -->
+                    <Button Click="NewThreadButton_Click"
                             ToolTip="この板に新規スレッドを立てる">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="IsEnabled" Value="False" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                        <Setter Property="IsEnabled" Value="True" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
                         <Grid Width="16" Height="16">
                             <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                   StrokeThickness="1.4"
@@ -68,6 +84,32 @@
                                   Data="M 3,3 L 11,3 L 13,5 L 13,13 L 3,13 Z M 8,7 L 8,11 M 6,9 L 10,9" />
                         </Grid>
                     </Button>
+
+                    <!-- お気に入りトグル (★) - 板タブのときだけ有効。
+                         登録済みなら背景強調 + ToolTip 「外す」。スレ表示ペインの ★ ボタンと同じ見た目。 -->
+                    <Button Click="ToggleBoardFavoriteButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="IsEnabled" Value="False" />
+                                <Setter Property="ToolTip"   Value="この板をお気に入りに追加" />
+                                <Style.Triggers>
+                                    <!-- 板タブで未登録: 有効 + 「追加」ツールチップ -->
+                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                        <Setter Property="IsEnabled" Value="True" />
+                                    </DataTrigger>
+                                    <!-- 既に登録済み: ★ボタン背景強調 + 「外す」ツールチップ。
+                                         IsEnabled は上のトリガで True 確定済み (= 板タブ)。 -->
+                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardFavorited}" Value="True">
+                                        <Setter Property="ToolTip"     Value="この板をお気に入りから外す" />
+                                        <Setter Property="Background"  Value="#CCE5FF" />
+                                        <Setter Property="BorderBrush" Value="#88B0DD" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock Text="★" FontSize="14" Foreground="#e6b800"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -75,17 +117,26 @@
         <TabControl Grid.Row="1"
                     ItemsSource="{Binding ThreadListTabs}"
                     SelectedItem="{Binding SelectedThreadListTab}"
-                    BorderThickness="0">
+                    BorderThickness="0"
+                    Margin="1,0,1,0">
+            <!-- WrapPanel で「複数行 wrap」を実現。タブが画面幅を超えると次の行に折り返す。
+                 デフォルトの TabPanel は環境によって wrap が機能しないことがあったため明示的に WrapPanel に変更。 -->
             <TabControl.Template>
                 <ControlTemplate TargetType="TabControl">
-                    <TabPanel IsItemsHost="True"
-                              Background="{x:Static SystemColors.ControlBrush}" />
+                    <WrapPanel IsItemsHost="True" Orientation="Horizontal"
+                               Background="{x:Static SystemColors.ControlBrush}" />
                 </ControlTemplate>
             </TabControl.Template>
             <TabControl.ItemContainerStyle>
                 <Style TargetType="TabItem">
-                    <EventSetter Event="PreviewMouseDown"     Handler="ThreadListTabItem_PreviewMouseDown" />
-                    <EventSetter Event="MouseDoubleClick"     Handler="ThreadListTabItem_MouseDoubleClick" />
+                    <!-- タブ幅は MaxWidth で「上限」として bind (= 短いタイトルは自然な幅で縮み、長いタイトルは
+                         設定値でカットして次行 wrap)。MinWidth で潰れすぎを防ぐ。 -->
+                    <Setter Property="MaxWidth"
+                            Value="{Binding DataContext.ThreadListTabWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                    <Setter Property="MinWidth" Value="60" />
+                    <!-- タブのクリック (中/Ctrl+左/Shift+左/Alt+左/ダブル) は ShortcutManager の
+                         PreviewMouseDown ハンドラがカテゴリ「スレ一覧のタブ領域」として dispatch するので、
+                         pane 側で直接拾う必要は無い (= 二重発火を避けるため EventSetter は外している)。 -->
                     <EventSetter Event="MouseRightButtonUp"   Handler="ThreadListTabItem_MouseRightButtonUp" />
                 </Style>
             </TabControl.ItemContainerStyle>
@@ -103,7 +154,10 @@
                                 BorderThickness="0"
                                 Cursor="Hand"
                                 ToolTip="閉じる" />
-                        <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Header}"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Header}" />
                     </DockPanel>
                 </DataTemplate>
             </TabControl.ItemTemplate>

@@ -80,6 +80,13 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
     [ObservableProperty]
     private bool _isSelected;
 
+    /// <summary>板タブ (IsBoardTab=true) の場合、その板自身がお気に入りに登録済みかどうか。
+    /// スレ一覧ペインのツールバーのお気に入りボタンの押下状態に使う。
+    /// 板タブ以外 (お気に入り展開タブ等) では常に false (ボタンは disable)。
+    /// MainViewModel.RefreshFavoritedStateOfAllTabs で更新される。</summary>
+    [ObservableProperty]
+    private bool _isBoardFavorited;
+
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)
     {

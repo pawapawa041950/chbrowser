@@ -101,6 +101,20 @@ public sealed class ShortcutManager
     private Window? GetWindowForCategory(string category)
         => category == "ビューアウィンドウ" ? _viewerWindow : _mainWindow;
 
+    /// <summary>キーボードショートカット用の登録対象ウィンドウ列。
+    /// 通常カテゴリは 1 ウィンドウだけ、「全体」は MainWindow + (attached なら) ViewerWindow の両方に登録して
+    /// どちらにフォーカスがあっても発火するようにする。</summary>
+    private IEnumerable<Window> GetKeyBindingTargetWindows(string category)
+    {
+        if (category == CategoryResolver.GlobalCategory)
+        {
+            yield return _mainWindow;
+            if (_viewerWindow is { } v) yield return v;
+            yield break;
+        }
+        if (GetWindowForCategory(category) is { } w) yield return w;
+    }
+
     /// <summary>設定を反映: 古い <see cref="KeyBinding"/> を削除して、現在の bindings を新たに登録。
     /// マウス / ジェスチャーマップも再構築する。</summary>
     public void Apply(ShortcutSettings settings)
@@ -117,13 +131,16 @@ public sealed class ShortcutManager
         foreach (var action in ShortcutRegistry.Actions)
         {
             var (shortcut, mouse, gesture) = ResolveEffective(action, settings);
+            // 設定 UI 側で編集禁止になっているもの (= 全体のマウス入力 / スレ一覧のタブ領域のジェスチャー)
+            // が settings.json に残っていても登録しない。defense in depth。
+            if (!CategoryResolver.IsMouseEditable(action.Category))   mouse   = "";
+            if (!CategoryResolver.IsGestureEditable(action.Category)) gesture = "";
             if (!_handlers.TryGetValue(action.Id, out var handler))
                 continue; // 未実装アクションは skip
 
             if (!string.IsNullOrEmpty(shortcut) && TryParseShortcut(shortcut, out var key, out var mods))
             {
-                var targetWindow = GetWindowForCategory(action.Category);
-                if (targetWindow is not null)
+                foreach (var targetWindow in GetKeyBindingTargetWindows(action.Category))
                 {
                     if (!_appliedKeyBindingsByWindow.TryGetValue(targetWindow, out var kbs))
                     {
@@ -151,6 +168,24 @@ public sealed class ShortcutManager
             AddTo(shortcut);
             AddTo(mouse);
             AddTo(gesture);
+        }
+
+        // 「全体」カテゴリのバインドを他全カテゴリへマージ (= ペイン側に同 descriptor が
+        // 既にあれば pane 側が勝つ semantics)。CategoryResolver.AllCategories を target にすることで、
+        // ShortcutRegistry に登録の無いカテゴリ (お気に入りペイン / 板一覧ペイン) にも届く。
+        if (_inputsByCategory.TryGetValue(CategoryResolver.GlobalCategory, out var globalMap))
+        {
+            foreach (var cat in CategoryResolver.AllCategories)
+            {
+                if (cat == CategoryResolver.GlobalCategory) continue;
+                if (!_inputsByCategory.TryGetValue(cat, out var inner))
+                {
+                    inner = new Dictionary<string, string>(StringComparer.Ordinal);
+                    _inputsByCategory[cat] = inner;
+                }
+                foreach (var (descriptor, actionId) in globalMap)
+                    if (!inner.ContainsKey(descriptor)) inner[descriptor] = actionId;
+            }
         }
 
         // JS ブリッジ等の購読者へバインディング一覧を push (descriptor → actionId のマップで配信)。
@@ -193,9 +228,10 @@ public sealed class ShortcutManager
     /// <list type="bullet">
     /// <item><description>右ボタン → 何もしない (= 単発右クリック / ジェスチャー / チョードの判定は離した時点 / 後続の入力で確定)</description></item>
     /// <item><description>右ホールド中 + 中ボタン → "右クリック+中ボタン" を試行 (失敗したら通常の中クリック処理にフォールスルー)</description></item>
-    /// <item><description>左ボタン: ClickCount が 2 で「ダブルクリック」、3 で「トリプルクリック」 (単発左クリックは binding 不可)</description></item>
+    /// <item><description>左ボタン: ClickCount が 2 で「ダブルクリック」 (単発左クリック / トリプルクリックは非対応)</description></item>
     /// <item><description>中ボタン: 修飾キー + 「中クリック」</description></item>
-    /// </list></summary>
+    /// </list>
+    /// トリプルクリックは「ダブルクリック 2 連発」と原理的に区別できず誤発火源になるため意図的に外している。</summary>
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         var btn = e.ChangedButton;
@@ -211,12 +247,7 @@ public sealed class ShortcutManager
 
         string? name = btn switch
         {
-            MouseButton.Left   => e.ClickCount switch
-            {
-                2 => "ダブルクリック",
-                3 => "トリプルクリック",
-                _ => null,                  // 単発左クリックは binding 不可
-            },
+            MouseButton.Left   => e.ClickCount == 2 ? "ダブルクリック" : null, // 単発 / トリプル+ は binding 不可
             MouseButton.Middle => "中クリック",
             _                  => null,
         };

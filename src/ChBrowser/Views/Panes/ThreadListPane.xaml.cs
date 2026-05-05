@@ -38,6 +38,24 @@ public partial class ThreadListPane : UserControl
         (DataContext as MainViewModel)?.OpenNewThreadDialog();
     }
 
+    /// <summary>選択中のスレ一覧タブを再取得する。タブ種別 (板 / 全ログ / お気に入り) を問わず
+    /// MainViewModel.RefreshThreadListTabAsync が適切に振り分ける。タブ未選択なら no-op。</summary>
+    private void RefreshThreadListButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel main) return;
+        if (main.SelectedThreadListTab is null) return;
+        _ = main.RefreshThreadListTabAsync(main.SelectedThreadListTab);
+    }
+
+    /// <summary>選択中の板タブの板をお気に入りに追加 / 削除する (トグル)。
+    /// 板タブ以外 (お気に入り展開タブ / 全ログタブ) では XAML 側で IsEnabled=False になっているため呼ばれない。</summary>
+    private void ToggleBoardFavoriteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel main) return;
+        if (main.SelectedThreadListTab?.Board is not { } board) return;
+        main.ToggleBoardFavorite(board);
+    }
+
     // ---- WebView2 → JS メッセージ受信 ----
 
     private async void ThreadListWebView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -65,34 +83,7 @@ public partial class ThreadListPane : UserControl
         await main.OpenThreadFromListAsync(host, dir, key, title ?? "", hint);
     }
 
-    // ---- タブのクリック / ダブルクリック / 右クリック ----
-
-    private void ThreadListTabItem_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not TabItem ti || ti.DataContext is not ThreadListTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
-        var cfg = main.CurrentConfig;
-        var action = TabClickHelper.PickClickAction(e,
-            cfg.ThreadListTabCtrlClickAction,
-            cfg.ThreadListTabShiftClickAction,
-            cfg.ThreadListTabAltClickAction,
-            cfg.ThreadListTabMiddleClickAction);
-        if (action is null or "none") return;
-        main.ExecuteThreadListTabAction(tab, action);
-        e.Handled = true;
-    }
-
-    private void ThreadListTabItem_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not TabItem ti || ti.DataContext is not ThreadListTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
-        if (e.ChangedButton != MouseButton.Left) return;
-        if (e.OriginalSource is DependencyObject src && TabClickHelper.FindAncestor<ButtonBase>(src) is not null) return;
-        var action = main.CurrentConfig.ThreadListTabDoubleClickAction;
-        if (action is "" or "none") return;
-        main.ExecuteThreadListTabAction(tab, action);
-        e.Handled = true;
-    }
+    // ---- タブの右クリックメニュー (中/ダブル/修飾+左 は ShortcutManager 側で dispatch) ----
 
     private void ThreadListTabItem_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {

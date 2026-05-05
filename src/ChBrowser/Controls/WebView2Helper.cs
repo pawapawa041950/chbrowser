@@ -23,6 +23,10 @@ public interface IThreadDisplayBinding
     /// <summary>「ここまで読んだ」帯の対象レス番号 (Phase 19)。null なら帯を表示しない。
     /// appendPosts のメッセージに同梱して JS に push する。</summary>
     int? ReadMarkPostNumber { get; }
+
+    /// <summary>「自分の書き込み」としてマークされているレス番号集合。
+    /// appendPosts のメッセージに同梱して JS に push し、レンダ時に「自分」バッジを表示させる。</summary>
+    System.Collections.Generic.IReadOnlyCollection<int> OwnPostNumbers { get; }
 }
 
 /// <summary>WebView2 が「シェル HTML をどの経路で読み込んでいるか」のスコープ。
@@ -69,8 +73,10 @@ public static partial class WebView2Helper
     }
 
     /// <summary>warmup 済み environment を使って <see cref="WebView2.EnsureCoreWebView2Async"/> を呼ぶ。
-    /// 失敗したら通常パスに fallback。完了後に <see cref="InstallWebResourceHandlers"/> を呼ぶ。</summary>
-    private static async Task EnsureCoreAsync(WebView2 wv)
+    /// 失敗したら通常パスに fallback。完了後に <see cref="InstallWebResourceHandlers"/> を呼ぶ。
+    /// PostDialog のプレビューペインなど、添付プロパティ経由を通らない WebView2 を初期化したいケースでも
+    /// 同じ初期化 (warmup + 画像キャッシュ + pixiv Referer) を共有させるため internal 公開している。</summary>
+    internal static async Task EnsureCoreAsync(WebView2 wv)
     {
         if (_environmentTask is not null)
         {
@@ -366,8 +372,10 @@ public static partial class WebView2Helper
 
     private static string? _shellHtmlCache;
     private static string? _viewerShellHtmlCache;
-    private static readonly object ShellLock       = new();
-    private static readonly object ViewerShellLock = new();
+    private static string? _viewerDetailsShellHtmlCache;
+    private static readonly object ShellLock              = new();
+    private static readonly object ViewerShellLock        = new();
+    private static readonly object ViewerDetailsShellLock = new();
 
     /// <summary>スレ表示シェル / ビューアシェルの static HTML キャッシュを両方破棄する (Phase 11d)。
     /// 設定画面の「すべての CSS を再読み込み」から呼ばれる。
@@ -375,11 +383,15 @@ public static partial class WebView2Helper
     /// は新しい CSS を読み込んだシェル HTML を使う。</summary>
     public static void InvalidateShellCaches()
     {
-        lock (ShellLock)       _shellHtmlCache       = null;
-        lock (ViewerShellLock) _viewerShellHtmlCache = null;
+        lock (ShellLock)              _shellHtmlCache              = null;
+        lock (ViewerShellLock)        _viewerShellHtmlCache        = null;
+        lock (ViewerDetailsShellLock) _viewerDetailsShellHtmlCache = null;
     }
 
-    private static string LoadThreadShellHtml()
+    /// <summary>スレ表示シェル HTML をロード (CSS + thread.js + post.html テンプレ + post.css を統合)。
+    /// 通常はこのクラス内部 (NavigateToShellAsync) からだけ使うが、書き込みダイアログのプレビューペイン
+    /// (PostDialog) からも同じシェルを流用するため internal 公開する。</summary>
+    internal static string LoadThreadShellHtml()
     {
         if (_shellHtmlCache is not null) return _shellHtmlCache;
         lock (ShellLock)
@@ -421,6 +433,25 @@ public static partial class WebView2Helper
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
                 .Replace("/*{{JS}}*/",              js);
             return _viewerShellHtmlCache;
+        }
+    }
+
+    /// <summary>画像ビューアの「画像詳細ペイン」用シェル HTML を返す。
+    /// ImageViewerWindow が WebView2 に NavigateToString する。設定画面と同じく一度だけビルドしてキャッシュ。</summary>
+    internal static string LoadViewerDetailsShellHtml()
+    {
+        if (_viewerDetailsShellHtmlCache is not null) return _viewerDetailsShellHtmlCache;
+        lock (ViewerDetailsShellLock)
+        {
+            if (_viewerDetailsShellHtmlCache is not null) return _viewerDetailsShellHtmlCache;
+            var asm  = typeof(WebView2Helper).Assembly;
+            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.html");
+            var css  = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.css");
+            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.js");
+            _viewerDetailsShellHtmlCache = html
+                .Replace("/*{{CSS}}*/", css)
+                .Replace("/*{{JS}}*/",  js);
+            return _viewerDetailsShellHtmlCache;
         }
     }
 

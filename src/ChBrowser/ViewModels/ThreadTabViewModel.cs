@@ -19,6 +19,13 @@ public enum ThreadViewMode
 /// 既存ツリーとは別レンダリングにする (= 既読下に新着を表示するため)。</summary>
 public sealed record AppendBatchData(IReadOnlyList<Post> Posts, bool IsIncremental);
 
+/// <summary>JS の <c>updateOwnPosts</c> に渡すペイロード — 自分マークのトグル結果を 1 件ずつ通知する。
+/// JS は changes 配列をそのまま受け取り、各 (number, isOwn) で DOM の「自分」バッジを toggle する。</summary>
+public sealed record OwnPostsUpdateData(IReadOnlyList<OwnPostChange> Changes);
+
+/// <summary>1 件分の自分マークトグル結果。</summary>
+public sealed record OwnPostChange(int Number, bool IsOwn);
+
 /// <summary>
 /// 1 スレッド = 1 タブ。WebView2 へは Posts (Post 列) を Bind し、HTML 構築は JS 側で行う。
 /// 表示モード (Flat/Tree/DedupTree) は今後 JS 側で実装予定。現状は Flat のみ動作、
@@ -102,6 +109,20 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// 初期は Cached (= dat 取得直後)。板の subject.txt 再取得時に MainViewModel が更新する。</summary>
     [ObservableProperty]
     private LogMarkState _state = LogMarkState.Cached;
+
+    /// <summary>「自分の書き込み」としてマークされているレス番号集合。
+    /// idx.json から復元 + post-no メニューの「自分の書き込み」トグルで増減する。
+    /// <see cref="IThreadDisplayBinding.OwnPostNumbers"/> 経由で WebView2 の appendPosts ペイロードに同梱され、
+    /// JS 側で「自分」バッジ表示に使われる。</summary>
+    public HashSet<int> OwnPostNumbers { get; } = new();
+
+    /// <summary>WebView2 への増分通知 — 自分マークのトグル結果を JS 側に push するためのチャネル。
+    /// <see cref="ChBrowser.Controls.WebView2Helper"/> の OwnPostsUpdate 添付プロパティがこれを観測して
+    /// updateOwnPosts メッセージを送る。</summary>
+    [ObservableProperty]
+    private OwnPostsUpdateData? _ownPostsUpdate;
+
+    IReadOnlyCollection<int> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;
 
     public bool IsViewModeFlat       => ViewMode == ThreadViewMode.Flat;
     public bool IsViewModeTree       => ViewMode == ThreadViewMode.Tree;

@@ -38,6 +38,10 @@ public sealed partial class ShortcutsWindowViewModel : ObservableObject
         foreach (var action in ShortcutRegistry.Actions)
         {
             var (sc, ms, gs) = ResolveEffective(action, current);
+            // 当該カテゴリで編集不可なものは load 時点でクリアしておく
+            // (旧 settings.json に値が残っていても UI には出さない / save しない)。
+            if (!CategoryResolver.IsMouseEditable(action.Category))   ms = "";
+            if (!CategoryResolver.IsGestureEditable(action.Category)) gs = "";
             Items.Add(new ShortcutItem(action.Id, action.Category, action.DisplayName, sc, ms, gs));
         }
 
@@ -92,7 +96,9 @@ public sealed partial class ShortcutsWindowViewModel : ObservableObject
 }
 
 /// <summary>1 行 = 1 アクション。<see cref="Shortcut"/> / <see cref="Mouse"/> / <see cref="Gesture"/> は編集ダイアログから上書きされ、
-/// <see cref="ShortcutsWindowViewModel.Save"/> で永続化される。</summary>
+/// <see cref="ShortcutsWindowViewModel.Save"/> で永続化される。
+/// <see cref="CanEditMouse"/> / <see cref="CanEditGesture"/> はカテゴリ単位の編集可否
+/// (XAML で各セルボタンの IsEnabled に bind される)。</summary>
 public sealed partial class ShortcutItem : ObservableObject
 {
     public string Id       { get; }
@@ -107,6 +113,9 @@ public sealed partial class ShortcutItem : ObservableObject
 
     [ObservableProperty]
     private string _gesture;
+
+    public bool CanEditMouse   => CategoryResolver.IsMouseEditable(Category);
+    public bool CanEditGesture => CategoryResolver.IsGestureEditable(Category);
 
     public ShortcutItem(string id, string category, string action, string shortcut, string mouse, string gesture)
     {

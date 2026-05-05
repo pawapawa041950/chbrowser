@@ -17,7 +17,9 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
         <!-- ショートカット / ジェスチャー セルをボタン風に表示するスタイル。
-             空文字なら "—" を表示してクリックで「未設定 → 入力受付」を将来開く想定 (現状はスタブ)。 -->
+             空文字なら "—" を表示してクリックで「未設定 → 入力受付」を将来開く想定 (現状はスタブ)。
+             IsEnabled=False (= カテゴリで編集禁止) のときはボーダーも無い白地にして
+             「このセルは触れない」ことを視覚的に明示する。 -->
         <Style x:Key="BindingButtonStyle" TargetType="Button">
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="Padding"                    Value="8,3" />
@@ -30,6 +32,12 @@
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background"  Value="#E8F0FA" />
                     <Setter Property="BorderBrush" Value="#1E88E5" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background"      Value="#FFFFFF" />
+                    <Setter Property="BorderBrush"     Value="Transparent" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Cursor"          Value="Arrow" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -167,8 +175,23 @@
                         <Button Grid.Column="2"
                                 Style="{StaticResource BindingButtonStyle}"
                                 Margin="4,2,4,2"
-                                ToolTip="マウス操作を変更 (左/右/中クリック、ホイール ± 修飾キー)"
+                                IsEnabled="{Binding CanEditMouse}"
+                                ToolTipService.ShowOnDisabled="True"
                                 Click="EditMouse_Click">
+                            <Button.ToolTip>
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="マウス操作を変更 (左/右/中クリック、ホイール ± 修飾キー)" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding CanEditMouse}" Value="False">
+                                                    <Setter Property="Text" Value="このカテゴリではマウス入力は設定できません" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Button.ToolTip>
                             <TextBlock>
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -177,6 +200,10 @@
                                             <DataTrigger Binding="{Binding Mouse}" Value="">
                                                 <Setter Property="Text"       Value="—" />
                                                 <Setter Property="Foreground" Value="#999" />
+                                            </DataTrigger>
+                                            <!-- 編集禁止カテゴリでは "—" すら出さない (= 後勝ちで上書き) -->
+                                            <DataTrigger Binding="{Binding CanEditMouse}" Value="False">
+                                                <Setter Property="Text" Value="" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -187,8 +214,23 @@
                         <Button Grid.Column="3"
                                 Style="{StaticResource BindingButtonStyle}"
                                 Margin="4,2,0,2"
-                                ToolTip="マウスジェスチャーを変更"
+                                IsEnabled="{Binding CanEditGesture}"
+                                ToolTipService.ShowOnDisabled="True"
                                 Click="EditGesture_Click">
+                            <Button.ToolTip>
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="マウスジェスチャーを変更" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding CanEditGesture}" Value="False">
+                                                    <Setter Property="Text" Value="このカテゴリではマウスジェスチャーは設定できません" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Button.ToolTip>
                             <TextBlock>
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -197,6 +239,10 @@
                                             <DataTrigger Binding="{Binding Gesture}" Value="">
                                                 <Setter Property="Text"       Value="—" />
                                                 <Setter Property="Foreground" Value="#999" />
+                                            </DataTrigger>
+                                            <!-- 編集禁止カテゴリでは "—" すら出さない (= 後勝ちで上書き) -->
+                                            <DataTrigger Binding="{Binding CanEditGesture}" Value="False">
+                                                <Setter Property="Text" Value="" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>

@@ -59,6 +59,10 @@ public sealed partial class MainViewModel
             tab.ScrollTargetPostNumber = savedPos;
         if (savedIndex?.LastReadMarkPostNumber is int savedMark)
             tab.ReadMarkPostNumber = savedMark;
+        if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
+        {
+            foreach (var n in savedOwn) tab.OwnPostNumbers.Add(n);
+        }
 
         tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
         tab.State       = stateHint ?? LogMarkState.Cached;
@@ -200,11 +204,37 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>現在のどんぐり Cookie / メール認証ログイン状態から、
+    /// 投稿ダイアログの認証モード初期値を推定する。
+    /// メール認証済み → MailAuth / acorn だけ → Cookie / なにもない → None。</summary>
+    private PostAuthMode DefaultPostAuthMode()
+    {
+        // ログイン状態は MainViewModel.DonguriLoginStatus に App.xaml.cs から push される。
+        // "ログイン済" を含む文字列なら mail auth Cookie が CookieJar に居ると見做す。
+        if (DonguriLoginStatus is { Length: > 0 } s && s.Contains("ログイン済", StringComparison.Ordinal))
+            return PostAuthMode.MailAuth;
+        if (_donguri.AcornValue is not null) return PostAuthMode.Cookie;
+        return PostAuthMode.None;
+    }
+
     /// <summary>スレ表示タブの「書き込み」ボタンから呼ばれる。投稿ダイアログ (PostDialog) を開き、
     /// 送信成功時はそのスレの差分取得を走らせて新規投稿を表示に取り込む。</summary>
     private void OpenPostDialog(ThreadTabViewModel tab)
     {
-        var vm  = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title);
+        OpenPostDialogInternal(tab, "");
+    }
+
+    /// <summary>スレ表示の post-no クリックメニュー → 「返信」で呼ばれる。
+    /// 投稿ダイアログを「&gt;&gt;N\n」プリフィル状態で開く。</summary>
+    public void OpenReplyDialog(ThreadTabViewModel tab, int postNumber)
+    {
+        OpenPostDialogInternal(tab, $">>{postNumber}\n");
+    }
+
+    private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
+    {
+        var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode());
+        if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
         var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
         {
@@ -213,6 +243,51 @@ public sealed partial class MainViewModel
             await RefreshThreadAsync(tab).ConfigureAwait(true);
         };
         dlg.Show();
+    }
+
+    /// <summary>スレ表示の post-no クリックメニュー → 「NG登録」で呼ばれる。
+    /// 即時 NG 登録ダイアログ (NgQuickAddDialog) を、現在板スコープ + 期限 1 日 + 抽出値プリフィルで開く。
+    /// OK で <see cref="ChBrowser.Services.Ng.NgService"/> に rule を追加する。
+    ///
+    /// <para>この経路は WebView2 の WebMessageReceived → UI スレッドで呼ばれるが、
+    /// そこから直接 <see cref="System.Windows.Window.ShowDialog"/> すると WebView2 native 層の
+    /// 入力処理と modal 再入が競合して稀に STATUS_BREAKPOINT (0x80000003) で落ちる。
+    /// 1 cycle 遅らせて WebView2 callback スタックを巻き戻してから modal を開く。</para></summary>
+    public void OpenNgQuickAdd(ThreadTabViewModel tab, string target, string value)
+    {
+        var app = System.Windows.Application.Current;
+        if (app is null) return;
+        app.Dispatcher.BeginInvoke(new Action(() => OpenNgQuickAddCore(tab, target, value)));
+    }
+
+    private void OpenNgQuickAddCore(ThreadTabViewModel tab, string target, string value)
+    {
+        try
+        {
+            if (tab.Board is null)
+            {
+                StatusMessage = "NG 登録: 対象スレの板情報が取得できませんでした";
+                return;
+            }
+
+            var dlg = new ChBrowser.Views.NgQuickAddDialog(tab.Board, target, value)
+            {
+                Owner = System.Windows.Application.Current?.MainWindow,
+            };
+            var ok = dlg.ShowDialog();
+            if (ok != true || dlg.CreatedRule is not { } rule) return;
+
+            // 既存 + 新規 を 1 つの set にして保存。
+            var newRules = new System.Collections.Generic.List<ChBrowser.Models.NgRule>(_ng.All.Rules) { rule };
+            _ng.Save(new ChBrowser.Models.NgRuleSet { Version = 1, Rules = newRules });
+
+            StatusMessage = $"NG ルールを追加しました ({rule.Target}: {rule.Pattern}) — 開いているスレタブは閉じて開き直すと反映されます";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OpenNgQuickAdd] failed: {ex}");
+            StatusMessage = $"NG 登録ダイアログでエラー: {ex.Message}";
+        }
     }
 
     /// <summary>選択中の板スレ一覧タブから「新規スレ立て」ボタンで呼ばれる (Phase 8c)。
@@ -226,7 +301,7 @@ public sealed partial class MainViewModel
             return;
         }
         var board = listTab.Board;
-        var vm    = new PostFormViewModel(_postClient, board);
+        var vm    = new PostFormViewModel(_postClient, board, DefaultPostAuthMode());
         var dlg   = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
         {
@@ -291,6 +366,29 @@ public sealed partial class MainViewModel
 
         var tab = FindThreadTab(board, threadKey);
         if (tab is not null) tab.ReadMarkPostNumber = postNumber;
+    }
+
+    /// <summary>JS の post-no メニュー → 「自分の書き込み」トグル経由で呼ばれる。
+    /// タブの <see cref="ThreadTabViewModel.OwnPostNumbers"/> を更新 + idx.json 永続化 +
+    /// JS への増分通知 (<c>updateOwnPosts</c>) を発火する。
+    /// 同じ要望が連投されたときの冪等性も担保 (= isOwn=true で既に入っている場合は no-op)。</summary>
+    public void ToggleOwnPost(ThreadTabViewModel tab, int postNumber, bool isOwn)
+    {
+        bool changed = isOwn
+            ? tab.OwnPostNumbers.Add(postNumber)
+            : tab.OwnPostNumbers.Remove(postNumber);
+        if (!changed) return;
+
+        // idx.json に永続化
+        var existing = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
+        var updated  = (existing ?? new ThreadIndex(null, null)) with
+        {
+            OwnPostNumbers = tab.OwnPostNumbers.OrderBy(n => n).ToArray(),
+        };
+        _threadIndex.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey, updated);
+
+        // JS への増分 push
+        tab.OwnPostsUpdate = new OwnPostsUpdateData(new[] { new OwnPostChange(postNumber, isOwn) });
     }
 
     /// <summary>JS の openThread メッセージ (host/dir/key/title 同梱) からスレを開く。

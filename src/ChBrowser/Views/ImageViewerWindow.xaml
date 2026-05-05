@@ -29,7 +29,18 @@
     <!-- Phase 16+: 旧 KeyBindings は ShortcutManager に統合した (shortcuts.json で管理)。
          デフォルトでは Esc=閉じる / Ctrl+S=保存 / ←=前 / →=次 を ShortcutRegistry に既定値として設定。 -->
 
-    <DockPanel LastChildFill="True">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <!-- アコーディオンバー: 常時 16px で表示。クリックで詳細ペインを開閉する。
+                 閉じている時はこの帯だけが画像エリアと詳細ペインの間に残り、再度クリックで開く。 -->
+            <ColumnDefinition Width="Auto" />
+            <!-- 画像詳細ペイン (Tab で表示/非表示切替)。デフォルト幅 320 = 開いた状態 (= 起動時から開く)。
+                 ToggleDetailsPane() で 320 ↔ 0 を切り替える。GridSplitter は付けず、固定幅でシンプルに。 -->
+            <ColumnDefinition x:Name="DetailsColumn" Width="320" />
+        </Grid.ColumnDefinitions>
+
+        <DockPanel Grid.Column="0" LastChildFill="True">
 
         <!-- 上段: タブ見出し (ItemsSource = Tabs)。
              - 正方形に近いタイル形 (80x80) でサムネイルを表示
@@ -143,5 +154,43 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-    </DockPanel>
+        </DockPanel>
+
+        <!-- アコーディオンバー (col 1)。常に表示され、クリックで詳細ペインを開閉する。
+             視覚的には縦長の細い帯 + 中央にシェブロン (▶/◀)。マウスオーバーで色が変わる。 -->
+        <Border Grid.Column="1"
+                x:Name="AccordionBar"
+                Width="16"
+                Background="#2A2A2A"
+                BorderBrush="#444"
+                BorderThickness="1,0"
+                Cursor="Hand"
+                MouseLeftButtonUp="AccordionBar_MouseLeftButtonUp"
+                ToolTip="画像詳細ペインを開閉">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="#3A3A3A" />
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <TextBlock x:Name="AccordionChevron"
+                       Text="▶"
+                       Foreground="#AAA"
+                       FontSize="10"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Border>
+
+        <!-- 画像詳細ペイン (Tab で表示/非表示)。
+             AiImageMetadataService の結果を ImageViewerWindow.xaml.cs から PostWebMessageAsJson で push する。 -->
+        <Border Grid.Column="2"
+                BorderBrush="#444"
+                BorderThickness="1,0,0,0"
+                Background="#1E1E1E">
+            <wv2:WebView2 x:Name="DetailsWebView" />
+        </Border>
+    </Grid>
 </Window>

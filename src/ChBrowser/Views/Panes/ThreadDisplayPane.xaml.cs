@@ -48,11 +48,99 @@ public partial class ThreadDisplayPane : UserControl
 
         switch (type)
         {
-            case "openUrl":          HandleOpenUrl(payload); break;
-            case "scrollPosition":   HandleScrollPosition(sender, payload); break;
-            case "readMark":         HandleReadMark(sender, payload); break;
-            case "imageMetaRequest": HandleImageMetaRequest(sender, payload); break;
-            case "openInViewer":     HandleOpenInViewer(payload); break;
+            case "openUrl":            HandleOpenUrl(payload); break;
+            case "scrollPosition":     HandleScrollPosition(sender, payload); break;
+            case "readMark":           HandleReadMark(sender, payload); break;
+            case "imageMetaRequest":   HandleImageMetaRequest(sender, payload); break;
+            case "aiMetadataRequest":  HandleAiMetadataRequest(sender, payload); break;
+            case "openInViewer":       HandleOpenInViewer(payload); break;
+            case "replyToPost":        HandleReplyToPost(sender, payload); break;
+            case "ngAdd":              HandleNgAdd(sender, payload); break;
+            case "toggleOwnPost":      HandleToggleOwnPost(sender, payload); break;
+        }
+    }
+
+    /// <summary>JS の post-no クリックメニュー → 「自分の書き込み」トグルで呼ばれる。
+    /// number と isOwn (新しい状態) を受け取り、MainViewModel に状態更新を依頼する。</summary>
+    private void HandleToggleOwnPost(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (DataContext is not MainViewModel main) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        if (!payload.TryGetProperty("isOwn",  out var oProp) || oProp.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
+        var isOwn = oProp.GetBoolean();
+        main.ToggleOwnPost(tab, num, isOwn);
+    }
+
+    /// <summary>JS の post-no クリックメニューで「返信」を選んだとき。
+    /// 元レス番号を受け取り、書き込みダイアログを「&gt;&gt;N\n」入りで開く。</summary>
+    private void HandleReplyToPost(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (DataContext is not MainViewModel main) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        main.OpenReplyDialog(tab, num);
+    }
+
+    /// <summary>JS の post-no クリックメニューで「NG登録 (名前/ID/ワッチョイ)」を選んだとき。
+    /// 抽出済の値 (target / value) と元レス番号を渡し、C# 側で NG 登録ダイアログを開く。</summary>
+    private void HandleNgAdd(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (DataContext is not MainViewModel main) return;
+        var target = payload.TryGetProperty("target", out var tp) ? (tp.GetString() ?? "") : "";
+        var value  = payload.TryGetProperty("value",  out var vp) ? (vp.GetString() ?? "") : "";
+        if (string.IsNullOrEmpty(target)) return;
+        main.OpenNgQuickAdd(tab, target, value);
+    }
+
+    /// <summary>JS が画像のホバーで「この URL の AI 生成メタを欲しい」と要求してきた時のハンドラ。
+    /// キャッシュ済みファイルを <see cref="AiImageMetadataService"/> で読み、SD WebUI infotext を抽出して返す。
+    /// 解析できなかった場合は <c>hasData=false</c> を返す (= JS 側はポップアップを出さない)。</summary>
+    private void HandleAiMetadataRequest(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        var mainWindow = Window.GetWindow(this) as MainWindow;
+        if (mainWindow?.AiImageMetadataService is null) return;
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
+
+        _ = ReplyAiMetadataAsync(mainWindow, wv, url);
+    }
+
+    private static async Task ReplyAiMetadataAsync(MainWindow mainWindow, WebView2 wv, string url)
+    {
+        try
+        {
+            // 「キャッシュに来ているか」を先に判定する。来ていなければ JS 側に「キャッシュ未到着」と伝える
+            // (= JS は no-data をキャッシュせず、次のホバーで再試行できるようにする)。
+            var cached = mainWindow.ImageCacheService?.Contains(url) ?? false;
+            var meta   = cached
+                ? await mainWindow.AiImageMetadataService!.TryGetAsync(url).ConfigureAwait(true)
+                : null;
+            if (wv.CoreWebView2 is null) return;
+            var json = JsonSerializer.Serialize(new
+            {
+                type      = "aiMetadata",
+                url,
+                cached,
+                hasData   = meta is { HasAiData: true },
+                model     = meta?.Model,
+                generator = meta?.Generator,
+                positive  = meta?.Positive,
+                negative  = meta?.Negative,
+            });
+            wv.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AiMeta] reply failed: {ex.Message}");
         }
     }
 
@@ -180,34 +268,7 @@ public partial class ThreadDisplayPane : UserControl
         }
     }
 
-    // ---- タブのクリック / ダブルクリック / 右クリック ----
-
-    private void ThreadTabItem_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not TabItem ti || ti.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
-        var cfg = main.CurrentConfig;
-        var action = TabClickHelper.PickClickAction(e,
-            cfg.ThreadTabCtrlClickAction,
-            cfg.ThreadTabShiftClickAction,
-            cfg.ThreadTabAltClickAction,
-            cfg.ThreadTabMiddleClickAction);
-        if (action is null or "none") return;
-        main.ExecuteThreadTabAction(tab, action);
-        e.Handled = true;
-    }
-
-    private void ThreadTabItem_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not TabItem ti || ti.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
-        if (e.ChangedButton != MouseButton.Left) return;
-        if (e.OriginalSource is DependencyObject src && TabClickHelper.FindAncestor<ButtonBase>(src) is not null) return;
-        var action = main.CurrentConfig.ThreadTabDoubleClickAction;
-        if (action is "" or "none") return;
-        main.ExecuteThreadTabAction(tab, action);
-        e.Handled = true;
-    }
+    // ---- タブの右クリックメニュー (中/ダブル/修飾+左 は ShortcutManager 側で dispatch) ----
 
     private void ThreadTabItem_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {

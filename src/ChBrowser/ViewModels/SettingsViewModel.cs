@@ -25,8 +25,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     // ---- AppConfig 由来のプロパティ (即時反映) ----
 
     [ObservableProperty] private string _hiDpiMode             = "Unaware";
+    [ObservableProperty] private bool   _enableKakikomiLog     = true;
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
+    // 認証カテゴリ (どんぐりメール認証)
+    [ObservableProperty] private string _donguriEmail          = "";
+    [ObservableProperty] private string _donguriPassword       = "";
+    /// <summary>認証パネルに表示するログイン状態のテキスト ("ログイン済" / "失敗: ..." / "試行中..." / "未設定")。
+    /// 設定画面オープン時に App から最新値を流し込む + ログイン試行のたびに更新する。</summary>
+    [ObservableProperty] private string _donguriLoginStatus    = "未試行";
     [ObservableProperty] private int    _popularThreshold      = 3;
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
@@ -34,6 +41,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private int    _idHighlightThreshold  = 5;
     [ObservableProperty] private int    _cacheMaxMb            = 1024;
     [ObservableProperty] private int    _viewerThumbnailSize   = 80;
+    [ObservableProperty] private bool   _viewerDetailsPaneDefaultOpen = true;
 
     // ---- Phase 11b: 3 ペインの 1 クリック設定 ----
     [ObservableProperty] private bool   _favoritesOpenOnSingleClick  = true;
@@ -43,21 +51,52 @@ public sealed partial class SettingsViewModel : ObservableObject
     // ---- バッチ処理の同時通信数 (お気に入りチェック等) ----
     [ObservableProperty] private int    _batchConcurrency            = 6;
 
-    // ---- Phase 11c: タブ動作 (スレ一覧タブ × 5 イベント、スレッドタブ × 5 イベント) ----
-    [ObservableProperty] private string _threadListTabMiddleClickAction = "close";
-    [ObservableProperty] private string _threadListTabCtrlClickAction   = "none";
-    [ObservableProperty] private string _threadListTabShiftClickAction  = "none";
-    [ObservableProperty] private string _threadListTabAltClickAction    = "none";
-    [ObservableProperty] private string _threadListTabDoubleClickAction = "refresh";
-    [ObservableProperty] private string _threadTabMiddleClickAction     = "close";
-    [ObservableProperty] private string _threadTabCtrlClickAction       = "none";
-    [ObservableProperty] private string _threadTabShiftClickAction      = "none";
-    [ObservableProperty] private string _threadTabAltClickAction        = "none";
-    [ObservableProperty] private string _threadTabDoubleClickAction     = "refresh";
+    // ---- 「タブ」カテゴリ — タブ幅設定 (旧クリックアクション設定はショートカット側へ移設済) ----
+    [ObservableProperty] private string _threadListTabWidthMode  = "chars";
+    [ObservableProperty] private int    _threadListTabWidthChars = 15;
+    [ObservableProperty] private int    _threadListTabWidthPx    = 200;
+    [ObservableProperty] private string _threadTabWidthMode      = "chars";
+    [ObservableProperty] private int    _threadTabWidthChars     = 15;
+    [ObservableProperty] private int    _threadTabWidthPx        = 200;
 
     /// <summary>HiDPI / TimeoutSec を起動後に変更すると true。バナーで再起動を促す。</summary>
     [ObservableProperty]
     private bool _restartRequired;
+
+    // ---- タブ幅モード切替用の bool ラッパ (XAML の RadioButton.IsChecked から TwoWay バインドする用) ----
+
+    public bool IsThreadListTabWidthByChars
+    {
+        get => string.Equals(ThreadListTabWidthMode, "chars", StringComparison.Ordinal);
+        set { if (value && !IsThreadListTabWidthByChars) ThreadListTabWidthMode = "chars"; }
+    }
+    public bool IsThreadListTabWidthByPx
+    {
+        get => string.Equals(ThreadListTabWidthMode, "px", StringComparison.Ordinal);
+        set { if (value && !IsThreadListTabWidthByPx) ThreadListTabWidthMode = "px"; }
+    }
+    public bool IsThreadTabWidthByChars
+    {
+        get => string.Equals(ThreadTabWidthMode, "chars", StringComparison.Ordinal);
+        set { if (value && !IsThreadTabWidthByChars) ThreadTabWidthMode = "chars"; }
+    }
+    public bool IsThreadTabWidthByPx
+    {
+        get => string.Equals(ThreadTabWidthMode, "px", StringComparison.Ordinal);
+        set { if (value && !IsThreadTabWidthByPx) ThreadTabWidthMode = "px"; }
+    }
+
+    // WidthMode 変更時に対応する bool ラッパの PropertyChanged を発火 (= RadioButton 同期用)
+    partial void OnThreadListTabWidthModeChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsThreadListTabWidthByChars));
+        OnPropertyChanged(nameof(IsThreadListTabWidthByPx));
+    }
+    partial void OnThreadTabWidthModeChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsThreadTabWidthByChars));
+        OnPropertyChanged(nameof(IsThreadTabWidthByPx));
+    }
 
     /// <summary>「画像」カテゴリで現在のキャッシュ使用量を表示するための文字列 (例: "512.3 MB / 1024 MB")。
     /// 設定ウィンドウを開くたびに <see cref="RefreshCacheSizeDisplay"/> で更新する。</summary>
@@ -67,6 +106,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     public IRelayCommand RestartNowCommand     { get; }
     public IRelayCommand OpenCacheFolderCommand{ get; }
     public IRelayCommand ClearCacheCommand     { get; }
+    /// <summary>通信カテゴリの「Cookie をすべて削除」ボタン用。
+    /// CookieJar 全削除 + DonguriState リセット + cookies.txt / state.json 永続化 + ステータスバー更新を呼ぶ。</summary>
+    public IRelayCommand ClearCookiesCommand   { get; }
+
+    /// <summary>認証カテゴリの「今すぐログイン」ボタン用。
+    /// 入力中の値を <see cref="FlushPendingSave"/> で即時保存 → ConfigStorage に反映 → App 側でログイン試行。</summary>
+    public IRelayCommand LoginNowCommand       { get; }
 
     // ---- Phase 11d: デザイン編集 ----
     public IRelayCommand<string>? OpenCssFileCommand { get; }
@@ -80,6 +126,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action                _clearCacheAction;
     private readonly Action                _openCacheFolderAction;
     private readonly Action                _restartNowAction;
+    private readonly Action?               _clearCookiesAction;
+    private readonly Action?               _loginNowAction;
     // Phase 11d
     private readonly Action<string>?       _openCssFileAction;
     private readonly Action?               _openThemeFolderAction;
@@ -100,7 +148,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action<string>?   openCssFileAction        = null,
         Action?           openThemeFolderAction    = null,
         Action?           reloadAllCssAction       = null,
-        Action?           extractDefaultCssAction  = null)
+        Action?           extractDefaultCssAction  = null,
+        Action?           clearCookiesAction       = null,
+        Action?           loginNowAction           = null)
     {
         _storage                 = storage;
         _initialConfig           = initial;
@@ -113,17 +163,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         _openThemeFolderAction   = openThemeFolderAction;
         _reloadAllCssAction      = reloadAllCssAction;
         _extractDefaultCssAction = extractDefaultCssAction;
+        _clearCookiesAction      = clearCookiesAction;
+        _loginNowAction          = loginNowAction;
 
-        // カテゴリ枠 — 設計書 §5.7 で確定したカテゴリのうち、Phase 11a で実装するもの 5 つを順に並べる。
-        // お気に入り / 板一覧 / スレッド一覧 / タブ動作 / デザイン編集 / NG / ショートカット / マウスジェスチャー
-        // は後続フェーズで追加。
+        // カテゴリ枠。NG / ショートカット / マウスジェスチャー は別ウィンドウ管理。
         Categories.Add(new("全般",         "HiDPI モード"));
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
+        Categories.Add(new("認証",         "どんぐり (5ch) のメール認証"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作"));
         Categories.Add(new("スレッド",     "人気レス閾値、標準表示モード、画像 HEAD しきい値"));
-        Categories.Add(new("タブ動作",     "スレ一覧タブ / スレッドタブのクリックイベントごとのアクション"));
+        Categories.Add(new("タブ",         "タブ幅 (スレ一覧タブ / スレッドタブ)"));
         Categories.Add(new("画像",         "キャッシュ上限、キャッシュフォルダを開く、キャッシュクリア"));
         Categories.Add(new("ビューア",     "タブのサムネイルサイズ"));
         Categories.Add(new("デザイン編集", "各ペインの CSS をエディタで開いて編集する"));
@@ -132,8 +183,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         // 初期値を AppConfig から流し込む (この間は保存させない)
         _suppressSave                = true;
         HiDpiMode                    = initial.HiDpiMode;
+        EnableKakikomiLog            = initial.EnableKakikomiLog;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
+        DonguriEmail                 = initial.DonguriEmail;
+        DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
@@ -141,20 +195,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         IdHighlightThreshold         = initial.IdHighlightThreshold;
         CacheMaxMb                   = initial.CacheMaxMb;
         ViewerThumbnailSize          = initial.ViewerThumbnailSize;
+        ViewerDetailsPaneDefaultOpen = initial.ViewerDetailsPaneDefaultOpen;
         FavoritesOpenOnSingleClick   = initial.FavoritesOpenOnSingleClick;
         BatchConcurrency             = initial.BatchConcurrency;
         BoardListOpenOnSingleClick   = initial.BoardListOpenOnSingleClick;
         ThreadListOpenOnSingleClick  = initial.ThreadListOpenOnSingleClick;
-        ThreadListTabMiddleClickAction = initial.ThreadListTabMiddleClickAction;
-        ThreadListTabCtrlClickAction   = initial.ThreadListTabCtrlClickAction;
-        ThreadListTabShiftClickAction  = initial.ThreadListTabShiftClickAction;
-        ThreadListTabAltClickAction    = initial.ThreadListTabAltClickAction;
-        ThreadListTabDoubleClickAction = initial.ThreadListTabDoubleClickAction;
-        ThreadTabMiddleClickAction     = initial.ThreadTabMiddleClickAction;
-        ThreadTabCtrlClickAction       = initial.ThreadTabCtrlClickAction;
-        ThreadTabShiftClickAction      = initial.ThreadTabShiftClickAction;
-        ThreadTabAltClickAction        = initial.ThreadTabAltClickAction;
-        ThreadTabDoubleClickAction     = initial.ThreadTabDoubleClickAction;
+        ThreadListTabWidthMode  = string.IsNullOrEmpty(initial.ThreadListTabWidthMode) ? "chars" : initial.ThreadListTabWidthMode;
+        ThreadListTabWidthChars = initial.ThreadListTabWidthChars;
+        ThreadListTabWidthPx    = initial.ThreadListTabWidthPx;
+        ThreadTabWidthMode      = string.IsNullOrEmpty(initial.ThreadTabWidthMode)     ? "chars" : initial.ThreadTabWidthMode;
+        ThreadTabWidthChars     = initial.ThreadTabWidthChars;
+        ThreadTabWidthPx        = initial.ThreadTabWidthPx;
         _suppressSave                = false;
 
         // Debounce タイマ — 連続変更でも 1 回の保存に集約
@@ -181,6 +232,15 @@ public sealed partial class SettingsViewModel : ObservableObject
                                                     () => _reloadAllCssAction is not null);
         ExtractDefaultCssCommand = new RelayCommand(() => _extractDefaultCssAction?.Invoke(),
                                                     () => _extractDefaultCssAction is not null);
+        ClearCookiesCommand      = new RelayCommand(() => _clearCookiesAction?.Invoke(),
+                                                    () => _clearCookiesAction is not null);
+        // 「今すぐログイン」: まず未保存の入力を確定 (= debounce 待ちをスキップして即 SaveAndApply) してから login。
+        // これがないと「メアド入れて即ボタン押す」で古い (= 空) 値で試行されてしまう。
+        LoginNowCommand          = new RelayCommand(() =>
+        {
+            FlushPendingSave();
+            _loginNowAction?.Invoke();
+        }, () => _loginNowAction is not null);
 
         RefreshCacheSizeDisplay();
     }
@@ -194,6 +254,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(SelectedCategory):
             case nameof(RestartRequired):
             case nameof(CacheSizeDisplay):
+            case nameof(DonguriLoginStatus):  // ログイン状態は表示専用 (ConfigStorage に書かない)
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -225,8 +286,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         Version                     = 1,
         HiDpiMode                   = HiDpiMode,
+        EnableKakikomiLog           = EnableKakikomiLog,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
+        DonguriEmail                = DonguriEmail,
+        DonguriPassword             = DonguriPassword,
         PopularThreshold            = PopularThreshold,
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
@@ -234,20 +298,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         IdHighlightThreshold        = IdHighlightThreshold,
         CacheMaxMb                  = CacheMaxMb,
         ViewerThumbnailSize         = ViewerThumbnailSize,
+        ViewerDetailsPaneDefaultOpen = ViewerDetailsPaneDefaultOpen,
         FavoritesOpenOnSingleClick  = FavoritesOpenOnSingleClick,
         BatchConcurrency            = BatchConcurrency,
         BoardListOpenOnSingleClick  = BoardListOpenOnSingleClick,
         ThreadListOpenOnSingleClick = ThreadListOpenOnSingleClick,
-        ThreadListTabMiddleClickAction = ThreadListTabMiddleClickAction,
-        ThreadListTabCtrlClickAction   = ThreadListTabCtrlClickAction,
-        ThreadListTabShiftClickAction  = ThreadListTabShiftClickAction,
-        ThreadListTabAltClickAction    = ThreadListTabAltClickAction,
-        ThreadListTabDoubleClickAction = ThreadListTabDoubleClickAction,
-        ThreadTabMiddleClickAction     = ThreadTabMiddleClickAction,
-        ThreadTabCtrlClickAction       = ThreadTabCtrlClickAction,
-        ThreadTabShiftClickAction      = ThreadTabShiftClickAction,
-        ThreadTabAltClickAction        = ThreadTabAltClickAction,
-        ThreadTabDoubleClickAction     = ThreadTabDoubleClickAction,
+        ThreadListTabWidthMode  = ThreadListTabWidthMode,
+        ThreadListTabWidthChars = ThreadListTabWidthChars,
+        ThreadListTabWidthPx    = ThreadListTabWidthPx,
+        ThreadTabWidthMode      = ThreadTabWidthMode,
+        ThreadTabWidthChars     = ThreadTabWidthChars,
+        ThreadTabWidthPx        = ThreadTabWidthPx,
     };
 
     public void RefreshCacheSizeDisplay()

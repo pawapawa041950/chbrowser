@@ -20,6 +20,8 @@ public sealed partial class PostFormViewModel : ObservableObject
     private readonly PostClient _postClient;
     private readonly Board      _board;
     private readonly string?    _threadKey;
+    /// <summary>レス書き込み時の元スレタイトル (kakikomi.txt 用)。新スレ立て時は空文字。</summary>
+    private readonly string     _threadTitle;
 
     public string DialogTitle { get; }
 
@@ -38,6 +40,13 @@ public sealed partial class PostFormViewModel : ObservableObject
     /// <summary>true で <see cref="Mail"/> に "sage" を自動投入。トグルで戻すと空に。</summary>
     [ObservableProperty]
     private bool _isSage;
+
+    /// <summary>送信時の認証モード (= どの Cookie 集合をリクエストに添付するか)。
+    /// 既定はコンストラクタ呼び出し側 (MainViewModel) が現在の どんぐり 状態を見て決める:
+    /// メール認証ログイン中なら MailAuth、acorn だけなら Cookie、なにもないなら None。
+    /// ユーザーは書き込みダイアログで RadioButton で切替可能。</summary>
+    [ObservableProperty]
+    private PostAuthMode _authMode = PostAuthMode.MailAuth;
 
     [ObservableProperty]
     private bool _isBusy;
@@ -62,23 +71,29 @@ public sealed partial class PostFormViewModel : ObservableObject
 
     public IAsyncRelayCommand SubmitCommand { get; }
 
-    /// <summary>レス書き込み用コンストラクタ。</summary>
-    public PostFormViewModel(PostClient postClient, Board board, string threadKey, string threadTitle)
+    /// <summary>レス書き込み用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
+    public PostFormViewModel(PostClient postClient, Board board, string threadKey, string threadTitle,
+                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth)
     {
-        _postClient = postClient;
-        _board      = board;
-        _threadKey  = threadKey;
-        DialogTitle = $"レスを書き込む: {threadTitle}";
+        _postClient  = postClient;
+        _board       = board;
+        _threadKey   = threadKey;
+        _threadTitle = threadTitle ?? "";
+        DialogTitle  = $"レスを書き込む: {threadTitle}";
+        AuthMode     = defaultAuthMode;
         SubmitCommand = new AsyncRelayCommand(SubmitAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(Message));
     }
 
-    /// <summary>スレ立て用コンストラクタ。</summary>
-    public PostFormViewModel(PostClient postClient, Board board)
+    /// <summary>スレ立て用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
+    public PostFormViewModel(PostClient postClient, Board board,
+                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth)
     {
-        _postClient = postClient;
-        _board      = board;
-        _threadKey  = null;
-        DialogTitle = $"新規スレッド作成: {board.BoardName}";
+        _postClient  = postClient;
+        _board       = board;
+        _threadKey   = null;
+        _threadTitle = "";
+        DialogTitle  = $"新規スレッド作成: {board.BoardName}";
+        AuthMode     = defaultAuthMode;
         SubmitCommand = new AsyncRelayCommand(SubmitAsync,
             () => !IsBusy && !string.IsNullOrWhiteSpace(Message) && !string.IsNullOrWhiteSpace(Subject));
     }
@@ -108,12 +123,14 @@ public sealed partial class PostFormViewModel : ObservableObject
         try
         {
             var req = new PostRequest(
-                Board:     _board,
-                ThreadKey: _threadKey,
-                Subject:   IsNewThread ? Subject : null,
-                Name:      Name,
-                Mail:      Mail,
-                Message:   Message);
+                Board:       _board,
+                ThreadKey:   _threadKey,
+                Subject:     IsNewThread ? Subject : null,
+                Name:        Name,
+                Mail:        Mail,
+                Message:     Message,
+                AuthMode:    AuthMode,
+                ThreadTitle: IsNewThread ? null : _threadTitle);
 
             var result = await _postClient.PostAsync(req, ct).ConfigureAwait(true);
             LastResult = result;

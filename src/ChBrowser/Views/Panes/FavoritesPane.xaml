@@ -68,17 +68,8 @@
                         Style="{StaticResource ToolbarIconButton}"
                         Click="FavCheckUpdates_Click"
                         ToolTip="お気に入りチェック (登録スレに新着があるか確認 → 更新スレを開く)">
-                    <Grid Width="16" Height="16">
-                        <!-- 270度の円弧 (時計回りに右→下→左→上) + 開始端の L 字テール (= 矢印の根本)。
-                             描画は 16x16 viewport いっぱいに。 -->
-                        <Path Stroke="#3070B0"
-                              StrokeThickness="1.6"
-                              StrokeStartLineCap="Round"
-                              StrokeEndLineCap="Round"
-                              StrokeLineJoin="Round"
-                              Fill="Transparent"
-                              Data="M 13.5,8 A 5.5,5.5 0 1 1 8,2.5 L 11.5,2.5 M 8,2.5 L 8,6" />
-                    </Grid>
+                    <TextBlock Text="🔄" FontSize="13"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Button>
                 <TextBlock Text="お気に入り" Padding="6,4" FontWeight="SemiBold" />
             </DockPanel>

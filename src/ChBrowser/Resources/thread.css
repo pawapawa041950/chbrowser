@@ -18,6 +18,17 @@ body {
     padding-right: 24px;  /* リッチスクロールバー専用領域を確保 (本文と被らないように) */
 }
 
+/* 書き込みダイアログのプレビューペイン用。
+   スレ全体を扱わない (= 1 レス表示のみ) ためリッチスクロールバーは無意味なので隠し、
+   その専用領域 (body の右パディング) も詰める。 */
+body.preview-mode {
+    padding-right: 0;
+}
+body.preview-mode #richScrollbar,
+body.preview-mode #scrollThumb {
+    display: none;
+}
+
 /* スレ表示内のフォーカスは一切使わない (テキスト選択は user-select で別途許可される)。
    フォーカスインジケータも全て非表示にし、focus 由来の auto-scroll を起こさせない。 */
 *:focus, *:focus-visible {
@@ -78,6 +89,24 @@ a.anchor.missing {
 }
 .image-slot:hover {
     border-color: #888;
+}
+
+/* AI 生成画像 (= comfyUI / SD WebUI Forge / etc.) を識別するバッジ。
+   サムネイル左上に絶対配置で重ねる。pointer-events:none で画像クリックの邪魔をしない。 */
+.image-slot-generator-badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background: #2C5F2C;
+    color: #FFFFFF;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 6px;
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 5;
+    white-space: nowrap;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* HEAD 待ち / 結果待ちのスロット (空) は無地の灰色枠 */
@@ -230,6 +259,14 @@ a.anchor.missing {
     background: #fffff0;
 }
 
+/* ポップアップ内では「返信N件」バッジを非表示にして、ホバーで「返信の返信ポップアップ」が
+   連鎖して開かないようにする (= 返信件数 / ワッチョイ / ID のいずれのポップアップでも、
+   表示するのは「対象のレスそのもの」だけで、それへの返信は出さない方針)。
+   バッジは元レス側にはそのまま残るので、通常スレ表示でのホバーは引き続き機能する。 */
+.anchor-popup .post-reply-count {
+    display: none;
+}
+
 .anchor-popup .anchor-missing {
     padding: 4px 8px;
     color: #999;
@@ -318,3 +355,99 @@ body.no-read-mark .track-readmark .marker { display: none; }
 }
 #scrollThumb:hover    { background: rgba(80, 80, 80, 0.55); }
 #scrollThumb.dragging { background: rgba(80, 80, 80, 0.7); cursor: grabbing; }
+
+/* ---- AI 生成画像のホバーポップアップ (= モデル / プロンプト / ネガティブの簡易表示) ---- */
+/* インライン画像のホバーで JS が body に append し、画像の上下いずれかに position:fixed で配置。
+   pointer-events:none にしてあるので、ポップアップ自身の上に乗ってもイベントは画像のホバー扱いのまま継続。 */
+.ai-meta-popup {
+    position: fixed;
+    z-index: 10000;
+    max-width: 480px;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #888;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #222;
+    /* ポップアップ自身でマウスを受けて、内部テキストの選択 / コピペを可能にする。
+       「画像 → ポップアップ」の経路は thread.js の hide ディレイで許容している。 */
+    pointer-events: auto;
+    user-select: text;
+}
+.ai-meta-popup-section + .ai-meta-popup-section { margin-top: 6px; }
+/* 生成元バッジ (= "ComfyUI" / "SD WebUI Forge" 等)。ポップアップ最上段に出して識別性を上げる。 */
+.ai-meta-popup-generator {
+    display: inline-block;
+    background: #2C5F2C;
+    color: #FFFFFF;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-bottom: 6px;
+}
+.ai-meta-popup-label {
+    font-size: 10px;
+    color: #555;
+    font-weight: bold;
+    margin-bottom: 2px;
+}
+.ai-meta-popup-value {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.ai-meta-popup-prompt   { color: #1a4080; }
+.ai-meta-popup-negative { color: #803010; }
+
+/* ========== レス番号クリックメニュー (返信 / NG登録) ========== */
+.post-no-menu {
+    position: absolute;
+    z-index: 1000;
+    background: #fff;
+    border: 1px solid #888;
+    box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.18);
+    font-size: 13px;
+    min-width: 140px;
+    padding: 2px 0;
+    user-select: none;
+}
+.post-no-menu .menu-item {
+    padding: 4px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.post-no-menu .menu-item.disabled {
+    color: #aaa;
+    cursor: default;
+}
+.post-no-menu .menu-item:not(.disabled):hover {
+    background: #1e88e5;
+    color: #fff;
+}
+/* 親項目 (NG) — 右端に展開矢印を出すため flex で左右配置。クリックで子をトグル。 */
+.post-no-menu .menu-parent {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+.post-no-menu .menu-arrow {
+    font-size: 9px;
+    color: #888;
+}
+.post-no-menu .menu-parent:hover .menu-arrow {
+    color: #fff;
+}
+
+/* 子項目 (名前 / ID / ワッチョイ) — 親より少し内側にインデント + 背景を僅かに薄くして階層を示す。 */
+.post-no-menu .menu-children {
+    background: #fafafa;
+    border-top: 1px solid #eee;
+    border-bottom: 1px solid #eee;
+}
+.post-no-menu .menu-child {
+    padding-left: 24px;
+}

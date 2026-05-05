@@ -38,6 +38,9 @@
     <EmbeddedResource Include="Resources\viewer.html" />
     <EmbeddedResource Include="Resources\viewer.css" />
     <EmbeddedResource Include="Resources\viewer.js" />
+    <EmbeddedResource Include="Resources\viewer-details.html" />
+    <EmbeddedResource Include="Resources\viewer-details.css" />
+    <EmbeddedResource Include="Resources\viewer-details.js" />
     <EmbeddedResource Include="Resources\shortcut-bridge.js" />
   </ItemGroup>
 

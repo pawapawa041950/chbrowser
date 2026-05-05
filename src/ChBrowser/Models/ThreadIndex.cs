@@ -9,4 +9,11 @@ namespace ChBrowser.Models;
 /// 「rect.bottom &lt;= viewport bottom」を満たす primary レス (= ツリーの子としての描画は除外) の
 /// 最大番号を JS が追跡し、増加時のみ C# に通知して更新する (= 値は減少しない)。
 /// dat 削除で idx.json ごと消えるため自動でリセットされる。</param>
-public sealed record ThreadIndex(int? LastReadPostNumber, int? LastFetchedPostCount, int? LastReadMarkPostNumber = null);
+/// <param name="OwnPostNumbers">「自分の書き込み」としてマークされているレス番号集合。
+/// レス番号メニュー (post.html の data-number 経由) からトグルできる。null は空集合と同義。
+/// dat 削除で idx.json ごと消えるため自動リセットされる。</param>
+public sealed record ThreadIndex(
+    int?   LastReadPostNumber,
+    int?   LastFetchedPostCount,
+    int?   LastReadMarkPostNumber = null,
+    int[]? OwnPostNumbers          = null);

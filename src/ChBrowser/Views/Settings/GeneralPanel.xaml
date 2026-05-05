@@ -15,9 +15,22 @@
         <ComboBox SelectedValue="{Binding HiDpiMode, Mode=TwoWay}"
                   SelectedValuePath="Tag"
                   Width="260"
-                  HorizontalAlignment="Left">
+                  HorizontalAlignment="Left"
+                  Margin="0,0,0,16">
             <ComboBoxItem Content="スケールしない (Unaware) — 既定" Tag="Unaware" />
             <ComboBoxItem Content="モニタごとに自動 (Per-Monitor V2)"   Tag="PerMonitorV2" />
         </ComboBox>
+
+        <!-- 書き込みログ (kakikomi.txt) ON/OFF。即時反映。 -->
+        <TextBlock Text="書き込みログ" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,4">
+            書き込みが成功するたびに、JaneXeno 互換フォーマットで <Run FontFamily="Consolas">data/kakikomi.txt</Run> に追記します。
+            ファイルは追記の瞬間だけ open するので、メモ帳等で同時に編集 / 保存しても問題ありません。
+        </TextBlock>
+        <CheckBox Content="kakikomi.txt に書き込み履歴を記録する"
+                  IsChecked="{Binding EnableKakikomiLog, Mode=TwoWay}"
+                  Margin="0,0,0,4" />
     </StackPanel>
 </UserControl>

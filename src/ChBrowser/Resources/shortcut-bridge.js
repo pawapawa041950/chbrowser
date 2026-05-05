@@ -53,6 +53,19 @@
         const directions = [];
         const SAMPLE_DISTANCE = 18;
 
+        // ダブルクリック用の自前カウンタ。
+        // ブラウザの e.detail を直接使うと、4 連クリックで detail=1,2,3,4 になり、
+        // 2 回目だけ「ダブルクリック」が発火して 3 回目以降は拾えない事象が発生する。
+        // 自前で数えて、ダブルが dispatch 成功した瞬間にリセットすることで
+        // 4 連クリックを 2 回のダブルクリックとして扱えるようにする。
+        // (トリプルクリックは「ダブルクリック 2 連発」と原理的に区別不能なため非対応)
+        let clickCount        = 0;
+        let lastClickAt       = 0;
+        let lastClickX        = 0;
+        let lastClickY        = 0;
+        const CLICK_INTERVAL_MS = 500; // この間隔以内のクリックを連続扱い (Win 標準のダブルクリック相当)
+        const CLICK_RADIUS_PX   = 4;   // 位置がこれ以上ずれたら連続でないと見做してカウンタ初期化
+
         // 右ボタンが現在押下されているかを Pointer Event の buttons フィールドから判定する。
         // ブラウザ環境では Win32 の SetCapture 相当が無いので、WebView の document を出ると
         // mouseup を観測できない場合がある。次に届く mousemove で buttons & 2 = 0 なら
@@ -176,16 +189,33 @@
 
             let name = null;
             if (e.button === 0) {
-                if (e.detail === 2)      name = 'ダブルクリック';
-                else if (e.detail === 3) name = 'トリプルクリック';
-                else                     return;
+                // 自前のクリックカウンタで連続クリックを判定。
+                // - 前回クリックから CLICK_INTERVAL_MS 内 + CLICK_RADIUS_PX 内なら count++
+                // - そうでなければ count=1 (= 別の click sequence の開始)
+                const now  = Date.now();
+                const dt   = now - lastClickAt;
+                const dx   = e.clientX - lastClickX;
+                const dy   = e.clientY - lastClickY;
+                const near = (dx * dx + dy * dy) <= (CLICK_RADIUS_PX * CLICK_RADIUS_PX);
+                clickCount   = (dt < CLICK_INTERVAL_MS && near) ? (clickCount + 1) : 1;
+                lastClickAt  = now;
+                lastClickX   = e.clientX;
+                lastClickY   = e.clientY;
+
+                if (clickCount !== 2) return;
+                name = 'ダブルクリック';
             } else if (e.button === 1) {
                 name = '中クリック';
             } else {
                 return;
             }
             const desc = buildModifiers(e) + name;
-            trySuppressAndDispatch('shortcut', desc, e);
+            // ダブルクリックが dispatch 成功したら次の click sequence をすぐ始められるよう reset。
+            // これで 4 連クリック = 2 回のダブルクリックとして扱える。
+            // 中クリック等は clickCount を触らない (= リセットされても挙動同じ)。
+            if (trySuppressAndDispatch('shortcut', desc, e) && clickCount === 2) {
+                clickCount = 0;
+            }
         }, true);
 
         document.addEventListener('mousemove', function(e) {

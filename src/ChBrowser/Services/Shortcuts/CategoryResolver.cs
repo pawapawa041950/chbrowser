@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -17,6 +18,44 @@ namespace ChBrowser.Services.Shortcuts;
 /// どこにも該当しなければ「メインウィンドウ」(= chrome / メニューバー / アドレスバー上)。</para></summary>
 public static class CategoryResolver
 {
+    /// <summary>「全体」カテゴリ — どのペインから入力しても発火させたいアクション用。
+    /// <see cref="Resolve"/> はこの値を返さない (= 開始位置から resolve される値ではなく
+    /// dispatch 時のフォールバック専用)。<see cref="ShortcutManager.Apply"/> が他全カテゴリへ
+    /// マージするので、ペイン側に同 descriptor が無ければ「全体」のバインドが効く。</summary>
+    public const string GlobalCategory = "全体";
+
+    /// <summary>マウスジェスチャーの設定を許可しないカテゴリ。
+    /// 「スレ一覧のタブ領域」はタブストリップ上で右ドラッグの開始判定が
+    /// タブ移動操作と競合しがちなため、このカテゴリでは固定でジェスチャー不可とする。</summary>
+    public const string ThreadListTabsCategory = "スレ一覧のタブ領域";
+
+    /// <summary>ChBrowser がディスパッチ対象にしうる全カテゴリ。
+    /// <see cref="ShortcutManager.Apply"/> の「全体」マージ対象として使う
+    /// (ShortcutRegistry に登録の無いカテゴリ — 現状の お気に入りペイン / 板一覧ペイン — にも
+    /// 「全体」のバインドを届けるため、registry ではなくこちらをマスターにする)。</summary>
+    public static readonly IReadOnlyList<string> AllCategories = new[]
+    {
+        "メインウィンドウ",
+        "お気に入りペイン",
+        "板一覧ペイン",
+        "スレ一覧表示領域",
+        ThreadListTabsCategory,
+        "スレッド表示領域",
+        "スレッドタブ表示領域",
+        "ビューアウィンドウ",
+        GlobalCategory,
+    };
+
+    /// <summary>マウス入力 (= 修飾キー + クリック / ホイール) を当該カテゴリに割り当てて良いか。
+    /// 「全体」は通常 UI 操作と衝突しやすいためマウス入力不可。</summary>
+    public static bool IsMouseEditable(string category)
+        => category != GlobalCategory;
+
+    /// <summary>マウスジェスチャーを当該カテゴリに割り当てて良いか。
+    /// 「スレ一覧のタブ領域」はタブストリップ上の右ドラッグ判定が不安定なため不可。</summary>
+    public static bool IsGestureEditable(string category)
+        => category != ThreadListTabsCategory;
+
     public static string Resolve(DependencyObject? source)
     {
         bool passedTabHeader = false;

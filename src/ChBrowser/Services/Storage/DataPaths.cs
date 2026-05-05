@@ -50,6 +50,10 @@ public sealed class DataPaths
     /// <summary>どんぐりの推定 Lv・最終取得時刻などのメタを置く JSON。Phase 8。</summary>
     public string DonguriStateJsonPath => Path.Combine(DonguriDir, "state.json");
 
+    /// <summary>書き込み記録 (kakikomi.txt)。Jane Xeno フォーマット互換、UTF-8 (BOM なし) + CRLF、append-only。
+    /// ユーザがメモ帳等で同時編集できるよう、書込時のみ open → 即 close する運用。</summary>
+    public string KakikomiTxtPath => Path.Combine(Root, "kakikomi.txt");
+
     /// <summary>板の保存ディレクトリ。host から root domain を判定。</summary>
     public string BoardDir(string host, string directoryName)
     {

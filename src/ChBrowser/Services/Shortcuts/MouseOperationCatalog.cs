@@ -22,7 +22,7 @@ public static class MouseOperationCatalog
         new Option("ホイールアップ",                 "ホイールアップ"),
         new Option("ホイールダウン",                 "ホイールダウン"),
         new Option("ダブルクリック",                 "ダブルクリック"),
-        new Option("トリプルクリック",               "トリプルクリック"),
+        // トリプルクリックは原理的に「ダブルクリック 2 連発」と区別できず、誤発火源になるため非対応。
 
         // Shift +
         new Option("Shift + 左クリック",             "Shift+左クリック"),

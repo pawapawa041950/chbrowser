@@ -12,6 +12,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
 using ChBrowser.Services.Donguri;
+using ChBrowser.Services.Storage;
+// ChBrowser.Models.PostAuthMode を SendAsync シグネチャで使うが、namespace 既に上で using 済
 
 namespace ChBrowser.Services.Api;
 
@@ -47,11 +49,14 @@ public sealed class PostClient
 
     private readonly MonazillaClient _http;
     private readonly DonguriService  _donguri;
+    /// <summary>書き込み成功時に kakikomi.txt へ append する (任意 — 注入されていなければ no-op)。</summary>
+    private readonly KakikomiLog?    _kakikomi;
 
-    public PostClient(MonazillaClient http, DonguriService donguri)
+    public PostClient(MonazillaClient http, DonguriService donguri, KakikomiLog? kakikomi = null)
     {
-        _http    = http;
-        _donguri = donguri;
+        _http     = http;
+        _donguri  = donguri;
+        _kakikomi = kakikomi;
     }
 
     /// <summary>1 件の投稿を実行して結果を返す。CookieJar/state.json は終了時に必ず保存。</summary>
@@ -64,8 +69,8 @@ public sealed class PostClient
         try
         {
             // ---- 1 段目 ----
-            Debug.WriteLine($"[PostClient] STAGE 1 → {uri}");
-            var first  = await SendAsync(uri, origBody, request.Board.Url, ct).ConfigureAwait(false);
+            Debug.WriteLine($"[PostClient] STAGE 1 → {uri} (auth={request.AuthMode})");
+            var first  = await SendAsync(uri, origBody, request.Board.Url, request.AuthMode, ct).ConfigureAwait(false);
             var html1  = await DecodeSjisHtmlAsync(first, ct).ConfigureAwait(false);
             DumpResponseDiagnostics("STAGE 1", first, html1);
             var class1 = Classify(html1);
@@ -73,6 +78,7 @@ public sealed class PostClient
             if (class1.Outcome == PostOutcome.Success)
             {
                 _donguri.NoteWriteSucceeded();
+                AppendKakikomi(request);
                 return class1;
             }
             if (class1.Outcome != PostOutcome.NeedsConfirm)
@@ -92,12 +98,12 @@ public sealed class PostClient
             var body2      = hiddenBody ?? origBody;
             Debug.WriteLine($"[PostClient] STAGE 2 → {uri} (body source: {(hiddenBody is null ? "fallback original" : "extracted from form")})");
 
-            var second = await SendAsync(uri, body2, request.Board.Url, ct).ConfigureAwait(false);
+            var second = await SendAsync(uri, body2, request.Board.Url, request.AuthMode, ct).ConfigureAwait(false);
             var html2  = await DecodeSjisHtmlAsync(second, ct).ConfigureAwait(false);
             DumpResponseDiagnostics("STAGE 2", second, html2);
             var class2 = Classify(html2);
 
-            if (class2.Outcome == PostOutcome.Success)        _donguri.NoteWriteSucceeded();
+            if (class2.Outcome == PostOutcome.Success)        { _donguri.NoteWriteSucceeded(); AppendKakikomi(request); }
             if (class2.Outcome == PostOutcome.BrokenAcorn)    _donguri.HandleBrokenAcorn();
             return class2;
         }
@@ -224,7 +230,7 @@ public sealed class PostClient
         return sb.ToString();
     }
 
-    private async Task<HttpResponseMessage> SendAsync(Uri uri, byte[] body, string referer, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendAsync(Uri uri, byte[] body, string referer, PostAuthMode authMode, CancellationToken ct)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -236,7 +242,7 @@ public sealed class PostClient
         };
         req.Headers.TryAddWithoutValidation("Referer", referer);
         req.Headers.TryAddWithoutValidation("Origin",  $"{uri.Scheme}://{uri.Host}");
-        _donguri.ApplyToRequest(req);
+        _donguri.ApplyToRequest(req, authMode);
 
         var resp = await _http.Http.SendAsync(req, ct).ConfigureAwait(false);
         _donguri.MergeFromResponse(resp);
@@ -296,4 +302,18 @@ public sealed class PostClient
 
     private static string ShortenForUser(string s)
         => s.Length <= 200 ? s : s[..200] + "…";
+
+    /// <summary>kakikomi.txt にエントリを追記 (KakikomiLog 注入時のみ)。
+    /// PostRequest から JaneXeno 形式に必要な値を集約する。失敗は KakikomiLog 内で吸収。</summary>
+    private void AppendKakikomi(PostRequest req)
+    {
+        if (_kakikomi is null) return;
+        _kakikomi.AppendEntry(new KakikomiEntry(
+            When:    DateTime.Now,
+            Subject: req.EffectiveSubject,
+            Url:     req.PageUrl,
+            Name:    req.Name,
+            Mail:    req.Mail,
+            Body:    req.Message));
+    }
 }

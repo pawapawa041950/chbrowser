@@ -1,0 +1,98 @@
+<UserControl x:Class="ChBrowser.Views.Settings.TabPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <!--
+      旧「スレッド一覧タブ」「スレッドタブ」カテゴリの統合先 (= "タブ" カテゴリ)。
+      クリックアクション (中/Ctrl+左/Shift+左/Alt+左/ダブル) はショートカット & ジェスチャー
+      設定ウィンドウ側に移設したため、ここはタブ幅の設定だけを集約する。
+    -->
+    <StackPanel>
+
+        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,12">
+            タブの横幅。タブを多数開いた際は自動で複数行に折り返します。
+            「文字数指定」は OS の既定 UI フォントを基準に概算で px 換算します。
+            <LineBreak />
+            タブのクリック動作 (中クリックで閉じる、ダブルクリックで更新 など) は
+            「ツール → ショートカット &amp; ジェスチャー...」の「スレ一覧のタブ領域」
+            「スレッドタブ表示領域」カテゴリで設定します。
+        </TextBlock>
+
+        <!-- ====== スレ一覧タブ 幅 ====== -->
+        <TextBlock Text="スレ一覧タブの幅" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <Grid HorizontalAlignment="Left" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <RadioButton Grid.Row="0" Grid.Column="0" Margin="0,2,12,2"
+                         Content="文字数指定"
+                         GroupName="ThreadListTabWidth"
+                         IsChecked="{Binding IsThreadListTabWidthByChars, Mode=TwoWay}"
+                         VerticalAlignment="Center" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,2"
+                     Text="{Binding ThreadListTabWidthChars, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=400}"
+                     IsEnabled="{Binding IsThreadListTabWidthByChars}"
+                     VerticalContentAlignment="Center" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="文字" Margin="6,2" VerticalAlignment="Center" />
+
+            <RadioButton Grid.Row="1" Grid.Column="0" Margin="0,2,12,2"
+                         Content="ピクセル指定"
+                         GroupName="ThreadListTabWidth"
+                         IsChecked="{Binding IsThreadListTabWidthByPx, Mode=TwoWay}"
+                         VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,2"
+                     Text="{Binding ThreadListTabWidthPx, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=400}"
+                     IsEnabled="{Binding IsThreadListTabWidthByPx}"
+                     VerticalContentAlignment="Center" />
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="px" Margin="6,2" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- ====== スレッドタブ 幅 ====== -->
+        <TextBlock Text="スレッドタブの幅" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <Grid HorizontalAlignment="Left">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="80" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <RadioButton Grid.Row="0" Grid.Column="0" Margin="0,2,12,2"
+                         Content="文字数指定"
+                         GroupName="ThreadTabWidth"
+                         IsChecked="{Binding IsThreadTabWidthByChars, Mode=TwoWay}"
+                         VerticalAlignment="Center" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,2"
+                     Text="{Binding ThreadTabWidthChars, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=400}"
+                     IsEnabled="{Binding IsThreadTabWidthByChars}"
+                     VerticalContentAlignment="Center" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="文字" Margin="6,2" VerticalAlignment="Center" />
+
+            <RadioButton Grid.Row="1" Grid.Column="0" Margin="0,2,12,2"
+                         Content="ピクセル指定"
+                         GroupName="ThreadTabWidth"
+                         IsChecked="{Binding IsThreadTabWidthByPx, Mode=TwoWay}"
+                         VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,2"
+                     Text="{Binding ThreadTabWidthPx, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=400}"
+                     IsEnabled="{Binding IsThreadTabWidthByPx}"
+                     VerticalContentAlignment="Center" />
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="px" Margin="6,2" VerticalAlignment="Center" />
+        </Grid>
+
+    </StackPanel>
+</UserControl>

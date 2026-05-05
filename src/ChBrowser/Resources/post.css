@@ -20,6 +20,12 @@
 
 .post-no {
     color: #006400;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.post-no:hover {
+    color: #003300;
 }
 
 /* レス番号の色: 自分宛の返信があるレスを目立たせる。
@@ -31,6 +37,25 @@
 
 .post-name {
     color: #006400;
+}
+
+/* メール欄 (sage 等)。post-name と post-meta の中間色で軽くグレーに。 */
+.post-mail {
+    color: #888;
+}
+
+/* 「自分の書き込み」バッジ。post-no の右、post-name の左に挿入される (post.html テンプレート参照)。
+ * post-no メニュー → 「自分の書き込みに登録」/「自分の書き込み解除」でトグル。 */
+.post-own {
+    display: inline-block;
+    padding: 0 4px;
+    background: #1e88e5;
+    color: #fff;
+    font-size: 11px;
+    font-weight: bold;
+    border-radius: 2px;
+    margin: 0 2px;
+    vertical-align: middle;
 }
 
 .post-meta {

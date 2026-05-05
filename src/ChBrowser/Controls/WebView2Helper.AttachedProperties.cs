@@ -80,6 +80,9 @@ public static partial class WebView2Helper
         var binding      = wv.DataContext as IThreadDisplayBinding;
         var scrollTarget = binding?.ScrollTargetPostNumber;
         var readMark     = binding?.ReadMarkPostNumber;
+        // 「自分の書き込み」のレス番号集合も併送 (= JS 側で「自分」バッジ表示)。
+        // 集合は通常極小 (数件) なので毎バッチに同梱しても無害。
+        var ownPosts     = binding?.OwnPostNumbers ?? System.Array.Empty<int>();
 
         var json = JsonSerializer.Serialize(new
         {
@@ -88,8 +91,30 @@ public static partial class WebView2Helper
             scrollTarget,
             readMarkPostNumber = readMark,
             incremental        = data.IsIncremental,
+            ownPostNumbers     = ownPosts,
         }, PostJsonOptions);
 
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // OwnPostsUpdate (スレ表示: 「自分の書き込み」マークのトグル増分通知)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty OwnPostsUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "OwnPostsUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnOwnPostsUpdateChanged));
+
+    public static object? GetOwnPostsUpdate(DependencyObject d) => d.GetValue(OwnPostsUpdateProperty);
+    public static void    SetOwnPostsUpdate(DependencyObject d, object? value) => d.SetValue(OwnPostsUpdateProperty, value);
+
+    private static void OnOwnPostsUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is null) return;
+        var json = JsonSerializer.Serialize(new { type = "updateOwnPosts", value = e.NewValue }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

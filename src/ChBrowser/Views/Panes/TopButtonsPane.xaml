@@ -1,0 +1,24 @@
+<UserControl x:Class="ChBrowser.Views.Panes.TopButtonsPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
+    <!--
+      お気に入り直下の「上ボタン」フォルダの中身を Chrome のブックマークバー風に並べる固定ペイン。
+      MainWindow から DockPanel.Dock=Top で配置。Visibility は MainViewModel.IsTopButtonsBarVisible に bind。
+
+      MenuItem ツリーは code-behind で MainViewModel.TopButtonsItems から再帰生成する
+      (= folder → 子を持つ MenuItem、leaf (board/thread) → Click ハンドラ付き MenuItem)。
+    -->
+    <Border BorderBrush="{StaticResource PaneBorderBrush}"
+            BorderThickness="0,0,0,1"
+            Background="{x:Static SystemColors.ControlBrush}"
+            Padding="2,1">
+        <Menu x:Name="BarMenu"
+              Background="Transparent"
+              FontSize="12" />
+    </Border>
+</UserControl>

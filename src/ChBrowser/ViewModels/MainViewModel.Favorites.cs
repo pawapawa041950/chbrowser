@@ -94,7 +94,12 @@ public sealed partial class MainViewModel
         }
 
         foreach (var listTab in ThreadListTabs)
+        {
             listTab.SyncFavoritedFromKeySet(favKeys);
+            // 板タブ自身がお気に入り登録済みか (= スレ一覧ペインのツールバー★ボタンの押下状態)
+            listTab.IsBoardFavorited = listTab.Board is not null
+                && Favorites.FindBoard(listTab.Board.Host, listTab.Board.DirectoryName) is not null;
+        }
     }
 
     /// <summary>D&amp;D による移動を実行。target が null なら root 末尾、folder なら配下、それ以外は target の直後に。</summary>
@@ -351,12 +356,13 @@ public sealed partial class MainViewModel
         StatusMessage = $"フォルダ「{name}」を作成しました";
     }
 
-    /// <summary>フォルダ名を変更して保存。</summary>
+    /// <summary>フォルダ名を変更して保存。
+    /// <see cref="FavoritesViewModel.RenameFolder"/> 経由で呼ぶことで Save + Changed 通知が同時に走り、
+    /// MainViewModel が購読している RefreshFavoritesHtml が連動して再描画される。</summary>
     public void RenameFavoriteFolder(FavoriteFolderViewModel folder, string newName)
     {
         if (string.IsNullOrWhiteSpace(newName) || folder.Name == newName) return;
-        folder.Name = newName;
-        Favorites.Save();
+        Favorites.RenameFolder(folder, newName);
         StatusMessage = $"フォルダ名を「{newName}」に変更しました";
     }
 

@@ -35,6 +35,10 @@
 
     let allPosts = [];
     let postsByNumber = new Map();
+    /** 「自分の書き込み」としてマークされているレス番号集合。
+     *  appendPosts のペイロード ownPostNumbers で初期化 / 上書き、
+     *  updateOwnPosts メッセージで増分更新される。renderPost のレンダ判定に使う。 */
+    let ownPostNumbers = new Set();
     /** num → 当該レスを >>参照しているレス番号配列。renderCurrentViewMode で全再構築、
      *  appendPosts (flat) で増分更新。返信数バッジ生成のために常に最新を保つ。 */
     let currentReverseIndex = new Map();
@@ -444,6 +448,7 @@
         return {
             number:         num,
             name:           buildBodyHtml(p.name || ''),
+            mail:           p.mail || '',            // メール欄 (sage 等)。RAW_TEMPLATE_VARS に含めないので escape 適用。
             date:           p.dateText || '',
             id:             p.id || '',
             body:           built.body,
@@ -452,6 +457,7 @@
             replyNumbers:   replies.join(','),       // バッジの data-replies 用 (ホバーポップアップで使う)
             hasFewReplies:  count >= 1 && count < 3, // 1-2 件 → ピンク
             hasManyReplies: count >= 3,              // 3+ 件 → 赤
+            isOwn:          ownPostNumbers.has(num), // 「自分の書き込み」バッジ表示用
             isEmbedded:     !!isEmbedded,
             domId:          !omitId,
             children:       children || '',
@@ -472,11 +478,13 @@
         let postNoCls = 'post-no';
         if (data.hasManyReplies) postNoCls += ' has-replies-many';
         else if (data.hasFewReplies) postNoCls += ' has-replies-few';
-        html += '<span class="' + postNoCls + '">' + data.number + ': </span>';
+        html += '<span class="' + postNoCls + '" data-number="' + data.number + '" role="button" tabindex="0">' + data.number + ': </span>';
         html += '<span class="post-reply-count" data-replies="' + escapeHtml(data.replyNumbers) + '">';
         if (data.replyCount > 0) html += '返信 ' + data.replyCount + ' 件';
         html += '</span>';
-        html += '<span class="post-name">' + data.name + '</span>';
+        if (data.isOwn) html += ' <span class="post-own">自分</span>';
+        html += ' <span class="post-name">' + data.name + '</span>';
+        if (data.mail) html += ' <span class="post-mail">[' + escapeHtml(data.mail) + ']</span>';
         html += '<span class="post-meta">  ' + escapeHtml(data.date);
         if (data.id) html += ' ID:' + escapeHtml(data.id);
         html += '</span>';
@@ -1225,6 +1233,43 @@
             icon.className = 'media-play-icon';
             slot.appendChild(icon);
         }
+
+        // 画像ロード完了後、AI 生成メタを取りにいって generator バッジを overlay する。
+        // load イベントのタイミングではキャッシュ書き込み (WebResourceResponseReceived → SaveAsync)
+        // がまだ間に合わないことがあるので 500ms 遅延でリクエストする。
+        // 既にメタが in-memory cache にあれば即座にバッジを当てる (= 再ロード時の高速パス)。
+        const cached = aiMetaCache.get(url);
+        if (cached && cached !== 'pending' && cached !== 'no-data') {
+            applyGeneratorBadge(slot, cached);
+        } else if (cached !== 'no-data' && cached !== 'pending') {
+            img.addEventListener('load', function () {
+                setTimeout(function () { requestAiMetaForBadge(url); }, 500);
+            }, { once: true });
+        }
+    }
+
+    /** generator バッジを slot 左上に overlay。既に貼ってあるなら何もしない (idempotent)。 */
+    function applyGeneratorBadge(slot, meta) {
+        if (!meta || !meta.generator) return;
+        if (slot.querySelector(':scope > .image-slot-generator-badge')) return;
+        const badge = document.createElement('span');
+        badge.className   = 'image-slot-generator-badge';
+        badge.textContent = meta.generator;
+        slot.appendChild(badge);
+    }
+
+    /** バッジ用に AI メタデータを要求 (まだ pending/取得済みでないなら)。
+     *  通常の hover popup と同じ aiMetadataRequest を投げ、レスポンスは onAiMetadataResponse 内で
+     *  該当 slot を全 querySelectorAll で見つけてバッジを当てる。 */
+    function requestAiMetaForBadge(url) {
+        if (!url) return;
+        const cached = aiMetaCache.get(url);
+        if (cached === 'pending' || cached === 'no-data') return;
+        if (cached) return; // 既にデータあり → 既に applyGeneratorBadge 済 (or 該当 slot 描画時に当てる)
+        aiMetaCache.set(url, 'pending');
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'aiMetadataRequest', url: url });
+        }
     }
 
     /**
@@ -1298,6 +1343,195 @@
             if (slot.dataset.src === url) applyMetaToSlot(slot, meta);
         });
     }
+
+    // ============================================================
+    // AI 生成画像メタ (Stable Diffusion WebUI infotext) のホバーポップアップ
+    //
+    // 動作概要:
+    //   - インライン画像 (.image-slot.loaded > img.inline-image) にマウスが乗る
+    //   - JS が { type:'aiMetadataRequest', url } を C# に送信
+    //   - C# がキャッシュ済み画像から PNG/JPEG/WebP のメタを抽出し
+    //     { type:'aiMetadata', url, hasData, model, positive, negative } で返す
+    //   - hasData=true なら画像の近くにポップアップを表示。データ無しなら何もしない。
+    //
+    // 結果は url -> ('pending'|'no-data'|{model,positive,negative}) で in-memory キャッシュ。
+    // 同じ画像に何度ホバーしても要求は 1 回。
+    // ============================================================
+    const aiMetaCache  = new Map();      // url → 'pending' | 'no-data' | {model, positive, negative}
+    let   aiPopupEl    = null;
+    let   aiHoverUrl   = null;           // 現在ホバー中の画像 URL (= レスポンス到着時に当該URLなら表示)
+    let   aiHoverImg   = null;           // 現在ホバー中の <img> 要素 (= ポップアップ位置決め用)
+    let   aiPopupHideTimer = null;       // 「画像離脱 → ポップアップ離脱」を許容するための遅延 hide タイマー
+
+    /** N ミリ秒後に hide を予約 (= 画像から離れた瞬間に hide すると、ポップアップに乗り移る前に消えてしまう)。
+     *  既にタイマーが走っていれば張り直す。 */
+    function scheduleHideAiPopup(delayMs) {
+        if (aiPopupHideTimer) clearTimeout(aiPopupHideTimer);
+        aiPopupHideTimer = setTimeout(function () {
+            aiPopupHideTimer = null;
+            hideAiPopup();
+        }, delayMs);
+    }
+
+    /** 予約済の hide をキャンセル (= ポップアップに乗り移った / 別画像にホバーし直した)。 */
+    function cancelHideAiPopup() {
+        if (aiPopupHideTimer) {
+            clearTimeout(aiPopupHideTimer);
+            aiPopupHideTimer = null;
+        }
+    }
+
+    function ensureAiPopup() {
+        if (aiPopupEl) return aiPopupEl;
+        const el = document.createElement('div');
+        el.className = 'ai-meta-popup';
+        el.style.display = 'none';
+        // ポップアップ自身に乗り移ったら hide をキャンセル → 内部テキストを選択してコピペできる。
+        // ポップアップから離れたら 150ms 遅延で hide (画像へ戻る経路に対するヒステリシス)。
+        el.addEventListener('mouseenter', cancelHideAiPopup);
+        el.addEventListener('mouseleave', function () { scheduleHideAiPopup(150); });
+        document.body.appendChild(el);
+        aiPopupEl = el;
+        return el;
+    }
+
+    function showAiPopup(targetImg, meta) {
+        if (!meta || (!meta.generator && !meta.model && !meta.positive && !meta.negative)) return;
+        const popup = ensureAiPopup();
+
+        let html = '';
+        // 生成元 (ComfyUI / SD WebUI Forge 等) を最上段に小さくバッジ風で表示。
+        if (meta.generator) {
+            html += '<div class="ai-meta-popup-generator">' + escapeHtml(meta.generator) + '</div>';
+        }
+        if (meta.model) {
+            html += '<div class="ai-meta-popup-section">'
+                  + '<div class="ai-meta-popup-label">モデル</div>'
+                  + '<div class="ai-meta-popup-value">' + escapeHtml(meta.model) + '</div></div>';
+        }
+        if (meta.positive) {
+            html += '<div class="ai-meta-popup-section">'
+                  + '<div class="ai-meta-popup-label">プロンプト</div>'
+                  + '<div class="ai-meta-popup-value ai-meta-popup-prompt">' + escapeHtml(meta.positive) + '</div></div>';
+        }
+        if (meta.negative) {
+            html += '<div class="ai-meta-popup-section">'
+                  + '<div class="ai-meta-popup-label">ネガティブプロンプト</div>'
+                  + '<div class="ai-meta-popup-value ai-meta-popup-negative">' + escapeHtml(meta.negative) + '</div></div>';
+        }
+        if (!html) return;
+
+        popup.innerHTML = html;
+        popup.style.display = 'block';
+
+        // 画像の真下に出すのが基本。下に出るとビューポート下端を超える場合は上に。
+        // 左右ははみ出さないように 8px マージンでクランプ。
+        const r  = targetImg.getBoundingClientRect();
+        const pr = popup.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const margin = 8;
+
+        let left = r.left;
+        if (left + pr.width > vw - margin) left = vw - pr.width - margin;
+        if (left < margin) left = margin;
+
+        let top;
+        if (r.bottom + pr.height + 4 < vh - margin)         top = r.bottom + 4;
+        else if (r.top - pr.height - 4 > margin)            top = r.top - pr.height - 4;
+        else                                                top = Math.max(margin, vh - pr.height - margin);
+
+        popup.style.left = Math.round(left) + 'px';
+        popup.style.top  = Math.round(top)  + 'px';
+    }
+
+    function hideAiPopup() {
+        if (aiPopupEl) aiPopupEl.style.display = 'none';
+        aiHoverUrl = null;
+        aiHoverImg = null;
+    }
+
+    /** mouseover (delegation) で .inline-image に到達したら呼ばれる。
+     *  キャッシュ命中なら即座にポップアップ表示、未取得なら C# に問い合わせる。 */
+    function onImageHoverEnter(img) {
+        // ポップアップから画像に戻ってきた経路で残存 hide タイマーを必ず止める。
+        // 初回ホバーや別画像へ移った場合でも cancel するだけなら無害なので無条件で呼ぶ。
+        cancelHideAiPopup();
+
+        const slot = img.closest && img.closest('.image-slot.loaded');
+        if (!slot) return;
+        // dataset.src は (resolvedUrl で上書き済の) 実体画像 URL。これがローカルキャッシュのキー。
+        const url = slot.dataset.src;
+        if (!url) return;
+
+        aiHoverUrl = url;
+        aiHoverImg = img;
+
+        const cached = aiMetaCache.get(url);
+        if (cached === 'no-data' || cached === 'pending') return;
+        if (cached) { showAiPopup(img, cached); return; }
+
+        aiMetaCache.set(url, 'pending');
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'aiMetadataRequest', url: url });
+        }
+    }
+
+    /** mouseout (delegation) で .inline-image を離れたら 200ms 後に hide を予約。
+     *  ポップアップに乗り移ればその間に cancel される (= 表示継続)。 */
+    function onImageHoverLeave(img) {
+        if (aiHoverImg === img) scheduleHideAiPopup(200);
+    }
+
+    /** C# からの aiMetadata レスポンスを処理。 */
+    function onAiMetadataResponse(msg) {
+        if (typeof msg.url !== 'string') return;
+        if (!msg.hasData) {
+            // hasData=false かつ cached=true のみ「この画像は AI 情報なし」を確定キャッシュ。
+            // cached=false (= 画像保存とリクエストが競合してキャッシュ未到着) は再試行を許す。
+            if (msg.cached) {
+                aiMetaCache.set(msg.url, 'no-data');
+            } else {
+                aiMetaCache.delete(msg.url);
+                // 表示中のサムネがある間は 1.5s 後に 1 度だけ自動リトライ (= バッジを諦めず取りに行く)。
+                // hover popup は元から「次のホバーで再試行」設計なので、ここではバッジ専用の retry を入れる。
+                setTimeout(function () { requestAiMetaForBadge(msg.url); }, 1500);
+            }
+            return;
+        }
+        const meta = {
+            generator: msg.generator || '',
+            model:     msg.model     || '',
+            positive:  msg.positive  || '',
+            negative:  msg.negative  || '',
+        };
+        aiMetaCache.set(msg.url, meta);
+
+        // まだ同じ画像にホバー中なら即時表示 (= 既に別の画像へ移っていれば何もしない、
+        // そちらは別途自分のリクエストを発行している)。
+        if (aiHoverUrl === msg.url && aiHoverImg) showAiPopup(aiHoverImg, meta);
+
+        // 該当 URL の slot 全件に generator バッジを overlay (同 URL が複数貼られる流用に対応)。
+        if (meta.generator) {
+            document.querySelectorAll('.image-slot.loaded').forEach(function (slot) {
+                if (slot.dataset.src === msg.url) applyGeneratorBadge(slot, meta);
+            });
+        }
+    }
+
+    document.addEventListener('mouseover', function (e) {
+        const t = e.target;
+        if (!t || t.tagName !== 'IMG' || !t.classList.contains('inline-image')) return;
+        onImageHoverEnter(t);
+    });
+    document.addEventListener('mouseout', function (e) {
+        const t = e.target;
+        if (!t || t.tagName !== 'IMG' || !t.classList.contains('inline-image')) return;
+        onImageHoverLeave(t);
+    });
+    // スクロール / ウィンドウサイズ変更でもポップアップは消す (位置がずれるため)。
+    window.addEventListener('scroll', hideAiPopup, { passive: true });
+    window.addEventListener('resize', hideAiPopup);
 
     // ---------- scroll target (initial restore + tab-switch restore) ----------
     // pendingScrollTarget は setPosts/appendPosts のメッセージから受け取って保持。
@@ -1471,7 +1705,209 @@
         }
     }
 
+    // ---------- post-no クリックメニュー (返信 / NG登録) ----------
+    // .post-no をクリックするとメニューを出し、選択でメッセージを C# に送る。
+    //   返信         → { type:'replyToPost', number }    : C# が「>>N」入りで投稿ダイアログを開く
+    //   NG: 名前/ID/ワッチョイ → { type:'ngAdd', target, value, number } : C# が NG 登録ダイアログを開く
+    // メニューは body 直下の単一 <div class="post-no-menu"> として管理。再表示時は前のを閉じる。
+    let postNoMenuEl = null;
+
+    function closePostNoMenu() {
+        if (postNoMenuEl && postNoMenuEl.parentNode) postNoMenuEl.parentNode.removeChild(postNoMenuEl);
+        postNoMenuEl = null;
+    }
+
+    function extractWatchoiFromName(name) {
+        if (!name) return '';
+        // post.name は HTML を含むことがあるのでタグを剥がしてから検索
+        const stripped = String(name).replace(/<[^>]+>/g, '');
+        const m = stripped.match(/[A-Za-z0-9]{4}-[A-Za-z0-9]{4}/);
+        return m ? m[0] : '';
+    }
+
+    function plainName(name) {
+        if (!name) return '';
+        return String(name).replace(/<[^>]+>/g, '').trim();
+    }
+
+    /** updateOwnPosts メッセージで届いた変更を ownPostNumbers Set + DOM の「自分」バッジに反映する。
+     *  primary レス (id="rN") のみ更新。tree モード等で重複表示されている embedded レスは
+     *  次回再レンダで反映される (= 全件 DOM 走査でコストを払うほどの優先度ではない)。 */
+    function applyOwnPostsChanges(changes) {
+        for (const c of changes) {
+            const n = c && c.number;
+            const isOwn = !!(c && c.isOwn);
+            if (typeof n !== 'number') continue;
+            if (isOwn) ownPostNumbers.add(n);
+            else       ownPostNumbers.delete(n);
+
+            const el = document.getElementById('r' + n);
+            if (!el) continue;
+            const header = el.querySelector(':scope > .post-header');
+            if (!header) continue;
+            let badge = header.querySelector(':scope > .post-own');
+            if (isOwn) {
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'post-own';
+                    badge.textContent = '自分';
+                    // post-name の直前に挿入 (= テンプレで指定されている挿入位置)
+                    const nameEl = header.querySelector(':scope > .post-name');
+                    if (nameEl) header.insertBefore(badge, nameEl);
+                    else        header.appendChild(badge);
+                }
+            } else if (badge) {
+                badge.remove();
+            }
+        }
+    }
+
+    function showPostNoMenu(postNo, anchorEl) {
+        closePostNoMenu();
+        const post = postsByNumber.get(postNo);
+        if (!post) return;
+
+        const nameVal     = plainName(post.name);
+        const idVal       = post.id || '';
+        const watchoiVal  = extractWatchoiFromName(post.name);
+
+        const menu = document.createElement('div');
+        menu.className = 'post-no-menu';
+
+        // クリックで C# にメッセージを送るアクション項目
+        function addItem(label, action, payloadExtras, disabled, extraClass) {
+            const it = document.createElement('div');
+            it.className = 'menu-item' + (disabled ? ' disabled' : '') + (extraClass ? ' ' + extraClass : '');
+            it.textContent = label;
+            if (!disabled) {
+                it.addEventListener('mousedown', function(ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    closePostNoMenu();
+                    if (window.chrome && window.chrome.webview) {
+                        window.chrome.webview.postMessage(Object.assign(
+                            { type: action, number: postNo }, payloadExtras || {}));
+                    }
+                });
+            }
+            return menu.appendChild(it);
+        }
+
+        // 返信
+        addItem('返信', 'replyToPost', null, false);
+
+        // 自分の書き込みトグル — 現在の状態によって label が反転、isOwn=新状態 を C# に送る。
+        const isCurrentlyOwn = ownPostNumbers.has(postNo);
+        addItem(isCurrentlyOwn ? '自分の書き込み解除' : '自分の書き込みに登録',
+                'toggleOwnPost', { isOwn: !isCurrentlyOwn }, false);
+
+        // NG 親項目 — クリックで子項目 (名前/ID/ワッチョイ) をインライン展開する。
+        // 親クリック自体は C# にメッセージを送らない (= toggle のみ)。
+        const ngParent = document.createElement('div');
+        ngParent.className = 'menu-item menu-parent';
+        const arrow = document.createElement('span');
+        arrow.className = 'menu-arrow';
+        arrow.textContent = '▶';   // ▶ (折り畳まれている時)
+        const ngLabel = document.createElement('span');
+        ngLabel.textContent = 'NG';
+        ngParent.appendChild(ngLabel);
+        ngParent.appendChild(arrow);
+        menu.appendChild(ngParent);
+
+        // 子項目コンテナ — display: none で初期は隠す。
+        const ngChildren = document.createElement('div');
+        ngChildren.className = 'menu-children';
+        ngChildren.style.display = 'none';
+        menu.appendChild(ngChildren);
+
+        function addNgChild(label, target, value) {
+            const disabled = !value;
+            const it = document.createElement('div');
+            it.className = 'menu-item menu-child' + (disabled ? ' disabled' : '');
+            it.textContent = label;
+            if (!disabled) {
+                it.addEventListener('mousedown', function(ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    closePostNoMenu();
+                    if (window.chrome && window.chrome.webview) {
+                        window.chrome.webview.postMessage({
+                            type: 'ngAdd', number: postNo, target: target, value: value,
+                        });
+                    }
+                });
+            }
+            ngChildren.appendChild(it);
+        }
+        addNgChild('名前 — '       + (nameVal    || '(空)'),  'name',    nameVal);
+        addNgChild('ID — '         + (idVal      || '(空)'),  'id',      idVal);
+        addNgChild('ワッチョイ — ' + (watchoiVal || '(なし)'), 'watchoi', watchoiVal);
+
+        ngParent.addEventListener('mousedown', function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const open = ngChildren.style.display !== 'none';
+            ngChildren.style.display = open ? 'none' : 'block';
+            arrow.textContent       = open ? '▶' : '▼';   // ▶ / ▼
+            // 子展開でメニューが伸びると画面下を超える可能性があるので再配置
+            repositionPostNoMenu(menu, anchorEl);
+        });
+
+        // 仮で body に追加してサイズを確定させてから配置
+        document.body.appendChild(menu);
+        repositionPostNoMenu(menu, anchorEl);
+        postNoMenuEl = menu;
+    }
+
+    /** post-no メニューを anchor の周りに配置する。
+     *  既定は anchor の真下、画面下を超えるなら anchor の上にフリップ。
+     *  画面右端を超えるなら左にスライド。 */
+    function repositionPostNoMenu(menu, anchorEl) {
+        const r       = anchorEl.getBoundingClientRect();
+        const menuW   = menu.offsetWidth;
+        const menuH   = menu.offsetHeight;
+        const docW    = document.documentElement.clientWidth;
+        const vpTop   = window.scrollY;
+        const vpBot   = window.scrollY + window.innerHeight;
+
+        // 横: anchor の左揃え、右端を超えるなら左へスライド
+        let x = r.left + window.scrollX;
+        if (x + menuW > docW + window.scrollX) x = docW + window.scrollX - menuW - 4;
+        if (x < window.scrollX) x = window.scrollX + 4;
+
+        // 縦: 下に置けるなら下、ダメなら上にフリップ
+        let y = r.bottom + window.scrollY + 2;
+        if (y + menuH > vpBot) {
+            const above = r.top + window.scrollY - menuH - 2;
+            // 上にも収まらないなら viewport 上端に貼り付け
+            y = (above >= vpTop) ? above : vpTop + 4;
+        }
+
+        menu.style.left = x + 'px';
+        menu.style.top  = y + 'px';
+    }
+
+    // 外側クリック / ESC でメニュー閉じる
+    document.addEventListener('mousedown', function(e) {
+        if (!postNoMenuEl) return;
+        if (e.target.closest && e.target.closest('.post-no-menu')) return;
+        closePostNoMenu();
+    }, true);
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closePostNoMenu();
+    });
+
     document.addEventListener('click', function (e) {
+        // .post-no クリック → メニュー表示。anchor/URL ロジックより先に拾って早期 return。
+        const postNo = e.target.closest && e.target.closest('.post-no');
+        if (postNo && postNo.dataset && postNo.dataset.number) {
+            e.preventDefault();
+            e.stopPropagation();
+            const n = parseInt(postNo.dataset.number, 10);
+            if (!isNaN(n)) showPostNoMenu(n, postNo);
+            return;
+        }
+
         // メディアスロットのクリックを mediaType ごとに分岐:
         //   image    → .loaded なら URL を開く / それ以外は強制 <img> 化
         //   video    → 常に <video controls autoplay> に置換 (インライン再生)
@@ -1555,6 +1991,18 @@
         }
     }
 
+    /** ポップアップ表示用にレスをクローンする際の共通処理。
+     *  - 「返信N件」バッジを除去 → そこからさらに返信ポップアップが連鎖しない
+     *  - ツリー / 重複なしツリー表示で対象レスに inline 埋め込まれている子レス (= .post.embedded) を除去
+     *    → popup は対象レス本体だけを見せ、それへの返信は出さない
+     *  バッジや子レスは元レス側にはそのまま残るので、通常スレ表示でのホバー / ツリー表示は引き続き機能する。 */
+    function clonePostForPopup(src) {
+        const clone = src.cloneNode(true);
+        clone.querySelectorAll('.post-reply-count').forEach(function (el) { el.remove(); });
+        clone.querySelectorAll('.post.embedded').forEach(function (el) { el.remove(); });
+        return clone;
+    }
+
     function buildPopupContent(from, to) {
         const frag = document.createDocumentFragment();
         const span = Math.min(to - from + 1, MAX_RANGE);
@@ -1563,7 +2011,7 @@
             const n = from + i;
             const src = document.getElementById('r' + n);
             if (src) {
-                frag.appendChild(src.cloneNode(true));
+                frag.appendChild(clonePostForPopup(src));
                 any = true;
             }
         }
@@ -1584,7 +2032,7 @@
         for (let i = 0; i < limit; i++) {
             const src = document.getElementById('r' + numbers[i]);
             if (src) {
-                frag.appendChild(src.cloneNode(true));
+                frag.appendChild(clonePostForPopup(src));
                 any = true;
             }
         }
@@ -1818,14 +2266,57 @@
         if (allPosts.length > 0) renderCurrentViewMode();
     };
 
+    /**
+     * 書き込みダイアログのプレビュー専用エントリ。スレ表示シェル全体を流用しつつ、
+     * 唯一の post として渡された 1 件を「全リセット → 単発 append」で再描画する。
+     * post 形式は appendPosts と同じ ({number, name, mail, dateText, id, body, threadTitle?})。
+     * preview 用にスクロール / readMark / 差分管理は無効化、body に preview-mode class を付与して
+     * CSS でリッチスクロールバー等を非表示にする。
+     */
+    window.setPreviewPost = function (post) {
+        // body に preview class を付ける (= CSS で richScrollbar / 右 padding を消す目印)
+        document.body.classList.add('preview-mode');
+
+        // 内部状態を全クリア (allPosts / 重複ツリー pivot / scrollTarget / readMark / 逆引き indexes)
+        allPosts                = [];
+        postsByNumber           = new Map();
+        currentReverseIndex     = new Map();
+        incrementalPivotIndex   = null;
+        pendingScrollTarget     = null;
+        readMarkInitialized     = true;   // 初回 readMark を採用しないようにフラグだけ立てる
+        readMarkPostNumber      = null;
+
+        // DOM クリア + post-template の再使用は appendPosts に任せる
+        const root = document.getElementById('posts');
+        if (root) root.innerHTML = '';
+
+        if (!post) return;
+        window.appendPosts([post], null, null, false);
+    };
+
     // ---------- C# からの postMessage 受信 (PostWebMessageAsJson 経由) ----------
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             const msg = e.data;
             if (!msg || typeof msg !== 'object' || !msg.type) return;
             switch (msg.type) {
-                case 'appendPosts': window.appendPosts(msg.posts, msg.scrollTarget, msg.readMarkPostNumber, msg.incremental); break;
+                case 'appendPosts':
+                    // 「自分の書き込み」集合を上書き (= 毎バッチ送られてくる)。先に Set を更新してから
+                    // appendPosts を呼ぶことで、レンダ時に postDataFor が正しい isOwn を読める。
+                    if (Array.isArray(msg.ownPostNumbers)) {
+                        ownPostNumbers = new Set(msg.ownPostNumbers);
+                    }
+                    window.appendPosts(msg.posts, msg.scrollTarget, msg.readMarkPostNumber, msg.incremental);
+                    break;
+                case 'updateOwnPosts':
+                    // 自分マークの増分トグル (post-no メニュー → ToggleOwnPost 経由)。
+                    // Set を更新したうえで該当レスの DOM バッジを add/remove する (= 全再レンダはしない)。
+                    if (msg.value && Array.isArray(msg.value.changes)) {
+                        applyOwnPostsChanges(msg.value.changes);
+                    }
+                    break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
+                case 'setPreview':  window.setPreviewPost(msg.post); break;
                 case 'setConfig':
                     // Phase 11: アプリ設定の即時反映
                     if (typeof msg.popularThreshold     === 'number') POPULAR_THRESHOLD     = msg.popularThreshold;
@@ -1857,6 +2348,11 @@
                             resolvedUrl: (typeof msg.resolvedUrl === 'string' ? msg.resolvedUrl : null),
                         });
                     }
+                    break;
+                case 'aiMetadata':
+                    // 画像ホバー時に C# が PNG/JPEG/WebP のメタを抽出して返してきた。
+                    // hasData=false なら次回以降ポップアップを出さない (no-data でキャッシュ)。
+                    onAiMetadataResponse(msg);
                     break;
             }
         });

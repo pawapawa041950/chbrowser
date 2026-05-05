@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ChBrowser.Models;
@@ -50,10 +51,37 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _aboneStatus = "あぼーん 0";
 
     /// <summary>ステータスバーに出すどんぐり (acorn) の状態テキスト。30 秒ごとに更新。</summary>
-    [ObservableProperty] private string _donguriStatus = "🥜 未取得";
+    [ObservableProperty] private string _donguriStatus = "🌰 未取得";
+
+    /// <summary>どんぐりメール認証のログイン状態 (= 設定にメアド有 + 起動時 / 設定変更時に試行)。
+    /// 設定でメアドが空なら "" (= ステータスバーに表示しない)。</summary>
+    [ObservableProperty] private string _donguriLoginStatus = "";
 
     /// <summary>マウスジェスチャー入力中のリアルタイム表示 (Phase 16+)。</summary>
     [ObservableProperty] private string _gestureStatus = "";
+
+    /// <summary>「上ボタン」フォルダ (= お気に入りルート直下、名前 "上ボタン") の直下エントリ。
+    /// MainWindow 上部のブックマークバー風ペインに表示する (Chrome の bookmark bar 相当)。
+    /// Favorites.Changed で再構築。フォルダなし / 子なしなら空 + バー非表示。</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FavoriteEntryViewModel> TopButtonsItems { get; } = new();
+
+    /// <summary>「上ボタン」バーを表示するか。<see cref="TopButtonsItems"/> が空なら false。</summary>
+    [ObservableProperty] private bool _isTopButtonsBarVisible;
+
+    /// <summary>「上ボタン」フォルダの判定名 (= お気に入りに作るとブックマークバーに自動載録される)。</summary>
+    public const string TopButtonsFolderName = "上ボタン";
+
+    /// <summary>スレ一覧タブの計算済み幅 (px)。AppConfig の WidthMode に応じて文字数 × 概算 px か、px 値を採用。
+    /// XAML 側の TabItem.Width に bind される。</summary>
+    [ObservableProperty] private double _threadListTabWidth = 200;
+
+    /// <summary>スレッドタブの計算済み幅 (px)。同上。</summary>
+    [ObservableProperty] private double _threadTabWidth     = 200;
+
+    /// <summary>「文字数指定」の文字を px に概算する係数。OS 既定 UI フォントの平均的な日本語 1 文字幅 (px)。
+    /// 厳密値ではなく目安。タブには ×ボタン + アイコン + パディング分の固定オフセット (TabPaddingPx) を加算する。</summary>
+    private const double CharToPxRatio = 14;
+    private const double TabPaddingPx  = 28; // ×ボタン (16) + マージン + 内側パディング
 
     // ----- WebView2 ペインへ push する HTML / JSON -----
 
@@ -240,6 +268,9 @@ public sealed partial class MainViewModel : ObservableObject
         Favorites      = new FavoritesViewModel(favoritesStorage);
 
         Favorites.Changed += RefreshFavoritesHtml;
+        // 「上ボタン」バー: お気に入り変更のたびに再構築 (= フォルダ直下を ObservableCollection に流し込む)。
+        Favorites.Changed += RefreshTopButtons;
+        RefreshTopButtons();
 
         // どんぐり経過時間表示を 30 秒ごとに更新。起動直後にも 1 度実行。
         _donguriTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -271,6 +302,35 @@ public sealed partial class MainViewModel : ObservableObject
     // どんぐり (acorn) 経過時間表示
     // -----------------------------------------------------------------
 
+    /// <summary>外部 (App.ClearDonguriCookiesNow 等) から強制再描画を要求するための public ラッパ。
+    /// 内部実装は <see cref="UpdateDonguriStatus"/> と同じ。</summary>
+    public void RefreshDonguriStatusFromCookieJar() => UpdateDonguriStatus();
+
+    /// <summary>WidthMode に応じてタブ幅 (px) を算出する。下限 60 px。</summary>
+    private static double ComputeTabWidth(string mode, int chars, int px)
+    {
+        if (string.Equals(mode, "px", StringComparison.Ordinal))
+            return Math.Max(60, px);
+        // chars (default)
+        return Math.Max(60, chars * CharToPxRatio + TabPaddingPx);
+    }
+
+    /// <summary>「上ボタン」バー表示用 ObservableCollection を再構築する。
+    /// お気に入りツリー (root) を走査して名前が <see cref="TopButtonsFolderName"/> のフォルダを探し、
+    /// その直下を <see cref="TopButtonsItems"/> に流し込む。フォルダ無し / 子無しなら空 + バー非表示。</summary>
+    private void RefreshTopButtons()
+    {
+        TopButtonsItems.Clear();
+        var folder = Favorites.Items
+            .OfType<FavoriteFolderViewModel>()
+            .FirstOrDefault(f => f.Name == TopButtonsFolderName);
+        if (folder is not null)
+        {
+            foreach (var child in folder.Children) TopButtonsItems.Add(child);
+        }
+        IsTopButtonsBarVisible = TopButtonsItems.Count > 0;
+    }
+
     /// <summary>acorn の発行時刻 + 経過秒数からステータス文字列を組み立てる。
     /// 設計書 §3.5: 0→1 で約 5 分、約 3 時間で失効、IP 変更で Lv0 リセット。</summary>
     private void UpdateDonguriStatus()
@@ -278,19 +338,19 @@ public sealed partial class MainViewModel : ObservableObject
         var age = _donguri.EstimatedAcornAgeSeconds;
         if (age is null)
         {
-            DonguriStatus = "🥜 未取得";
+            DonguriStatus = "🌰 未取得";
             return;
         }
         const int lifetimeSec = 3 * 60 * 60;
         if (age >= lifetimeSec)
         {
-            DonguriStatus = "🥜 失効 (再取得が必要)";
+            DonguriStatus = "🌰 失効 (再取得が必要)";
             return;
         }
         var lv        = (int)(age / 300);
         var ageStr    = FormatHm(age.Value);
         var remaining = lifetimeSec - age.Value;
-        DonguriStatus = $"🥜 Lv≈{lv} ({ageStr}経過, 残り {FormatHm(remaining)})";
+        DonguriStatus = $"🌰 Lv≈{lv} ({ageStr}経過, 残り {FormatHm(remaining)})";
     }
 
     /// <summary>秒数を "Xh Ym" / "Ym Zs" / "Zs" の短縮表記に。</summary>
@@ -325,6 +385,12 @@ public sealed partial class MainViewModel : ObservableObject
     public void ApplyConfig(AppConfig config)
     {
         CurrentConfig = config;
+
+        // タブ幅を即時反映。文字数指定なら 1 文字 ≈ 14px + パディング、px 指定なら値そのまま (下限 60)。
+        ThreadListTabWidth = ComputeTabWidth(
+            config.ThreadListTabWidthMode, config.ThreadListTabWidthChars, config.ThreadListTabWidthPx);
+        ThreadTabWidth     = ComputeTabWidth(
+            config.ThreadTabWidthMode,     config.ThreadTabWidthChars,     config.ThreadTabWidthPx);
 
         // スレ表示 (thread.js) 向け
         ThreadConfigJson = System.Text.Json.JsonSerializer.Serialize(new

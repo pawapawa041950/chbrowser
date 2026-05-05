@@ -14,7 +14,7 @@
                    TextWrapping="Wrap"
                    Margin="0,0,0,8" />
 
-        <Grid Width="420" HorizontalAlignment="Left">
+        <Grid Width="420" HorizontalAlignment="Left" Margin="0,0,0,16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -31,6 +31,17 @@
                        TextAlignment="Right"
                        FontFamily="Consolas, 'Courier New'" />
         </Grid>
+
+        <!-- 画像詳細ペインの初期状態。次回ビューア起動時から反映 (= 既に開いている viewer は影響を受けない)。 -->
+        <TextBlock Text="画像詳細ペイン" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,4">
+            ビューアウィンドウを開いたときに右側の画像詳細ペインを既定で開くか閉じるか。
+            開閉は Tab キー / アコーディオン帯クリックで都度切替できます。
+        </TextBlock>
+        <CheckBox Content="ビューアを開いたとき画像詳細ペインを開いた状態にする"
+                  IsChecked="{Binding ViewerDetailsPaneDefaultOpen, Mode=TwoWay}" />
 
     </StackPanel>
 </UserControl>

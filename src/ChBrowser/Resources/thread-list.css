@@ -25,6 +25,26 @@ thead th.sortable:hover { background: #e4e4e4; }
 thead th.sort-asc::after  { content: ' \25B2'; font-size: 9px; color: #666; }
 thead th.sort-desc::after { content: ' \25BC'; font-size: 9px; color: #666; }
 
+/* 列リサイザ — 各 <th> の右端に薄い帯を出してドラッグで列幅変更。
+   sticky な <th> の中で absolute 配置するため <th> は relative-like に振る舞う必要があるが、
+   sticky は内部的に relative と同じ containing block を提供するので追加指定不要。 */
+.col-resizer {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    user-select: none;
+    z-index: 2;
+    /* hover 時のみ薄い色を出す。見た目上はほぼ透明で邪魔しない。 */
+    background: transparent;
+}
+.col-resizer:hover,
+.col-resizer.dragging {
+    background: rgba(30, 136, 229, 0.35);
+}
+
 tbody td {
     padding: 2px 8px;
     border-bottom: 1px solid #eee;
@@ -35,7 +55,11 @@ tbody td {
 tbody tr:hover td   { background: #f5f5f5; cursor: pointer; }
 tbody tr.selected td { background: #cce5ff; }
 
-.col-log      { text-align: center; width: 26px; padding: 2px 0; position: relative; }
+.col-log      { text-align: center; width: 26px; padding: 2px 0; }
+/* ★ 印 (.is-favorited 行) の absolute 配置用に td 側だけ relative にする。
+   thead th.col-log まで relative にすると thead の sticky が殺されて
+   ヘッダ行の col-log だけ縦スクロール時に追従しなくなる。 */
+tbody td.col-log { position: relative; }
 .col-no       { text-align: right;  width: 40px; }
 .col-board    { width: 140px; color: #555; }
 .col-count    { text-align: right;  width: 50px; }

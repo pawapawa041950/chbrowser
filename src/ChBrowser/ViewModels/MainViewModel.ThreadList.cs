@@ -32,7 +32,12 @@ public sealed partial class MainViewModel
             t.Board.DirectoryName == board.DirectoryName);
         if (tab is null)
         {
-            tab = new ThreadListTabViewModel(board, t => ThreadListTabs.Remove(t));
+            tab = new ThreadListTabViewModel(board, t => ThreadListTabs.Remove(t))
+            {
+                // 初期化: 板自身がお気に入り登録済みか (= ツールバーの ★ ボタンの押下状態)。
+                // 後続の登録/削除操作で RefreshFavoritedStateOfAllTabs が再同期する。
+                IsBoardFavorited = Favorites.FindBoard(board.Host, board.DirectoryName) is not null,
+            };
             ThreadListTabs.Add(tab);
         }
         SelectedThreadListTab = tab;
