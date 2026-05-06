@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
-using System.Reflection;
 using System.Text;
 using ChBrowser.Models;
 using ChBrowser.ViewModels;
@@ -21,6 +19,10 @@ public static class ThreadListHtmlBuilder
     private static string? _shellHtmlCache;
     private static readonly object Lock = new();
 
+    /// <summary>初回表示用 — シェル HTML + thead + tbody を組み立てて返す。
+    /// このメソッドが返す文字列はそのまま <see cref="Microsoft.Web.WebView2.Wpf.WebView2.NavigateToString"/>
+    /// に渡され、WebView2 が完全リロードされる (= 初回のみ呼ぶ)。
+    /// 2 回目以降のリフレッシュは <see cref="BuildRowsHtml"/> 経由で tbody だけ差し替えるため flash しない。</summary>
     public static string Build(
         IReadOnlyList<ThreadListItem> items,
         DateTimeOffset                now)
@@ -34,7 +36,27 @@ public static class ThreadListHtmlBuilder
         sb.Append(@"<th class=""col-count sortable"" data-sort=""count"" data-sort-type=""num"">数</th>");
         sb.Append(@"<th class=""col-momentum sortable"" data-sort=""momentum"" data-sort-type=""num"">勢い</th>");
         sb.Append(@"</tr></thead><tbody>");
+        AppendRows(sb, items, now);
+        sb.Append("</tbody></table>");
 
+        return LoadShellHtml().Replace("<!--{{ITEMS}}-->", sb.ToString());
+    }
+
+    /// <summary>リフレッシュ時の差分 push 用 — `<tbody>` の中身 (= `<tr>...</tr>` 列) だけを返す。
+    /// JS 側は受け取った文字列をそのまま <c>tbody.innerHTML</c> に流し込んで in-place 更新する。
+    /// シェル / thead / WebView 全体は触らないため flash は起きず、リサイザーや列ソート / クリック
+    /// イベントリスナー (= tbody 自身に attach) も保持される。</summary>
+    public static string BuildRowsHtml(
+        IReadOnlyList<ThreadListItem> items,
+        DateTimeOffset                now)
+    {
+        var sb = new StringBuilder(8192);
+        AppendRows(sb, items, now);
+        return sb.ToString();
+    }
+
+    private static void AppendRows(StringBuilder sb, IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
+    {
         foreach (var item in items)
         {
             var t        = item.Info;
@@ -69,10 +91,6 @@ public static class ThreadListHtmlBuilder
             sb.Append(@"<td class=""col-momentum"">").Append(momentum.ToString("F1", CultureInfo.InvariantCulture)).Append("</td>");
             sb.Append("</tr>");
         }
-
-        sb.Append("</tbody></table>");
-
-        return LoadShellHtml().Replace("<!--{{ITEMS}}-->", sb.ToString());
     }
 
     /// <summary>シェル HTML キャッシュをクリア (Phase 11d「すべての CSS を再読み込み」用)。</summary>
@@ -95,27 +113,15 @@ public static class ThreadListHtmlBuilder
         lock (Lock)
         {
             if (_shellHtmlCache is not null) return _shellHtmlCache;
-            var asm    = typeof(ThreadListHtmlBuilder).Assembly;
-            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.html");
-            // Phase 11d: テーマサービスがあれば disk 優先で CSS を取得 (= ユーザ編集を反映)。
-            // 未登録時は埋め込み既定にフォールバック。
-            var css    = ChBrowser.Services.Theme.ThemeService.CurrentInstance?.LoadCss("thread-list.css")
-                         ?? ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.css");
-            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.thread-list.js");
-            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
+            var html   = EmbeddedAssets.Read("thread-list.html");
+            var css    = EmbeddedAssets.ReadCss("thread-list.css");  // disk-first
+            var js     = EmbeddedAssets.Read("thread-list.js");
+            var bridge = EmbeddedAssets.Read("shortcut-bridge.js");
             _shellHtmlCache = html
                 .Replace("/*{{CSS}}*/",             css)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
                 .Replace("/*{{JS}}*/",              js);
             return _shellHtmlCache;
         }
-    }
-
-    private static string ReadEmbeddedText(Assembly asm, string name)
-    {
-        using var stream = asm.GetManifestResourceStream(name)
-            ?? throw new FileNotFoundException($"Embedded resource not found: {name}");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
     }
 }

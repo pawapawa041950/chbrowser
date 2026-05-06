@@ -74,6 +74,12 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
     [ObservableProperty]
     private FavoritedPatch? _favoritedUpdate;
 
+    /// <summary>リフレッシュ時に <c>tbody.innerHTML</c> を差し替えるための差分 push。null は no-op。
+    /// 初回表示は <see cref="Html"/> による NavigateToString だが、2 回目以降のリフレッシュはこちらを使い、
+    /// シェル全体の再ナビゲートを避けて画面が一瞬白くなる事象を防ぐ。</summary>
+    [ObservableProperty]
+    private string? _itemsHtmlPatch;
+
     /// <summary>このタブが現在 TabControl で選択されているか。各タブが専有する WebView2 の
     /// Visibility をこれに bind する (= 選択タブだけ可視、他は Collapsed)。
     /// MainViewModel が SelectedThreadListTab 変更時に全タブの IsSelected を更新する。</summary>
@@ -123,11 +129,24 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
         SetItems(items, now);
     }
 
-    /// <summary>事前に組み立てた <see cref="ThreadListItem"/> 列を直接セット (お気に入り展開タブ用)。</summary>
+    /// <summary>事前に組み立てた <see cref="ThreadListItem"/> 列を直接セット (お気に入り展開タブ用)。
+    /// 初回 (= Html 未設定) はシェル丸ごと NavigateToString。2 回目以降は tbody だけ差し替えて
+    /// flash を防ぐ (= <see cref="ItemsHtmlPatch"/> 経由で JS が in-place 更新)。</summary>
     public void SetItems(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
     {
         Items            = items;
-        Html             = ThreadListHtmlBuilder.Build(items, now);
+        if (string.IsNullOrEmpty(Html))
+        {
+            // 初回: シェル + thead + tbody を NavigateToString
+            Html = ThreadListHtmlBuilder.Build(items, now);
+        }
+        else
+        {
+            // 2 回目以降: tbody innerHTML だけ差分 push (= 画面が真っ白にならない)
+            // ObservableProperty の content equality check により、生成 HTML が前回と完全一致すれば
+            // 変化検知が走らず JS には何も送られない (= 「リフレッシュ後も内容が同じ」場合の最適化)。
+            ItemsHtmlPatch = ThreadListHtmlBuilder.BuildRowsHtml(items, now);
+        }
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
     }

@@ -128,8 +128,20 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public bool IsViewModeTree       => ViewMode == ThreadViewMode.Tree;
     public bool IsViewModeDedupTree  => ViewMode == ThreadViewMode.DedupTree;
 
-    /// <summary>このスレを開いた時の元タイトル (お気に入り登録時の Title 用)。</summary>
-    public string Title { get; }
+    /// <summary>このスレを開いた時の元タイトル (お気に入り登録時 / kakikomi.txt 用)。
+    /// アドレスバーから直接スレを開いた経路では初期値が空文字で、dat の 1 レス目を取得した
+    /// タイミングで <see cref="EnsureTitleFromDat"/> が埋める。一度埋まったら以降は変更しない。</summary>
+    public string Title { get; private set; }
+
+    /// <summary>dat の 1 レス目の <see cref="Post.ThreadTitle"/> をスレタイトルとして反映する。
+    /// 既に <see cref="Title"/> が設定済 (= 板タブやお気に入り経由で開いた経路) なら何もしない。</summary>
+    public void EnsureTitleFromDat(string title)
+    {
+        if (string.IsNullOrEmpty(title)) return;
+        if (!string.IsNullOrEmpty(Title)) return;
+        Title  = title;
+        Header = TruncateForTab(title);
+    }
 
     public ThreadTabViewModel(
         Board                                board,

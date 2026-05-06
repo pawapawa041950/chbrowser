@@ -307,6 +307,15 @@ public partial class ThreadDisplayPane : UserControl
         (DataContext as MainViewModel)?.ToggleThreadFavorite(tab);
     }
 
+    /// <summary>「板を開く」: スレが属する板のスレ一覧タブを開く (既存タブがあればアクティブ化)。
+    /// アドレスバーから直接スレを開いた経路で「親板に戻りたい」ケース用。</summary>
+    private void ThreadTabOpenBoard_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
+        if (DataContext is not MainViewModel main) return;
+        _ = main.OpenBoardByUrlAsync(tab.Board.Host, tab.Board.DirectoryName);
+    }
+
     private void ThreadTabCopyTitle_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;

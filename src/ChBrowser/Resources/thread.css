@@ -14,7 +14,7 @@ body {
     font-family: 'MS Pゴシック', 'MS PGothic', monospace;
     font-size: 16px;
     color: #000;
-    background: #fff;
+    background: #efefef;
     padding-right: 24px;  /* リッチスクロールバー専用領域を確保 (本文と被らないように) */
 }
 

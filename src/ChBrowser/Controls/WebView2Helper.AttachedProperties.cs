@@ -52,6 +52,32 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ItemsHtmlPatch (スレ一覧: tbody innerHTML を in-place 差分 push)
+    //
+    // 2 回目以降のリフレッシュで Html を再 NavigateToString すると WebView2 の DOM が破棄され
+    // 一瞬画面が真っ白になる (= flash) ため、tbody だけを差し替える経路を別建てする。
+    // JS 側の thread-list.js は { type: 'replaceItems', html } を受けて tbody.innerHTML を置き換える。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ItemsHtmlPatchProperty =
+        DependencyProperty.RegisterAttached(
+            "ItemsHtmlPatch",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnItemsHtmlPatchChanged));
+
+    public static string? GetItemsHtmlPatch(DependencyObject d) => (string?)d.GetValue(ItemsHtmlPatchProperty);
+    public static void    SetItemsHtmlPatch(DependencyObject d, string? value) => d.SetValue(ItemsHtmlPatchProperty, value);
+
+    private static void OnItemsHtmlPatchChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not string html || string.IsNullOrEmpty(html)) return;
+        var json = JsonSerializer.Serialize(new { type = "replaceItems", html }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
+    }
+
+    // ------------------------------------------------------------
     // AppendBatch (スレ表示: スレ表示の唯一の描画チャネル — appendPosts として JS に post)
     //
     // 旧実装には setPosts の全置換チャネルもあったが、

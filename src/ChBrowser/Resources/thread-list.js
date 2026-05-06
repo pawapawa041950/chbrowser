@@ -222,6 +222,18 @@
                     if (change.isFavorited) tr.classList.add('is-favorited');
                     else                    tr.classList.remove('is-favorited');
                 });
+            } else if (msg.type === 'replaceItems' && typeof msg.html === 'string') {
+                // tbody の中身を一括差し替え (= リフレッシュ時の flash 回避)。
+                // tbody 自身は残るので、tbody.addEventListener で attach 済の click ハンドラは保持される。
+                // thead の sortable / col-resizer も触らないので状態は維持。
+                tbody.innerHTML = msg.html;
+                selected = null;  // 古い <tr> は破棄されたので選択もリセット
+                // 直前にユーザがクリックしていた sort 状態を再適用 (新行は subject.txt 順なので並び直しが必要)。
+                var activeTh = document.querySelector('thead th.sort-asc, thead th.sort-desc');
+                if (activeTh && activeTh.dataset && activeTh.dataset.sort) {
+                    var dir = activeTh.classList.contains('sort-asc') ? 1 : -1;
+                    sortBy(activeTh.dataset.sort, activeTh.dataset.sortType, dir);
+                }
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;

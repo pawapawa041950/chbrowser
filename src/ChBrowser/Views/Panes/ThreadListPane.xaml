@@ -172,6 +172,7 @@
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:ThreadListTabViewModel}">
                     <wv2:WebView2 ctrl:WebView2Helper.Html="{Binding Html}"
+                                  ctrl:WebView2Helper.ItemsHtmlPatch="{Binding ItemsHtmlPatch}"
                                   ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
                                   ctrl:WebView2Helper.FavoritedUpdate="{Binding FavoritedUpdate}"
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"

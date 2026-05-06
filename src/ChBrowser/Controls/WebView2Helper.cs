@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -397,16 +396,16 @@ public static partial class WebView2Helper
         lock (ShellLock)
         {
             if (_shellHtmlCache is not null) return _shellHtmlCache;
-            var asm    = typeof(WebView2Helper).Assembly;
-            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.html");
-            var css    = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.css");
-            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.thread.js");
-            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
+            var html   = ChBrowser.Services.Render.EmbeddedAssets.Read("thread.html");
+            // thread.css / post.css はディスク優先 (= ユーザがテーマ編集した内容を反映)。
+            var css    = ChBrowser.Services.Render.EmbeddedAssets.ReadCss("thread.css");
+            var js     = ChBrowser.Services.Render.EmbeddedAssets.Read("thread.js");
+            var bridge = ChBrowser.Services.Render.EmbeddedAssets.Read("shortcut-bridge.js");
 
             // テーマ (post.html テンプレ + post.css) を注入。テーマ未登録時は埋め込み既定を使う。
             var theme        = _themeService?.LoadActiveTheme();
-            var postTemplate = theme?.PostHtmlTemplate ?? ReadEmbeddedText(asm, "ChBrowser.Resources.post.html");
-            var postCss      = theme?.PostCss          ?? ReadEmbeddedText(asm, "ChBrowser.Resources.post.css");
+            var postTemplate = theme?.PostHtmlTemplate ?? ChBrowser.Services.Render.EmbeddedAssets.Read("post.html");
+            var postCss      = theme?.PostCss          ?? ChBrowser.Services.Render.EmbeddedAssets.Read("post.css");
 
             _shellHtmlCache = html
                 .Replace("/*{{CSS}}*/",                css + "\n" + postCss)
@@ -423,11 +422,10 @@ public static partial class WebView2Helper
         lock (ViewerShellLock)
         {
             if (_viewerShellHtmlCache is not null) return _viewerShellHtmlCache;
-            var asm    = typeof(WebView2Helper).Assembly;
-            var html   = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.html");
-            var css    = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.css");
-            var js     = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer.js");
-            var bridge = ReadEmbeddedText(asm, "ChBrowser.Resources.shortcut-bridge.js");
+            var html   = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer.html");
+            var css    = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer.css");
+            var js     = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer.js");
+            var bridge = ChBrowser.Services.Render.EmbeddedAssets.Read("shortcut-bridge.js");
             _viewerShellHtmlCache = html
                 .Replace("/*{{CSS}}*/",             css)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
@@ -444,22 +442,13 @@ public static partial class WebView2Helper
         lock (ViewerDetailsShellLock)
         {
             if (_viewerDetailsShellHtmlCache is not null) return _viewerDetailsShellHtmlCache;
-            var asm  = typeof(WebView2Helper).Assembly;
-            var html = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.html");
-            var css  = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.css");
-            var js   = ReadEmbeddedText(asm, "ChBrowser.Resources.viewer-details.js");
+            var html = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.html");
+            var css  = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.css");
+            var js   = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.js");
             _viewerDetailsShellHtmlCache = html
                 .Replace("/*{{CSS}}*/", css)
                 .Replace("/*{{JS}}*/",  js);
             return _viewerDetailsShellHtmlCache;
         }
-    }
-
-    private static string ReadEmbeddedText(Assembly asm, string resourceName)
-    {
-        using var stream = asm.GetManifestResourceStream(resourceName)
-            ?? throw new FileNotFoundException($"Embedded resource not found: {resourceName}");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
     }
 }

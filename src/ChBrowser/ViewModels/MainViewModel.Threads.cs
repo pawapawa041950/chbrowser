@@ -16,6 +16,13 @@ public sealed partial class MainViewModel
     private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch, bool isIncremental = false)
     {
         if (batch.Count == 0) return;
+        // dat の 1 レス目はスレタイトルを保持している。アドレスバーから直接スレを開いた経路では
+        // タブ作成時 Title が空文字なので、最初にこのメソッドに来た batch の中で 1 レス目を見つけたら
+        // タイトル / タブヘッダを埋める。お気に入り登録の Title もここで揃う。
+        foreach (var p in batch)
+        {
+            if (p.ThreadTitle is { Length: > 0 } t) { tab.EnsureTitleFromDat(t); break; }
+        }
         var hidden = _ng.ComputeHidden(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName);
         if (hidden.Count == 0)
         {
@@ -52,6 +59,10 @@ public sealed partial class MainViewModel
         }
 
         var tab = CreateThreadTab(board, info);
+        // アドレスバー直接入力等で title が無い経路はタブ見出しが空のままになるため、
+        // dat 取得が走るまでの間 placeholder を出しておく (= AppendPostsWithNg 内の
+        // EnsureTitleFromDat で 1 レス目到着と同時に正しいタイトルに置き換わる)。
+        if (string.IsNullOrEmpty(info.Title)) tab.Header = "(取得中…)";
 
         // 既読位置があれば渡しておく (描画後に JS が該当レスへスクロール)
         var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
