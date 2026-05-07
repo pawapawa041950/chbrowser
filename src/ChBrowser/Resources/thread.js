@@ -775,6 +775,39 @@
     }
     function buildReverseIndex() { return buildReverseIndexFrom(allPosts); }
 
+    /** p の本文中の有効な forward anchor (= postsByNumber に存在 & p.number 未満 & 範囲 limit 内) を distinct で返す。
+     *  ツリー描画における「アンカー数」(0 / 1 / 多) の判定基準に使う共通ヘルパ。 */
+    function getValidForwardAnchors(p) {
+        if (!p) return [];
+        const seen = new Set();
+        const result = [];
+        for (const r of extractAnchorRefs(p.body || '')) {
+            if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
+            for (let n = r.from; n <= r.to; n++) {
+                if (n >= p.number) continue;
+                if (!postsByNumber.has(n)) continue;
+                if (seen.has(n)) continue;
+                seen.add(n);
+                result.push(n);
+            }
+        }
+        return result;
+    }
+    function countValidForwardAnchors(p) { return getValidForwardAnchors(p).length; }
+
+    /** parentNum を直接 anchor している「単独 anchor の子レス」の件数。
+     *  ツリー描画の親→子展開は『単独 anchor の子だけ』を対象とする (= 多 anchor は親 embed を持たず単独で末尾配置)
+     *  ため、reverse-expansion の overflow 指標 (…他 N 件) も同じ母集団で数える必要がある。 */
+    function countSingleAnchorReverseChildren(parentNum) {
+        const all = currentReverseIndex.get(parentNum) || [];
+        let count = 0;
+        for (const cn of all) {
+            const c = postsByNumber.get(cn);
+            if (c && countValidForwardAnchors(c) === 1) count++;
+        }
+        return count;
+    }
+
     // ---- Phase 20: incremental セクションの chain forest 構築 ----
     /** num の祖先を anchor で 1 段ずつ遡って [oldest, ..., num] の配列にする。
      *  各レスから最初の有効 anchor (= 自分より小さい番号で postsByNumber に居る) を辿る。
@@ -806,11 +839,19 @@
     }
 
     /** 各 incremental レスの祖先 chain を merge して forest (= Map&lt;number, node&gt;) を返す。
-     *  共通祖先を持つ chain は同じノード配下に集約される (= 同じ親が複数回描画されないように)。 */
+     *  共通祖先を持つ chain は同じノード配下に集約される (= 同じ親が複数回描画されないように)。
+     *
+     *  仕様: 単独 anchor のレスのみ祖先 chain を辿る (= 「アンカーをたどれる限りすべて描写」)。
+     *  0 anchor / 多 anchor のレスは chain を作らず単独 root として末尾に並べる
+     *  (= 仕様: 末尾に primary 追加するだけ)。 */
     function buildIncrementalForest(incrementalNumbers) {
         const rootMap = new Map(); // number -> node{number, childMap}
         for (const num of incrementalNumbers) {
-            const chain = buildAncestorChain(num);
+            const post = postsByNumber.get(num);
+            const anchors = post ? countValidForwardAnchors(post) : 0;
+            const chain = (anchors === 1)
+                ? buildAncestorChain(num)
+                : [num];
             let curMap = rootMap;
             for (const n of chain) {
                 let node = curMap.get(n);
@@ -843,11 +884,15 @@
         return renderPost(postDataFor(post, isEmbedded, /*omitId*/ !isInc, childrenHtml));
     }
 
-    /** ツリー (重複あり): トップレベルレス + 1 段の親 (>>X 先) + 1 段の子 (>>X 元) を直下に展開。 */
-    function buildTreePostHtml(p, reverseIndex, isEmbedded) {
+    /** ツリー (重複あり) の 1 レス分 HTML。
+     *  - !isEmbedded (= primary): forward 親を inline で 1 段だけ embed する (= 「自分宛のアンカー先を本文の上に添える」見た目)。
+     *    reverse-expansion (= 自分への返信を直下に展開) はもう作らない。返信が来たときに embedUnderParentReverse が
+     *    DOM 直接操作で `<div class="inline-expansion reverse">` を後付けする。
+     *  - isEmbedded: 中身は付けず leaf として返す (= forward / reverse 展開は呼び出し側が個別にやる)。
+     *  primary 出力は id を付ける、embedded 出力は id を付けない (= 重複ありモードは同じレスが 2 か所に出るため)。 */
+    function buildTreePostHtml(p, isEmbedded) {
         let children = '';
         if (!isEmbedded) {
-            // 親 (forward)
             const emitted = new Set();
             for (const r of extractAnchorRefs(p.body || '')) {
                 if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
@@ -858,130 +903,52 @@
                     const parent = postsByNumber.get(n);
                     if (!parent) continue;
                     children += '<div class="inline-expansion forward">';
-                    children += buildTreePostHtml(parent, reverseIndex, true);
+                    children += buildTreePostHtml(parent, true);
                     children += '</div>';
                 }
             }
-            // 子 (reverse)
-            const reverseChildren = reverseIndex.get(p.number) || [];
-            const limit = Math.min(reverseChildren.length, REVERSE_EXPAND_LIMIT);
-            for (let i = 0; i < limit; i++) {
-                const child = postsByNumber.get(reverseChildren[i]);
-                if (!child) continue;
-                children += '<div class="inline-expansion reverse">';
-                children += buildTreePostHtml(child, reverseIndex, true);
-                children += '</div>';
-            }
-            if (reverseChildren.length > REVERSE_EXPAND_LIMIT) {
-                children += '<div class="inline-expansion reverse-more">…他 ' +
-                            (reverseChildren.length - REVERSE_EXPAND_LIMIT) + ' 件</div>';
-            }
         }
-        // 重複あり tree では埋め込みは id を付けない (DOM の id 重複を避けるため)。
         return renderPost(postDataFor(p, isEmbedded, /*omitId*/ isEmbedded, children));
     }
 
-    /** ツリー (重複なし): 既描画レスは再描画しない。再帰的に親/子を展開。 */
-    function buildDedupPostHtml(p, reverseIndex, rendered, isEmbedded) {
-        if (rendered.has(p.number)) return '';
-        rendered.add(p.number);
-
-        // 親 (forward) — 再帰的、dedup-aware
-        let children = '';
-        const emitted = new Set();
-        for (const r of extractAnchorRefs(p.body || '')) {
-            if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-            for (let n = r.from; n <= r.to; n++) {
-                if (n >= p.number) continue;
-                if (emitted.has(n)) continue;
-                emitted.add(n);
-                if (rendered.has(n)) continue;
-                const parent = postsByNumber.get(n);
-                if (!parent) continue;
-                children += '<div class="inline-expansion forward">';
-                children += buildDedupPostHtml(parent, reverseIndex, rendered, true);
-                children += '</div>';
-            }
-        }
-
-        // 子 (reverse) — 再帰的、dedup-aware
-        const reverseChildren = reverseIndex.get(p.number) || [];
-        let count = 0;
-        for (const cn of reverseChildren) {
-            if (count >= REVERSE_EXPAND_LIMIT) break;
-            if (rendered.has(cn)) continue;
-            const child = postsByNumber.get(cn);
-            if (!child) continue;
-            children += '<div class="inline-expansion reverse">';
-            children += buildDedupPostHtml(child, reverseIndex, rendered, true);
-            children += '</div>';
-            count++;
-        }
-
-        // 重複なし tree では各レスは正確に 1 度しか出ないので id を常に付ける (アンカークリック解決のため)。
-        return renderPost(postDataFor(p, isEmbedded, /*omitId*/ false, children));
-    }
-
     // ---------- top-level renderer (viewMode に基づき分岐) ----------
+    /** allPosts を全て破棄→ per-post 経路で再挿入することで、現在の viewMode に整合した DOM を作り直す。
+     *  setViewMode (= ユーザのモード切替) と setPreviewPost (= 書き込みプレビューのリセット直後) から呼ばれる。
+     *  挿入ロジックは appendPosts の内側ループと同一 (= replayPostIntoDom 経由で共通化)。
+     *
+     *  dedupTree で「以降新レス」ラベルが立っている場合のみ 2 段構成:
+     *    1) section A (= ラベル前) を section A 内に閉じた reverseIndex で per-post 挿入。
+     *    2) reverseIndex を全レス基準に戻し、section A 各 primary の「返信 N 件」バッジを書き直す。
+     *    3) section B (= 「以降新レス」ラベル + 祖先 chain forest) を末尾に再構築。 */
     function renderCurrentViewMode() {
         const root = document.getElementById('posts');
         if (!root) return;
 
-        // 返信数バッジ用の逆引きを描画前に再構築 (tree 系はそのまま流用)
-        currentReverseIndex = buildReverseIndex();
+        root.innerHTML = '';
+        currentReverseIndex = new Map();
 
-        let html = '';
-        if (viewMode === 'tree') {
-            for (const p of allPosts) html += buildTreePostHtml(p, currentReverseIndex, false);
-        } else if (viewMode === 'dedupTree') {
-            // ラベル境界 (= markPostNumber 以降) があれば 2 セクション構成。
-            //   Section A: ラベル前のレスを通常の dedup tree で描画。reverseIndex も pre-mark 限定にして
-            //              新着分が祖先の子として埋め込まれてしまうのを防ぐ。
-            //   Section B: ラベル以降のレス (= 新規取得分) を、各レスの祖先 chain ごと末尾に並べる。
-            //              共通祖先は forest で merge。ancestor は embedded、新着自身は primary。
-            const markIdx = computeMarkIndex();
-            if (markIdx == null || markIdx >= allPosts.length) {
-                const rendered = new Set();
-                for (const p of allPosts) {
-                    if (rendered.has(p.number)) continue;
-                    html += buildDedupPostHtml(p, currentReverseIndex, rendered, false);
-                }
-            } else {
-                const sectionA = allPosts.slice(0, markIdx);
-                const sectionB = allPosts.slice(markIdx);
-                // Section A
-                const reverseA = buildReverseIndexFrom(sectionA);
-                const renderedA = new Set();
-                for (const p of sectionA) {
-                    if (renderedA.has(p.number)) continue;
-                    html += buildDedupPostHtml(p, reverseA, renderedA, false);
-                }
-                // Section B
-                const incNumbers = sectionB.map(p => p.number);
-                const incSet     = new Set(incNumbers);
-                const forest     = buildIncrementalForest(incNumbers);
-                if (forest.size > 0) {
-                    html += '<div class="incremental-section">';
-                    for (const node of forest.values()) {
-                        html += '<div class="incremental-block">';
-                        html += renderIncrementalForestNode(node, incSet, /*isEmbedded*/ false);
-                        html += '</div>';
-                    }
-                    html += '</div>';
-                }
-            }
+        const markIdx           = computeMarkIndex();
+        const isDedupWithMark   = (viewMode === 'dedupTree'
+                                   && markIdx != null && markIdx < allPosts.length);
+
+        if (isDedupWithMark) {
+            const sectionA = allPosts.slice(0, markIdx);
+            // section A の per-post 挿入。reverseIndex は p ごとに親側に p を加算して成長させる
+            // (= streaming 経路と同じ)。section B のレスは加算しないので reverseIndex は section A 内に閉じる。
+            for (const p of sectionA) replayPostIntoDom(p);
+            // 描画後、reverseIndex を全レス基準に戻して section A 各 primary の「返信 N 件」バッジを正しい件数にする。
+            currentReverseIndex = buildReverseIndex();
+            for (const p of sectionA) updateReplyCountBadge(p.number);
+            rebuildSectionB();
         } else {
-            for (const p of allPosts) html += buildPostHtml(p);
+            for (const p of allPosts) replayPostIntoDom(p);
         }
-        root.innerHTML = html;
 
-        // 存在しないアンカーをグレーアウト
+        // 描画後の汎用フック群 (= per-post 経路の appendPosts と同じセット)
         document.querySelectorAll('a.anchor').forEach(function (a) {
             const from = parseInt(a.dataset.from, 10);
             if (!postsByNumber.has(from)) a.classList.add('missing');
         });
-
-        attachAnchorHandlers(document, 0);
         observeImageSlots(document);
         tryScrollToTarget();
         updateRichScrollbar();
@@ -992,6 +959,26 @@
         recomputeMetaMaps();
         decorateMeta();
         applyFilterToAllPosts();
+    }
+
+    /** appendPosts と renderCurrentViewMode の両方が使う共通の per-post 復元ロジック。
+     *  順序: 親側 reverseIndex を p で加算 → DOM 挿入 → 親の返信バッジ更新。
+     *  reverseIndex を p の挿入「前」に加算しておくのは embedUnderParentReverse の overflow 計算の母数として参照されるため。 */
+    function replayPostIntoDom(p) {
+        const seen = new Set();
+        for (const r of extractAnchorRefs(p.body || '')) {
+            if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
+            for (let n = r.from; n <= r.to; n++) {
+                if (n >= p.number) continue;
+                if (!postsByNumber.has(n)) continue;
+                if (seen.has(n)) continue;
+                seen.add(n);
+                if (!currentReverseIndex.has(n)) currentReverseIndex.set(n, []);
+                currentReverseIndex.get(n).push(p.number);
+            }
+        }
+        insertPostIncremental(p);
+        for (const n of seen) updateReplyCountBadge(n);
     }
 
     /** 「今セッションで新着として届いたレス」を is-new クラスでマークする。
@@ -2580,17 +2567,180 @@
         badge.dataset.replies = replies.join(',');
     }
 
+    // ---------- per-post 増分 DOM 挿入 (Phase 24) ----------
+    // ストリーミング受信中に「1 batch ごとに renderCurrentViewMode で全再描画」する旧経路は
+    // chunk 数 ×「全レスのテンプレ展開」で O(N²) になり、特に dedupTree モードで重かった。
+    // 代わりに 1 レスごとにそのレスを「あるべき場所」だけ DOM に差し込む方式に切り替える。
+    // 仕様 (= 各モード × 状況 × アンカー数の組合せ) は以下:
+    //   flat   : 末尾 primary
+    //   tree   : 末尾 primary + (anchor=1 のとき親の reverse-expansion に duplicate コピーも)
+    //   dedupTree (新規/ストリーミング):
+    //            anchor=0 / 多 → 末尾 primary (leaf)
+    //            anchor=1     → 親の reverse-expansion 配下に embed (primary は出さない)
+    //   dedupTree (差分=incremental=true):
+    //            insertPostIncremental は通らず、batch 末で rebuildSectionB() が section B を組み直す。
+    // どの経路でも「全レス処理後の最終 DOM」は renderCurrentViewMode の出力と一致する設計。
+
+    /** root (= #posts) の最後 (or before 指定要素) に html を流し込み、anchor の missing クラス付与と
+     *  attachAnchorHandlers をまとめて実施する共通入口。
+     *  各 build*PostHtml の出力を DOM に投入する全箇所で本関数を経由させる。 */
+    function insertHtmlIntoContainer(container, html, before) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('a.anchor').forEach(function (a) {
+            const from = parseInt(a.dataset.from, 10);
+            if (!postsByNumber.has(from)) a.classList.add('missing');
+        });
+        attachAnchorHandlers(tmp, 0);
+        while (tmp.firstChild) {
+            if (before) container.insertBefore(tmp.firstChild, before);
+            else        container.appendChild(tmp.firstChild);
+        }
+    }
+
+    /** p の primary をモード別 HTML で root 末尾に append。
+     *   flat      : buildPostHtml
+     *   tree      : buildTreePostHtml(p, false) — forward 親を inline で添える。
+     *   dedupTree : leaf 形式 (forward/reverse 展開なし)。dedup 設計上 forward は別所で primary 既出のため leaf で十分。 */
+    function appendPrimaryAtEnd(p, root) {
+        let html;
+        if (viewMode === 'flat') {
+            html = buildPostHtml(p);
+        } else if (viewMode === 'tree') {
+            html = buildTreePostHtml(p, /*isEmbedded*/ false);
+        } else {
+            // dedupTree leaf: forward は dedup により別所で既出、reverse は到着時点では未来分でまだ無い。
+            html = renderPost(postDataFor(p, /*isEmbedded*/ false, /*omitId*/ false, ''));
+        }
+        insertHtmlIntoContainer(root, html, /*before*/ null);
+    }
+
+    /** parent (= reverseIndex の親レス) の reverse-expansion 配下に p を embed として追加する。
+     *  REVERSE_EXPAND_LIMIT を超える場合は「…他 N 件」インジケータに集約する。
+     *   mode = 'tree'      : id 無しの duplicate コピー (primary は別途末尾にも出る前提)。
+     *   mode = 'dedupTree' : id 付きの canonical 配置 (primary はここだけ)。
+     *  既存 DOM に親 primary が無い (= まれ) 場合は false を返し caller 側 fallback に任せる。 */
+    function embedUnderParentReverse(parentNum, p, mode) {
+        const parentEl = document.getElementById('r' + parentNum);
+        if (!parentEl) return false;
+
+        const existingRevs = parentEl.querySelectorAll(':scope > .inline-expansion.reverse').length;
+        let moreEl       = parentEl.querySelector(':scope > .inline-expansion.reverse-more');
+
+        if (existingRevs >= REVERSE_EXPAND_LIMIT) {
+            // limit 超過: 実 embed はせず indicator のカウントを更新。
+            // 母数は「単独 anchor の子レス」の総件数 (= renderCurrentViewMode と同じ式)。
+            const total = countSingleAnchorReverseChildren(parentNum);
+            const overflow = Math.max(1, total - REVERSE_EXPAND_LIMIT);
+            if (!moreEl) {
+                moreEl = document.createElement('div');
+                moreEl.className = 'inline-expansion reverse-more';
+                parentEl.appendChild(moreEl);
+            }
+            moreEl.textContent = '…他 ' + overflow + ' 件';
+            return true;
+        }
+
+        let embedHtml;
+        if (mode === 'tree') {
+            embedHtml = buildTreePostHtml(p, /*isEmbedded*/ true);
+        } else {
+            // dedupTree embed: ここが p の canonical 配置 → omitId=false で id を残す。
+            embedHtml = renderPost(postDataFor(p, /*isEmbedded*/ true, /*omitId*/ false, ''));
+        }
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'inline-expansion reverse';
+        wrapper.innerHTML = embedHtml;
+
+        wrapper.querySelectorAll('a.anchor').forEach(function (a) {
+            const from = parseInt(a.dataset.from, 10);
+            if (!postsByNumber.has(from)) a.classList.add('missing');
+        });
+        attachAnchorHandlers(wrapper, 0);
+
+        if (moreEl) parentEl.insertBefore(wrapper, moreEl);
+        else        parentEl.appendChild(wrapper);
+        return true;
+    }
+
+    /** レス 1 件の DOM 挿入 (= 仕様表に従いモード/状況/アンカー数で分岐)。
+     *  dedupTree-delta は本関数経由ではなく rebuildSectionB() で一括描画 (caller 側で振り分け)。 */
+    function insertPostIncremental(p) {
+        const root = document.getElementById('posts');
+        if (!root) return;
+
+        if (viewMode === 'flat') {
+            appendPrimaryAtEnd(p, root);
+            return;
+        }
+
+        const anchors = getValidForwardAnchors(p);
+
+        if (viewMode === 'tree') {
+            // tree: 末尾 primary は常に置く。anchor=1 のときだけ親の reverse 配下にも duplicate を置く。
+            appendPrimaryAtEnd(p, root);
+            if (anchors.length === 1) {
+                embedUnderParentReverse(anchors[0], p, 'tree');
+            }
+            return;
+        }
+
+        // dedupTree (非 delta = ストリーミング初回 / 全表示):
+        //   anchor=1 → 親の reverse 配下に canonical embed (primary は出さない)
+        //   anchor=0 / 多 → 末尾に primary leaf
+        if (anchors.length === 1) {
+            const ok = embedUnderParentReverse(anchors[0], p, 'dedupTree');
+            if (!ok) appendPrimaryAtEnd(p, root);
+        } else {
+            appendPrimaryAtEnd(p, root);
+        }
+    }
+
+    /** dedupTree 差分 (= incremental=true) batch 終了後、section B (= 「以降新レス」ラベル以降) を
+     *  sessionNewPostNumbers から再構築する。section A (= ラベル以前) の DOM はいじらない (= 仕様)。
+     *  既存の incremental-section があれば破棄して新規生成 (= 過去 batch との forest 統合は明示的にやる)。 */
+    function rebuildSectionB() {
+        const root = document.getElementById('posts');
+        if (!root) return;
+
+        const existing = root.querySelector(':scope > .incremental-section');
+        if (existing) existing.remove();
+
+        if (sessionNewPostNumbers.size === 0) return;
+        const incNumbers = [];
+        for (const p of allPosts) {
+            if (sessionNewPostNumbers.has(p.number)) incNumbers.push(p.number);
+        }
+        if (incNumbers.length === 0) return;
+        const incSet = new Set(incNumbers);
+        const forest = buildIncrementalForest(incNumbers);
+        if (forest.size === 0) return;
+
+        let html = '<div class="incremental-section">';
+        for (const node of forest.values()) {
+            html += '<div class="incremental-block">';
+            html += renderIncrementalForestNode(node, incSet, /*isEmbedded*/ false);
+            html += '</div>';
+        }
+        html += '</div>';
+        insertHtmlIntoContainer(root, html, /*before*/ null);
+    }
+
     // ---------- public API ----------
-    /** streaming で逐次追加。flat モードは既存 DOM 末尾に増分追加、tree 系はフル再描画。
-     *  スレ表示の唯一の描画 API。「全置換」は使わず、各 WebView2 はライフタイム中ずっと
+    /** streaming で逐次追加。スレ表示の唯一の描画 API。各 WebView2 はライフタイム中ずっと
      *  この関数だけで posts が積み上がる前提で動作する (旧 setPosts チャネルは撤去)。
+     *
+     *  挿入経路:
+     *    - flat / tree / dedupTree-非delta: 1 レスごとに insertPostIncremental で DOM 挿入。
+     *    - dedupTree-差分 (= incremental=true): batch 末に rebuildSectionB で section B 全体を再構築。
      *
      *  signature: (batch, scrollTarget, mark, incremental)
      *   - mark: 「以降新レス」ラベルの対象レス番号 (session-local; 永続化されない)
      *           毎 batch ペイロードで C# から最新値が届く (= リフレッシュで新着が来た瞬間に値が立ち、
      *           タブ閉じ / アプリ再起動でリセットされる)。
-     *   - incremental: dat 差分追加フラグ。true でも mark 自体は更新しない (= mark は C# 側で算定)。
-     *                  flat モードの末尾増分 vs tree モードのフル再描画を分岐するためだけに使う。 */
+     *   - incremental: dat 差分追加フラグ。session-new (= is-new 太字対象) の積算 + dedupTree の section B
+     *                  再構築経路の振り分けに使う。 */
     window.appendPosts = function (batch, scrollTarget, mark, incremental) {
         if (!Array.isArray(batch) || batch.length === 0) return;
         const root = document.getElementById('posts');
@@ -2610,65 +2760,43 @@
         // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
         markPostNumber = (typeof mark === 'number') ? mark : null;
 
-        // incremental=true (= リフレッシュで届いた差分) の batch だけ、is-new 太字対象として記憶。
-        // 初回ロード (= incremental=false) のレスは「今セッションで増えたものではない」ので太字対象外。
-        if (incremental === true) {
-            for (const p of batch) sessionNewPostNumbers.add(p.number);
-        }
+        const isDelta = (incremental === true);
+        // dedupTree の差分取得は per-post 経路ではなく batch 末に section B を一括再構築する経路を取る
+        // (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を素直に表現するため)。
+        const useDedupBulkRebuild = (viewMode === 'dedupTree' && isDelta);
 
-        // 内部状態は常に同じ更新
+        // 1 レスずつ: 内部状態を更新して replayPostIntoDom で「reverseIndex → DOM 挿入 → 親バッジ更新」を実施。
+        // dedupTree-delta だけは DOM 挿入を rebuildSectionB に任せるので、ここでは reverseIndex とバッジだけ更新する。
         for (const p of batch) {
             allPosts.push(p);
             postsByNumber.set(p.number, p);
-        }
+            if (isDelta) sessionNewPostNumbers.add(p.number);
 
-        // 末尾追加経路を通す条件:
-        //   - flat モード: 常に末尾追加 (= 線形リスト、順序保存)
-        //   - tree / dedupTree モード: incremental=true (= 真の差分取得) かつ既に DOM がある場合のみ
-        //     (= ユーザの目線を維持するため。incremental=false は「初回ロード」or「ストリーミング途中の chunk」で、
-        //      これらは全構築しないと dedupTree のツリー構造が意味的に壊れる)。
-        // 上記条件外 (= 初回ロード / ストリーミング chunk / 強制再構築) は renderCurrentViewMode で全構築。
-        const canTailAppend =
-            viewMode === 'flat'
-            || (incremental === true && root.children.length > 0);
-        if (!canTailAppend) {
-            renderCurrentViewMode();
-            return;
-        }
-
-        // ---- 末尾追記経路 (flat / tree / dedupTree いずれも 既存 DOM 維持) ----
-        let html = '';
-        if (viewMode === 'flat') {
-            for (const p of batch) html += buildPostHtml(p);
-        } else if (viewMode === 'tree') {
-            // tree (重複あり): 各レスを「祖先 + 直近の子」入りのツリーノードで末尾に並べる。
-            // 既存ツリー側の reverseIndex は触らないので、過去レスの「子」追記は次のフルレンダ時まで保留。
-            for (const p of batch) html += buildTreePostHtml(p, currentReverseIndex, false);
-        } else {
-            // dedupTree (重複なし): 新着 batch だけで forest を組んで .incremental-block 単位で末尾に追加。
-            // 既存の .incremental-section (= 初回 render の section B) や過去 delta が出したブロックは
-            // そのまま残し、新ブロックは root の末尾に兄弟として並べる (= 過去ブロック内の祖先と新ブロック内の
-            // 祖先は重複しうるが、既存 DOM 不可侵を優先する)。
-            const incNumbers = batch.map(p => p.number);
-            const incSet     = new Set(incNumbers);
-            const forest     = buildIncrementalForest(incNumbers);
-            for (const node of forest.values()) {
-                html += '<div class="incremental-block">';
-                html += renderIncrementalForestNode(node, incSet, /*isEmbedded*/ false);
-                html += '</div>';
+            if (useDedupBulkRebuild) {
+                // dedupTree-delta: DOM は batch 末の rebuildSectionB が一括描画する。
+                // reverseIndex は section A 既存 primary の返信バッジを最新化するためここで更新する。
+                const seen = new Set();
+                for (const r of extractAnchorRefs(p.body || '')) {
+                    if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
+                    for (let n = r.from; n <= r.to; n++) {
+                        if (n >= p.number) continue;
+                        if (!postsByNumber.has(n)) continue;
+                        if (seen.has(n)) continue;
+                        seen.add(n);
+                        if (!currentReverseIndex.has(n)) currentReverseIndex.set(n, []);
+                        currentReverseIndex.get(n).push(p.number);
+                    }
+                }
+                for (const n of seen) updateReplyCountBadge(n);
+            } else {
+                replayPostIntoDom(p);
             }
         }
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html;
 
-        tmp.querySelectorAll('a.anchor').forEach(function (a) {
-            const from = parseInt(a.dataset.from, 10);
-            if (!postsByNumber.has(from)) a.classList.add('missing');
-        });
-        attachAnchorHandlers(tmp, 0);
+        // dedupTree-delta は batch 末に section B を再構築 (= section A の DOM はいじらない)
+        if (useDedupBulkRebuild) rebuildSectionB();
 
-        while (tmp.firstChild) root.appendChild(tmp.firstChild);
-
+        // 既存 .anchor.missing が新着レスにより解決可能になったケースを救う (= 末尾 batch ごと走査)
         document.querySelectorAll('a.anchor.missing').forEach(function (a) {
             const from = parseInt(a.dataset.from, 10);
             if (postsByNumber.has(from)) {
@@ -2677,24 +2805,6 @@
                 a.addEventListener('mouseleave', function () { scheduleCloseAt(0); });
             }
         });
-
-        // 増分追加された各レスのアンカー先 (既存レス) に対し、currentReverseIndex を +1 して
-        // バッジ表示を差分更新する (新規レス自身は誰からも参照されていないので 0 件のまま)。
-        for (const p of batch) {
-            const seen = new Set();
-            for (const r of extractAnchorRefs(p.body || '')) {
-                if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-                for (let n = r.from; n <= r.to; n++) {
-                    if (n >= p.number) continue;
-                    if (!postsByNumber.has(n)) continue;
-                    if (seen.has(n)) continue;
-                    seen.add(n);
-                    if (!currentReverseIndex.has(n)) currentReverseIndex.set(n, []);
-                    currentReverseIndex.get(n).push(p.number);
-                    updateReplyCountBadge(n);
-                }
-            }
-        }
 
         observeImageSlots(root);
         tryScrollToTarget();
