@@ -791,6 +791,7 @@
         tryScrollToTarget();
         updateRichScrollbar();
         updateNewPostsMarkBand();
+        updateThreadEndMarkBand();
         updateMarkScrollbarMarker();
         markNewPosts();
         recomputeMetaMaps();
@@ -1791,6 +1792,24 @@
         debugLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
     }
 
+    /** スレッド末尾に「最後尾」ラベル (= 最終レスの直後) を 1 つだけ常時配置する。
+     *  デザインは new-posts-mark-band と同形 (細い横帯)、色だけ暗いスレート系で別 CSS クラスを使う。
+     *  flat / tree / dedupTree いずれの表示モードでも `#posts` の最後の子として末尾に出る。
+     *  毎回 remove → append し直すので、appendPosts や setViewMode の後に呼べば追従する。
+     *  posts が 0 件のときは出さない。 */
+    function updateThreadEndMarkBand() {
+        const root = document.getElementById('posts');
+        if (!root) return;
+        const existing = document.getElementById('thread-end-mark-band');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+        if (allPosts.length === 0) return;
+
+        const band = document.createElement('div');
+        band.id        = 'thread-end-mark-band';
+        band.className = 'thread-end-mark-band';
+        root.appendChild(band);
+    }
+
     /** リッチスクロールバーの mark トラック (= 一番右のトラック) に位置マーカーを描画。
      *  以下の 2 種類を同じトラックに「色違い」で並べる:
      *    1) 「以降新レス」境界の青ライン (= markPostNumber 位置、最大 1 本)
@@ -2458,6 +2477,7 @@
         tryScrollToTarget();
         updateRichScrollbar();
         updateNewPostsMarkBand();
+        updateThreadEndMarkBand();
         updateMarkScrollbarMarker();
         markNewPosts();
         // 増分追加で同 ID/ワッチョイの件数が変わるので、既存装飾を破棄して全体を再装飾する。

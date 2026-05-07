@@ -10,7 +10,7 @@
     <UseWPF>true</UseWPF>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>Resources\icon\app.ico</ApplicationIcon>
     <NeutralLanguage>ja-JP</NeutralLanguage>
   </PropertyGroup>
 

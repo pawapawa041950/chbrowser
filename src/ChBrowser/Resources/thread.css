@@ -338,6 +338,20 @@ a.anchor.missing {
     user-select: none;
 }
 .new-posts-mark-band::before { content: '— 以降新レス —'; }
+
+/* ---- 「最後尾」ラベル ---- */
+/* スレッド末尾 (= 最終レスの後) に常時表示される水平帯。 */
+.thread-end-mark-band {
+    margin: 4px 0 6px 0;
+    padding: 14px 0;                 /* 上下 padding を 1px→8px へ。font/border と合わせ全体高が約 2 倍 */
+    border-top: 1px dashed #0b0b91; /* 細い破線 (= new-posts-mark-band と同じ太さ)。暗背景に白で視認 */
+    color: #ffffff;
+    font-size: 11px;
+    text-align: center;
+    background: #a4abdb;            /* solid (= 透過なし) の青黒。Indigo 系をさらに沈めた色 */
+    user-select: none;
+}
+.thread-end-mark-band::before { content: '— 最後尾 —'; }
 /* mark トラックは細い横バー。同じトラックに 2 種類のマーカーを色違いで並べる。
  *   .marker      = 「以降新レス」境界 (青)
  *   .marker-own  = 「自分の書き込み」位置 (アンバー)。.marker と両方付くので順序で background が上書きされる。 */
