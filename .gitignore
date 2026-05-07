@@ -66,3 +66,13 @@ src/ChBrowser/data/
 # --- Claude Code の作業ファイル (任意で commit したくない場合) ---
 # .claude/ はプロジェクト固有の Claude Code 状態が入る。チームで共有しない場合は ignore 推奨。
 .claude/
+
+# --- 開発時補助スクリプト ---
+# 例: tools/make-icon.ps1 (= app.ico を生成し直す PowerShell スクリプト)。
+# 配布バイナリには関係しないので track しない。必要なら git history から取り出せる。
+tools/
+
+# --- アイコン生成のプレビュー PNG ---
+# tools/make-icon.ps1 が app.ico と並べて出力する各サイズの PNG。配布物には含めない。
+# app.ico (= 実際にビルドが参照する) は引き続き track する。
+src/ChBrowser/Resources/icon/preview_*.png
