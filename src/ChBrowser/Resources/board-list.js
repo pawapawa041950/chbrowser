@@ -58,7 +58,7 @@
         if (!openOnSingleClick) openLi(li);
     });
 
-    // C# からの setConfig / setShortcutBindings 受信
+    // C# からの setConfig / setPaneSearch / setShortcutBindings 受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             var msg = e.data;
@@ -67,9 +67,95 @@
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;
                 }
+            } else if (msg.type === 'setPaneSearch') {
+                applyPaneSearch(typeof msg.query === 'string' ? msg.query : '');
             }
             // setShortcutBindings は shortcut-bridge.js 内で受信。
         });
+    }
+
+    // ---------- 絞り込み (板一覧) ----------
+    // 板名 (= li.board の textContent or data-name) でマッチ判定。ヒットした板 + その属する
+    // <details class="category"> を表示し、それ以外の板は filter-hidden。空文字でリセット。
+    // ハイライトは li.board 内の text node に <mark.search-highlight> を挿入。
+
+    function clearHighlights() {
+        var marks = root.querySelectorAll('mark.search-highlight');
+        for (var i = 0; i < marks.length; i++) {
+            var m = marks[i];
+            var t = document.createTextNode(m.textContent || '');
+            m.parentNode.replaceChild(t, m);
+        }
+        if (marks.length > 0) root.normalize();
+    }
+
+    function highlightInElement(el, queryLower, queryLen) {
+        if (!el) return;
+        var texts = [];
+        var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) texts.push(walker.currentNode);
+        for (var i = 0; i < texts.length; i++) {
+            var tn = texts[i];
+            if (!tn.parentNode) continue;
+            if (tn.parentNode.classList && tn.parentNode.classList.contains('search-highlight')) continue;
+            var text = tn.nodeValue || '';
+            var lower = text.toLowerCase();
+            var idx = lower.indexOf(queryLower);
+            if (idx < 0) continue;
+            var frag = document.createDocumentFragment();
+            var pos = 0;
+            while (idx >= 0) {
+                if (idx > pos) frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+                var mark = document.createElement('mark');
+                mark.className = 'search-highlight';
+                mark.textContent = text.slice(idx, idx + queryLen);
+                frag.appendChild(mark);
+                pos = idx + queryLen;
+                idx = lower.indexOf(queryLower, pos);
+            }
+            if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+            tn.parentNode.replaceChild(frag, tn);
+        }
+    }
+
+    function applyPaneSearch(query) {
+        var qLow = (query || '').toLowerCase();
+        clearHighlights();
+
+        var boards     = root.querySelectorAll('li.board');
+        var categories = root.querySelectorAll('details.category');
+
+        if (!qLow) {
+            for (var i = 0; i < boards.length; i++)     boards[i].classList.remove('filter-hidden');
+            for (var k = 0; k < categories.length; k++) categories[k].classList.remove('filter-hidden');
+            return;
+        }
+        var qLen = query.length;
+
+        // 各板にマッチ判定 → カテゴリ単位の visible 集計
+        var visibleCategories = new Set();
+        for (var j = 0; j < boards.length; j++) {
+            var li = boards[j];
+            var name = (li.dataset.name || li.textContent || '').toLowerCase();
+            if (name.indexOf(qLow) >= 0) {
+                li.classList.remove('filter-hidden');
+                highlightInElement(li, qLow, qLen);
+                // 親 details を強制 open + visible
+                var p = li.parentElement;
+                while (p && p !== root) {
+                    if (p.tagName === 'DETAILS') { p.open = true; visibleCategories.add(p); }
+                    p = p.parentElement;
+                }
+            } else {
+                li.classList.add('filter-hidden');
+            }
+        }
+
+        for (var c = 0; c < categories.length; c++) {
+            var cat = categories[c];
+            if (visibleCategories.has(cat)) cat.classList.remove('filter-hidden');
+            else                            cat.classList.add('filter-hidden');
+        }
     }
 
     // カテゴリ開閉 → C# 側 ViewModel に同期

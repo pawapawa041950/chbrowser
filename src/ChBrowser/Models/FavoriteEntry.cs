@@ -62,3 +62,12 @@ public sealed record FavoritesData
     public int Version { get; init; } = 1;
     public IReadOnlyList<FavoriteEntry> Root { get; init; } = Array.Empty<FavoriteEntry>();
 }
+
+/// <summary>お気に入り関連の固定値。ストレージ層と UI 層 (MainViewModel) で共有するため Models 配下に置く。</summary>
+public static class FavoriteDefaults
+{
+    /// <summary>「上ボタン」バー (= Chrome ブックマークバー風の固定 UI) が中身を映す
+    /// お気に入りルート直下フォルダの名前。<see cref="ChBrowser.ViewModels.MainViewModel.TopButtonsFolderName"/>
+    /// もここを参照する。</summary>
+    public const string TopButtonsFolderName = "上ボタン";
+}

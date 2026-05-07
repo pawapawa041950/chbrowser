@@ -130,7 +130,7 @@ public sealed partial class MainViewModel
             tab.HasReplyToOwn = DeltaHasReplyToOwn(tab, added);
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[fetchDelta]   → HasReplyToOwn={tab.HasReplyToOwn} (delta scan over {added.Count} new posts)");
-            StatusMessage = $"{headerForStatus}: {added.Count} レス追加 (合計 {result.Posts.Count})";
+            tab.StatusMessage = $"{headerForStatus}: {added.Count} レス追加 (合計 {result.Posts.Count})";
         }
         else if (result.Posts.Count == prevCount)
         {
@@ -140,7 +140,7 @@ public sealed partial class MainViewModel
             tab.HasReplyToOwn  = false;
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[fetchDelta]   → 新着 0 件、tab.MarkPostNumber=null、HasReplyToOwn=false");
-            StatusMessage = $"{headerForStatus}: 新着なし ({result.Posts.Count} レス)";
+            tab.StatusMessage = $"{headerForStatus}: 新着なし ({result.Posts.Count} レス)";
         }
         else
         {
@@ -149,7 +149,7 @@ public sealed partial class MainViewModel
             tab.HasReplyToOwn  = false;
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[fetchDelta]   → dat 縮小、tab.MarkPostNumber=null、HasReplyToOwn=false");
-            StatusMessage = $"{headerForStatus}: dat 縮小 ({prevCount} → {result.Posts.Count})";
+            tab.StatusMessage = $"{headerForStatus}: dat 縮小 ({prevCount} → {result.Posts.Count})";
         }
         tab.DatSize = result.DatSize;
     }
@@ -205,16 +205,16 @@ public sealed partial class MainViewModel
             if (local is not null && local.Posts.Count > 0)
             {
                 AppendPostsWithNg(tab, local.Posts);
-                tab.DatSize   = local.DatSize;
-                prevCount     = local.Posts.Count;
-                StatusMessage = $"{info.Title}: {prevCount} レス (差分取得中...)";
+                tab.DatSize       = local.DatSize;
+                prevCount         = local.Posts.Count;
+                tab.StatusMessage = $"{info.Title}: {prevCount} レス (差分取得中...)";
                 // 仕様: cache load では「自分への返信」検知を走らせない (= 既存スレ内の旧返信は赤化しない)。
                 // 初回 false で OK。次の差分取得が新着 + 返信を含む場合に ApplyFetchDelta が立てる。
                 tab.HasReplyToOwn = false;
             }
             else
             {
-                StatusMessage = $"{info.Title} を取得中...";
+                tab.StatusMessage = $"{info.Title} を取得中...";
             }
 
             // ---- Step 2: サーバから取得 ----
@@ -224,10 +224,10 @@ public sealed partial class MainViewModel
                 var progress = new Progress<IReadOnlyList<Post>>(batch =>
                 {
                     AppendPostsWithNg(tab, batch);
-                    StatusMessage = $"{info.Title}: {tab.Posts.Count} レス取得中...";
+                    tab.StatusMessage = $"{info.Title}: {tab.Posts.Count} レス取得中...";
                 });
                 result = await _datClient.FetchStreamingAsync(board, info.Key, progress).ConfigureAwait(true);
-                StatusMessage = $"{info.Title}: {result.Posts.Count} レス ({result.DatSize / 1024} KB)";
+                tab.StatusMessage = $"{info.Title}: {result.Posts.Count} レス ({result.DatSize / 1024} KB)";
             }
             else
             {
@@ -272,13 +272,13 @@ public sealed partial class MainViewModel
             // ローカル dat が表示できていれば、タイトル/状態色は維持して状況だけステータス通知。
             if (tab.Posts.Count > 0)
             {
-                tab.State    = stateHint ?? LogMarkState.Dropped;
-                StatusMessage = $"{info.Title}: 取得失敗 (キャッシュ表示中) — {ex.Message}";
+                tab.State         = stateHint ?? LogMarkState.Dropped;
+                tab.StatusMessage = $"{info.Title}: 取得失敗 (キャッシュ表示中) — {ex.Message}";
             }
             else
             {
-                tab.Header    = "(取得失敗)";
-                StatusMessage = $"スレ取得失敗: {ex.Message}";
+                tab.Header        = "(取得失敗)";
+                tab.StatusMessage = $"スレ取得失敗: {ex.Message}";
             }
         }
         finally
@@ -296,8 +296,8 @@ public sealed partial class MainViewModel
         var prevCount = tab.Posts.Count;
         try
         {
-            tab.IsBusy    = true;
-            StatusMessage = $"{tab.Header} を更新中...";
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"{tab.Header} を更新中...";
 
             var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
             var result     = await _datClient.FetchStreamingAsync(tab.Board, tab.ThreadKey, noProgress).ConfigureAwait(true);
@@ -313,7 +313,7 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
-            StatusMessage = $"{tab.Header} の更新失敗: {ex.Message}";
+            tab.StatusMessage = $"{tab.Header} の更新失敗: {ex.Message}";
         }
         finally
         {
@@ -576,6 +576,8 @@ public sealed partial class MainViewModel
         }
 
         // 該当 ThreadTab が開いていれば close (= 「ログ削除」直後にスレ表示が残るのを避ける)。
+        // ログ削除でも「うっかり消した → 復元したい」というユースケースが普通にあるため、
+        // 再オープン履歴には積む (= 通常の close と同じ扱い)。再オープン時は dat を取り直して開く。
         var openTab = FindThreadTab(board, threadKey);
         if (openTab is not null) ThreadTabs.Remove(openTab);
 
@@ -644,7 +646,12 @@ public sealed partial class MainViewModel
         if (e.OldItems is null) return;
         foreach (var item in e.OldItems)
         {
-            if (item is ThreadTabViewModel tab) FlushScrollPositionToDisk(tab);
+            if (item is ThreadTabViewModel tab)
+            {
+                FlushScrollPositionToDisk(tab);
+                // 「タブを閉じる」操作の復元用履歴に積む (= DeleteThreadLog 等 suppress 中なら no-op)。
+                PushRecentlyClosedThreadTab(tab);
+            }
         }
     }
 

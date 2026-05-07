@@ -55,6 +55,20 @@ tbody td {
 tbody tr:hover td   { background: #f5f5f5; cursor: pointer; }
 tbody tr.selected td { background: #cce5ff; }
 
+/* ---- 検索フィルタ ---- */
+/* スレ一覧ヘッダの絞り込みテキストボックス (= ThreadListTabViewModel.SearchQuery) で
+   タイトルがマッチしなかった行は filter-hidden が付与されて非表示。
+   タイトルセル内のマッチ箇所は <mark class="search-highlight"> で黄色ハイライト。
+   スレッド表示ペインの検索ハイライトと色 / 形を揃える。 */
+tbody tr.filter-hidden { display: none; }
+
+td.col-title mark.search-highlight {
+    background: #fff176;       /* ソフトな黄色 */
+    color: inherit;
+    padding: 0 1px;
+    border-radius: 2px;
+}
+
 .col-log      { text-align: center; width: 26px; padding: 2px 0; }
 /* ★ 印 (.is-favorited 行) の absolute 配置用に td 側だけ relative にする。
    thead th.col-log まで relative にすると thead の sticky が殺されて

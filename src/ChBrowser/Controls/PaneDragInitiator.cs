@@ -25,8 +25,11 @@ public static class PaneDragInitiator
 
         header.PreviewMouseLeftButtonDown += (s, e) =>
         {
-            // 子要素の Button (× / ヘッダ右端のリフレッシュ等) で押されていたらドラッグ開始しない。
-            if (e.OriginalSource is DependencyObject src && IsInsideButton(src))
+            // ヘッダ内の interactive コントロール (Button / TextBox 等) 上で押された場合は
+            // ドラッグ開始しない (= そのコントロールの本来動作を生かす)。
+            // TextBox を除外しないと「テキスト選択でドラッグ閾値を超える」→ 急にペインドラッグが始まり
+            // Mouse.Capture がペインに奪われて選択不能になるため必須。
+            if (e.OriginalSource is DependencyObject src && IsInsideInteractiveControl(src))
             {
                 downPoint = null;
                 return;
@@ -66,12 +69,20 @@ public static class PaneDragInitiator
         return null;
     }
 
-    private static bool IsInsideButton(DependencyObject d)
+    /// <summary>ヘッダ内の interactive なコントロール (= ペインドラッグより自身のマウス処理を優先したい要素) かを判定。
+    ///   - <see cref="System.Windows.Controls.Primitives.ButtonBase"/>: × ボタン / リフレッシュ等
+    ///   - <see cref="System.Windows.Controls.Primitives.TextBoxBase"/>: TextBox / RichTextBox (= 検索ボックス等で
+    ///       テキスト選択を許可する。除外しないとドラッグ開始閾値超過でペインドラッグが始まり選択不能になる)
+    ///   - <see cref="System.Windows.Controls.PasswordBox"/>: 同上 (TextBoxBase を継承していない別系統)
+    /// </summary>
+    private static bool IsInsideInteractiveControl(DependencyObject d)
     {
         DependencyObject? cur = d;
         while (cur is not null)
         {
-            if (cur is System.Windows.Controls.Primitives.ButtonBase) return true;
+            if (cur is System.Windows.Controls.Primitives.ButtonBase)  return true;
+            if (cur is System.Windows.Controls.Primitives.TextBoxBase) return true;
+            if (cur is System.Windows.Controls.PasswordBox)            return true;
             cur = VisualTreeHelper.GetParent(cur);
         }
         return false;

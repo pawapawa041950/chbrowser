@@ -1,5 +1,15 @@
 /* ChBrowser お気に入りペイン (Phase 14b) */
 
+/* ---- 検索フィルタ ---- */
+/* setPaneSearch で絞り込み: マッチしないエントリは非表示、マッチ箇所は黄色ハイライト。 */
+li.fav-item.filter-hidden { display: none; }
+mark.search-highlight {
+    background: #fff176;
+    color: inherit;
+    padding: 0 1px;
+    border-radius: 2px;
+}
+
 html { height: 100%; }
 body {
     margin: 0;

@@ -23,12 +23,18 @@
                        Background="{StaticResource PaneHeaderBackground}"
                        LastChildFill="True">
                 <Border DockPanel.Dock="Bottom" Height="1" Background="{StaticResource PaneBorderBrush}" />
-                <TextBlock Text="板一覧" Padding="6,4" FontWeight="SemiBold" />
+                <TextBlock DockPanel.Dock="Left" Text="板一覧" Padding="6,4" FontWeight="SemiBold" />
+                <!-- 絞り込み検索: タイトルの右に残りスペースを fill (= last child)。
+                     ペイン幅が狭くても × ボタンが画面内に残る。 -->
+                <ctrl:SearchBoxToggle Margin="2,2,4,2"
+                                      HintText="板名を絞り込み (空欄で解除)"
+                                      Text="{Binding BoardListSearchQuery, UpdateSourceTrigger=PropertyChanged}" />
             </DockPanel>
             <wv2:WebView2 x:Name="BoardListWebView"
                           ctrl:WebView2Helper.Html="{Binding BoardListHtml}"
                           ctrl:WebView2Helper.PaneConfigJson="{Binding BoardListConfigJson}"
                           ctrl:WebView2Helper.PaneShortcutsJson="{Binding BoardListShortcutsJson}"
+                          ctrl:WebView2Helper.PaneSearchPush="{Binding BoardListSearchQuery}"
                           WebMessageReceived="BoardListWebView_WebMessageReceived" />
         </DockPanel>
     </Border>

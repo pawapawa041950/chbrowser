@@ -78,8 +78,10 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>「上ボタン」バーを表示するか。<see cref="TopButtonsItems"/> が空なら false。</summary>
     [ObservableProperty] private bool _isTopButtonsBarVisible;
 
-    /// <summary>「上ボタン」フォルダの判定名 (= お気に入りに作るとブックマークバーに自動載録される)。</summary>
-    public const string TopButtonsFolderName = "上ボタン";
+    /// <summary>「上ボタン」フォルダの判定名 (= お気に入りに作るとブックマークバーに自動載録される)。
+    /// 実体は <see cref="ChBrowser.Models.FavoriteDefaults.TopButtonsFolderName"/> で、ストレージ側 (初期化時の
+    /// デフォルトお気に入り生成) と共有している。</summary>
+    public const string TopButtonsFolderName = ChBrowser.Models.FavoriteDefaults.TopButtonsFolderName;
 
     /// <summary>スレ一覧タブの計算済み幅 (px)。AppConfig の WidthMode に応じて文字数 × 概算 px か、px 値を採用。
     /// XAML 側の TabItem.Width に bind される。</summary>
@@ -116,9 +118,25 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _boardListConfigJson  = "";
     [ObservableProperty] private string _threadListConfigJson = "";
 
+    /// <summary>お気に入りペインの絞り込み検索クエリ。空欄でフィルタ解除。
+    /// WebView2.PaneSearchPush で JS に push され、マッチしないエントリは非表示 + マッチ箇所をハイライト。</summary>
+    [ObservableProperty] private string _favoritesSearchQuery = "";
+
+    /// <summary>板一覧ペインの絞り込み検索クエリ。空欄でフィルタ解除。
+    /// WebView2.PaneSearchPush で JS に push され、マッチしない板は非表示 + マッチ箇所をハイライト。</summary>
+    [ObservableProperty] private string _boardListSearchQuery = "";
+
     // ----- アクティブタブ -----
     [ObservableProperty] private ThreadListTabViewModel? _selectedThreadListTab;
     [ObservableProperty] private ThreadTabViewModel?     _selectedThreadTab;
+
+    // ステータスバー (= MainViewModel.StatusMessage) はアクティブペイン (Thread / ThreadList) の選択タブの
+    // StatusMessage と同期する。タブを切り替えると過去のメッセージが復元され、ペインを切り替えても
+    // そのペインの選択タブの最後のメッセージが見える。
+    /// <summary>現在 PropertyChanged を購読しているスレッドタブ。SelectedThreadTab 変更で付け替え。</summary>
+    private ThreadTabViewModel? _statusListenerThreadTab;
+    /// <summary>現在 PropertyChanged を購読しているスレ一覧タブ。SelectedThreadListTab 変更で付け替え。</summary>
+    private ThreadListTabViewModel? _statusListenerThreadListTab;
 
     partial void OnSelectedThreadTabChanged(ThreadTabViewModel? value)
     {
@@ -127,33 +145,80 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var t in ThreadTabs) t.IsSelected = ReferenceEquals(t, value);
         // ステータスバーの「あぼーん N」を選択タブのものに更新
         AboneStatus = value is null ? "あぼーん 0" : $"あぼーん {value.HiddenCount}";
+
+        // 旧タブ購読を解除 → 新タブ購読
+        if (_statusListenerThreadTab is not null)
+            _statusListenerThreadTab.PropertyChanged -= OnActiveThreadTabPropertyChanged;
+        _statusListenerThreadTab = value;
+        if (value is not null)
+            value.PropertyChanged += OnActiveThreadTabPropertyChanged;
+
         // アドレスバーは last-activated wins (Phase 14)
         if (value is not null) _lastActivePane = ActivePane.Thread;
         RefreshAddressBarUrl();
+        SyncStatusFromActivePane();
+    }
+
+    private void OnActiveThreadTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ThreadTabViewModel.StatusMessage))
+            SyncStatusFromActivePane();
+    }
+
+    private void OnActiveThreadListTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ThreadListTabViewModel.StatusMessage))
+            SyncStatusFromActivePane();
+    }
+
+    /// <summary>アクティブペインの選択タブの StatusMessage が非空なら <see cref="StatusMessage"/> に反映する。
+    /// 空のときは何もしない (= ステータスバーは前の値のまま = 直前のグローバル状態 / 別タブの状態を尊重)。</summary>
+    private void SyncStatusFromActivePane()
+    {
+        string? msg = _lastActivePane switch
+        {
+            ActivePane.Thread     => SelectedThreadTab?.StatusMessage,
+            ActivePane.ThreadList => SelectedThreadListTab?.StatusMessage,
+            _                     => null,
+        };
+        if (!string.IsNullOrEmpty(msg)) StatusMessage = msg;
     }
 
     partial void OnSelectedThreadListTabChanged(ThreadListTabViewModel? value)
     {
         foreach (var t in ThreadListTabs) t.IsSelected = ReferenceEquals(t, value);
+
+        if (_statusListenerThreadListTab is not null)
+            _statusListenerThreadListTab.PropertyChanged -= OnActiveThreadListTabPropertyChanged;
+        _statusListenerThreadListTab = value;
+        if (value is not null)
+            value.PropertyChanged += OnActiveThreadListTabPropertyChanged;
+
         if (value is not null) _lastActivePane = ActivePane.ThreadList;
         RefreshAddressBarUrl();
+        SyncStatusFromActivePane();
     }
 
     // -----------------------------------------------------------------
     // ジェスチャー進捗
     // -----------------------------------------------------------------
 
-    /// <summary>WPF / WebView ブリッジ両方から呼ばれる。category=null で表示クリア。</summary>
-    public void UpdateGestureStatus(string? category, string? gesture)
+    /// <summary>WPF / WebView ブリッジ両方から呼ばれる。category=null で表示クリア。
+    /// <paramref name="matchedActionName"/> が非空なら「→ アクション名」を末尾に付ける
+    /// (= 今右クリックを離せば発火するコマンドの予告表示)。</summary>
+    public void UpdateGestureStatus(string? category, string? gesture, string? matchedActionName = null)
     {
         if (string.IsNullOrEmpty(category))
         {
             GestureStatus = "";
             return;
         }
-        GestureStatus = string.IsNullOrEmpty(gesture)
+        var prefix = string.IsNullOrEmpty(gesture)
             ? $"ジェスチャー [{category}]"
             : $"ジェスチャー [{category}] {gesture}";
+        GestureStatus = string.IsNullOrEmpty(matchedActionName)
+            ? prefix
+            : $"{prefix} : {matchedActionName}";
     }
 
     // -----------------------------------------------------------------
@@ -168,6 +233,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _lastActivePane = ActivePane.ThreadList;
         RefreshAddressBarUrl();
+        SyncStatusFromActivePane();
     }
 
     /// <summary>右ペイン下段「スレ表示」(ThreadTabs) がアクティブ化された通知。</summary>
@@ -175,6 +241,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _lastActivePane = ActivePane.Thread;
         RefreshAddressBarUrl();
+        SyncStatusFromActivePane();
     }
 
     /// <summary>アドレスバーに表示する現在のタブの URL (= 最後にアクティブ化した方の URL)。</summary>
@@ -286,6 +353,14 @@ public sealed partial class MainViewModel : ObservableObject
         // CollectionChanged を購読する。スクロール中の都度書き込みは行わない設計
         // (= MainViewModel.UpdateScrollPosition は in-memory 更新のみ)。
         ThreadTabs.CollectionChanged += OnThreadTabsCollectionChanged;
+
+        // スレ一覧タブの close 履歴管理 (= 中クリック空領域復元用)。
+        ThreadListTabs.CollectionChanged += (_, e) =>
+        {
+            if (e.OldItems is null) return;
+            foreach (var item in e.OldItems)
+                if (item is ThreadListTabViewModel t) PushRecentlyClosedThreadListTab(t);
+        };
 
         // どんぐり経過時間表示を 30 秒ごとに更新。起動直後にも 1 度実行。
         _donguriTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };

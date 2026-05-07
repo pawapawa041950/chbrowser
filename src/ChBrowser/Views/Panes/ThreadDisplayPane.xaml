@@ -49,8 +49,10 @@
                 BorderBrush="{StaticResource PaneBorderBrush}"
                 BorderThickness="0,0,0,1">
             <DockPanel Margin="4,2">
-                <TextBlock Text="スレッド表示" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal"
+                <TextBlock DockPanel.Dock="Left" Text="スレッド表示" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
+                <!-- ボタン群は右端に固定。SearchBoxToggle を DockPanel の last child (= 残り幅を fill)
+                     にすることで、ペイン幅が狭くても × ボタンが画面内に確実に残る。 -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                             HorizontalAlignment="Right">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
@@ -61,6 +63,18 @@
                             </Style.Triggers>
                         </Style>
                     </StackPanel.Style>
+
+                    <!-- フィルタトグル: 人気レス / 画像レス。両方 ON で OR (= どちらかに該当なら表示)。 -->
+                    <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
+                                  IsChecked="{Binding SelectedThreadTab.IsPopularFilterOn}"
+                                  ToolTip="人気のレス (返信が多いレス + ツリーモードではその配下) のみ表示。画像トグルと OR 動作">
+                        <TextBlock Text="👍" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </ToggleButton>
+                    <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
+                                  IsChecked="{Binding SelectedThreadTab.IsMediaFilterOn}"
+                                  ToolTip="画像 / 動画 URL を含むレスのみ表示。人気トグルと OR 動作">
+                        <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </ToggleButton>
 
                     <!-- 差分取得 -->
                     <Button Style="{StaticResource ToolbarIconButton}"
@@ -185,6 +199,23 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
                 </StackPanel>
+
+                <!-- 絞り込み検索: ヘッダの「タイトル」と「ボタン群」の間の残りスペースを fill する。
+                     ペイン幅が狭くなっても × ボタン (= SearchBoxToggle 内で Dock=Right) が画面内に残る。
+                     SelectedThreadTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                <ctrl:SearchBoxToggle Margin="0,0,6,0"
+                                      HintText="本文 / 名前行に文字列を含むレスだけ表示 (空欄でフィルタ解除)"
+                                      Text="{Binding SelectedThreadTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                    <ctrl:SearchBoxToggle.Style>
+                        <Style TargetType="ctrl:SearchBoxToggle">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedThreadTab}" Value="{x:Null}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ctrl:SearchBoxToggle.Style>
+                </ctrl:SearchBoxToggle>
             </DockPanel>
         </Border>
 
@@ -192,7 +223,8 @@
                     ItemsSource="{Binding ThreadTabs}"
                     SelectedItem="{Binding SelectedThreadTab}"
                     BorderThickness="0"
-                    Margin="1,0,1,0">
+                    Margin="1,0,1,0"
+                    MinHeight="24"><!-- タブ 0 件でも 1 段分の高さを維持 (= 中クリック復元の hit area を残す) -->
             <!-- WrapPanel で「複数行 wrap」を実現。タブが画面幅を超えると次の行に折り返す。
                  デフォルトの TabPanel は環境によって wrap が機能しないことがあったため明示的に WrapPanel に変更。 -->
             <TabControl.Template>
@@ -257,6 +289,7 @@
                     <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
                                   ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
                                   ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
+                                  ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"

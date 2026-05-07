@@ -53,5 +53,48 @@
             </Setter>
         </Style>
 
+        <!-- ツールバー用トグルアイコンボタン。ToolbarIconButton と同じ見た目だが IsChecked=True で
+             押された見た目 (= 青背景 + 縁) を維持する。スレッド表示ヘッダのフィルタ系トグル等で使う。 -->
+        <Style x:Key="ToolbarToggleIconButton" TargetType="ToggleButton">
+            <Setter Property="Width"               Value="28" />
+            <Setter Property="Height"              Value="24" />
+            <Setter Property="Padding"             Value="0" />
+            <Setter Property="Margin"              Value="1,0" />
+            <Setter Property="Background"          Value="Transparent" />
+            <Setter Property="BorderBrush"         Value="Transparent" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="2"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#EAF1F8" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background"  Value="#CCE5FF" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#88B0DD" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background"  Value="#A8D2FF" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#5C8FCC" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Application.Resources>
 </Application>

@@ -52,6 +52,57 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ThreadListSearchPush (スレ一覧: タイトル絞り込みクエリを JS に push)
+    //
+    // 値は string。空文字なら絞り込み解除 (= 全行可視)。null は早期 return (= 初期状態)。
+    // JS 側は setListSearch メッセージを受けて行の visibility と title セルのハイライトを更新する。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ThreadListSearchPushProperty =
+        DependencyProperty.RegisterAttached(
+            "ThreadListSearchPush",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnThreadListSearchPushChanged));
+
+    public static string? GetThreadListSearchPush(DependencyObject d) => (string?)d.GetValue(ThreadListSearchPushProperty);
+    public static void    SetThreadListSearchPush(DependencyObject d, string? value) => d.SetValue(ThreadListSearchPushProperty, value);
+
+    private static void OnThreadListSearchPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        var query = (e.NewValue as string) ?? "";
+        var json  = JsonSerializer.Serialize(new { type = "setListSearch", query }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
+    }
+
+    // ------------------------------------------------------------
+    // PaneSearchPush (お気に入り / 板一覧 ペイン: 絞り込みクエリを JS に push する汎用 DP)
+    //
+    // 値は string。空文字なら絞り込み解除 (= 全エントリ可視)。
+    // JS 側は setPaneSearch メッセージを受けて、ツリーをフィルタ + マッチ箇所をハイライトする。
+    // 対象ペインの JS (favorites.js / board-list.js) で同名のハンドラを実装する。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty PaneSearchPushProperty =
+        DependencyProperty.RegisterAttached(
+            "PaneSearchPush",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnPaneSearchPushChanged));
+
+    public static string? GetPaneSearchPush(DependencyObject d) => (string?)d.GetValue(PaneSearchPushProperty);
+    public static void    SetPaneSearchPush(DependencyObject d, string? value) => d.SetValue(PaneSearchPushProperty, value);
+
+    private static void OnPaneSearchPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        var query = (e.NewValue as string) ?? "";
+        var json  = JsonSerializer.Serialize(new { type = "setPaneSearch", query }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
+    }
+
+    // ------------------------------------------------------------
     // ItemsHtmlPatch (スレ一覧: tbody innerHTML を in-place 差分 push)
     //
     // 2 回目以降のリフレッシュで Html を再 NavigateToString すると WebView2 の DOM が破棄され
@@ -181,6 +232,39 @@ public static partial class WebView2Helper
         // value は int? の boxed か null。JsonSerializer は null を JSON null としてシリアライズするので
         // JS 側で typeof === 'number' チェック → 数値なら設定、それ以外 (= null/undefined) なら markPostNumber=null。
         var json = JsonSerializer.Serialize(new { type = "setMarkPostNumber", value = e.NewValue }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // FilterPush (スレ表示: テキスト絞り込み + 将来追加されるフィルタ条件を 1 オブジェクトで JS に push)
+    //
+    // 値の型は ThreadFilter (record)。プロパティ追加だけで条件を増やせる設計。
+    // null → 早期 return (= デフォルト初期値 = ThreadFilter() なら必ず non-null なのでこの経路は通常通らない)。
+    // 値が来たら setFilter メッセージを serialize して送る。JS 側は記載のフィールドを順次評価する。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty FilterPushProperty =
+        DependencyProperty.RegisterAttached(
+            "FilterPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnFilterPushChanged));
+
+    public static object? GetFilterPush(DependencyObject d) => d.GetValue(FilterPushProperty);
+    public static void    SetFilterPush(DependencyObject d, object? value) => d.SetValue(FilterPushProperty, value);
+
+    private static void OnFilterPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not ChBrowser.Models.ThreadFilter filter) return;
+        // ThreadFilter のフィールドをそのまま乗せて push (= 新フィールド追加で自動的に JS 側へ届く)。
+        var json = JsonSerializer.Serialize(new
+        {
+            type        = "setFilter",
+            textQuery   = filter.TextQuery,
+            popularOnly = filter.PopularOnly,
+            mediaOnly   = filter.MediaOnly,
+        }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

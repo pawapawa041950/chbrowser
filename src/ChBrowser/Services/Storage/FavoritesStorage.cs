@@ -30,12 +30,16 @@ public sealed class FavoritesStorage
         _path = paths.FavoritesJsonPath;
     }
 
-    /// <summary>お気に入り全体を読む。ファイルが無い / 壊れている場合は空データ。</summary>
+    /// <summary>お気に入り全体を読む。
+    /// ファイルが無い (= 初回起動相当) ときはデフォルトの初期セット (= ルート直下に「上ボタン」空フォルダ) を返す
+    /// (= MainWindow 上部の上ボタンバーがすぐにエントリ追加できる状態で立ち上がるようにするため)。
+    /// 既存ファイルがあるが破損していて parse 失敗のときは空 (= 既存ユーザのデータをデフォルトで上書きしないため、
+    /// 自動的に「上ボタン」を再生成しない)。</summary>
     public FavoritesData Load()
     {
+        if (!File.Exists(_path)) return CreateDefaultFavorites();
         try
         {
-            if (!File.Exists(_path)) return new FavoritesData();
             using var fs = File.OpenRead(_path);
             return JsonSerializer.Deserialize<FavoritesData>(fs, JsonOpts) ?? new FavoritesData();
         }
@@ -45,6 +49,17 @@ public sealed class FavoritesStorage
             return new FavoritesData();
         }
     }
+
+    /// <summary>初期状態 (= favorites.json が無い時) のお気に入りデータ。
+    /// ルート直下に「上ボタン」フォルダを 1 つだけ用意する。</summary>
+    private static FavoritesData CreateDefaultFavorites()
+        => new FavoritesData
+        {
+            Root = new FavoriteEntry[]
+            {
+                new FavoriteFolder { Name = FavoriteDefaults.TopButtonsFolderName },
+            },
+        };
 
     /// <summary>お気に入り全体を保存。失敗してもアプリ動作は止めない。</summary>
     public void Save(FavoritesData data)

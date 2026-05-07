@@ -62,7 +62,11 @@ public static class CategoryResolver
         DependencyObject? cur = source;
         while (cur is not null)
         {
-            if (cur is TabItem || cur is TabPanel) passedTabHeader = true;
+            // <TabControl> 自身も tab header 通過扱いとする (= スレ表示 / スレ一覧の TabControl は
+            // ControlTemplate を WrapPanel IsItemsHost に置換しているため、空き領域クリックでは
+            // TabItem も TabPanel も通らない。本アプリでは TabControl はストリップ専用 (= 本文は別の
+            // ItemsControl で描画) なので、TabControl を見たら必ずヘッダ領域内と判断して問題ない)。
+            if (cur is TabItem || cur is TabPanel || cur is TabControl) passedTabHeader = true;
 
             switch (cur)
             {

@@ -334,7 +334,34 @@ public sealed class PostDialog : Window
     {
         _previewWebView = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.White };
         _previewBorder!.Child = _previewWebView;
+        // プレビュー内の画像サムネクリック等を本アプリのビューアに転送するため、
+        // WebMessageReceived を購読する (= スレ表示と同様の挙動を再現)。
+        _previewWebView.WebMessageReceived += OnPreviewWebMessageReceived;
         _ = NavigatePreviewWebViewAsync();
+    }
+
+    /// <summary>プレビュー WebView2 からの JS メッセージを処理する。
+    /// 現状 <c>openInViewer</c> (画像サムネクリック) のみハンドル — 画像ビューアに送る。
+    /// 他 (openUrl, anchor 等) はプレビュー文脈では意味が薄いので無視。</summary>
+    private void OnPreviewWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var tp) ? tp.GetString() : null;
+            if (type != "openInViewer") return;
+            if (!root.TryGetProperty("url", out var up)) return;
+            var url = up.GetString();
+            if (string.IsNullOrEmpty(url)) return;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
+            if (System.Windows.Application.Current is App app) app.ShowImageInViewer(url);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostDialog] preview message failed: {ex.Message}");
+        }
     }
 
     private async Task NavigatePreviewWebViewAsync()

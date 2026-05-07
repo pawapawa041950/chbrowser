@@ -97,6 +97,20 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
     [ObservableProperty]
     private bool _isBoardFavorited;
 
+    /// <summary>絞り込みのテキストボックス (= スレ一覧ペイン ヘッダ) にバインドされる文字列。
+    /// 検索対象はスレッドタイトルのみ。タブごとに独立 (= タブ切替で値が切り替わる)。
+    /// <see cref="ChBrowser.Controls.WebView2Helper"/> の ThreadListSearchPush 添付プロパティ経由で
+    /// JS 側に push され、行の表示/非表示と title セルのハイライトが更新される。</summary>
+    [ObservableProperty]
+    private string _searchQuery = "";
+
+    /// <summary>このタブ専用のステータス文字列 (= subject.txt 取得進捗 / 結果 / エラー等)。
+    /// MainViewModel が現在アクティブなペイン (= 直近で操作されたペイン) の選択タブを
+    /// 監視しており、その StatusMessage 変更でステータスバー表示を切り替える。
+    /// 空文字なら「特に通知なし」(= ステータスバーは前の値のまま)。</summary>
+    [ObservableProperty]
+    private string _statusMessage = "";
+
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)
     {

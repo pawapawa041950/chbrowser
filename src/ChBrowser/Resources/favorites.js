@@ -80,7 +80,7 @@
         e.preventDefault();
     });
 
-    // ---- C# からの setConfig / setShortcutBindings 受信 ----
+    // ---- C# からの setConfig / setPaneSearch / setShortcutBindings 受信 ----
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             var msg = e.data;
@@ -89,8 +89,117 @@
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;
                 }
+            } else if (msg.type === 'setPaneSearch') {
+                applyPaneSearch(typeof msg.query === 'string' ? msg.query : '');
             }
             // setShortcutBindings は shortcut-bridge.js 内で受信。
+        });
+    }
+
+    // ---------- 絞り込み (お気に入りツリー) ----------
+    // 各 .fav-item の .label テキストでマッチ判定。ヒットしたエントリ + その全祖先を表示し、
+    // それ以外は filter-hidden で隠す。フォルダがマッチした場合は配下も全部見せる (= 文脈を温存)。
+    // ハイライトはマッチしたエントリの .label 内に <mark.search-highlight> を挿入。
+
+    /** 既存ハイライトを全 unwrap → text node を結合。 */
+    function clearHighlights() {
+        var marks = root.querySelectorAll('mark.search-highlight');
+        for (var i = 0; i < marks.length; i++) {
+            var m = marks[i];
+            var t = document.createTextNode(m.textContent || '');
+            m.parentNode.replaceChild(t, m);
+        }
+        if (marks.length > 0) root.normalize();
+    }
+
+    /** label の text node を走査してクエリ一致箇所を <mark> で囲む。 */
+    function highlightLabel(labelEl, queryLower, queryLen) {
+        if (!labelEl) return;
+        var texts = [];
+        var walker = document.createTreeWalker(labelEl, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) texts.push(walker.currentNode);
+        for (var i = 0; i < texts.length; i++) {
+            var tn = texts[i];
+            if (!tn.parentNode) continue;
+            if (tn.parentNode.classList && tn.parentNode.classList.contains('search-highlight')) continue;
+            var text = tn.nodeValue || '';
+            var lower = text.toLowerCase();
+            var idx = lower.indexOf(queryLower);
+            if (idx < 0) continue;
+            var frag = document.createDocumentFragment();
+            var pos = 0;
+            while (idx >= 0) {
+                if (idx > pos) frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+                var mark = document.createElement('mark');
+                mark.className = 'search-highlight';
+                mark.textContent = text.slice(idx, idx + queryLen);
+                frag.appendChild(mark);
+                pos = idx + queryLen;
+                idx = lower.indexOf(queryLower, pos);
+            }
+            if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+            tn.parentNode.replaceChild(frag, tn);
+        }
+    }
+
+    function applyPaneSearch(query) {
+        var qLow = (query || '').toLowerCase();
+        clearHighlights();
+
+        // 全 fav-item を一旦可視に戻す + <details> open 状態をユーザのまま保持。
+        var items = root.querySelectorAll('li.fav-item');
+        if (!qLow) {
+            for (var i = 0; i < items.length; i++) items[i].classList.remove('filter-hidden');
+            return;
+        }
+        var qLen = query.length;
+
+        // Step 1: マッチしたエントリの集合を作る (label の直接テキストを比較)。
+        var matched = new Set();
+        for (var j = 0; j < items.length; j++) {
+            var li = items[j];
+            // label は li 直下の summary > .label (フォルダ) または li 直下の .label (board/thread)。
+            var label = li.querySelector(':scope > details > summary > .label, :scope > .label');
+            if (!label) continue;
+            if ((label.textContent || '').toLowerCase().indexOf(qLow) >= 0) matched.add(li);
+        }
+
+        // Step 2: keep セット = マッチ + その全祖先 + マッチ folder の全子孫。
+        var keep = new Set();
+        matched.forEach(function (li) {
+            keep.add(li);
+            // 全祖先 (= 親方向の li.fav-item)
+            var p = li.parentElement;
+            while (p && p !== root.parentElement) {
+                if (p.classList && p.classList.contains('fav-item')) keep.add(p);
+                p = p.parentElement;
+            }
+            // フォルダがヒットした場合は子孫も全部見せる
+            li.querySelectorAll('li.fav-item').forEach(function (d) { keep.add(d); });
+        });
+
+        // Step 3: items を keep 判定で表示 / 非表示。
+        for (var k = 0; k < items.length; k++) {
+            var it = items[k];
+            if (keep.has(it)) {
+                it.classList.remove('filter-hidden');
+                // 祖先 <details> を強制 open しないとマッチが見えない
+                var d = it.querySelector(':scope > details');
+                if (d) d.open = true;
+                var ancestor = it.parentElement;
+                while (ancestor && ancestor !== root.parentElement) {
+                    if (ancestor.tagName === 'DETAILS') ancestor.open = true;
+                    ancestor = ancestor.parentElement;
+                }
+            } else {
+                it.classList.add('filter-hidden');
+            }
+        }
+
+        // Step 4: マッチ label をハイライト
+        matched.forEach(function (li) {
+            var lbl = li.querySelector(':scope > details > summary > .label, :scope > .label');
+            highlightLabel(lbl, qLow, qLen);
         });
     }
 

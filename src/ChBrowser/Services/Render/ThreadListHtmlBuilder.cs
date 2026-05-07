@@ -84,12 +84,19 @@ public static class ThreadListHtmlBuilder
             sb.Append(@" data-momentum=""").Append(momentum.ToString("F1", CultureInfo.InvariantCulture)).Append('"');
             sb.Append(@" data-log=""").Append(sortVal).Append('"');
             sb.Append('>');
+            // マウスオーバー時のツールチップ用に title 属性を付与する。td は overflow:hidden +
+            // text-overflow:ellipsis でテキストが省略されることが多いため、特にタイトル / 板名は元テキストを
+            // 取得できるようにしておく (= ブラウザネイティブの title 属性ホバーで表示)。
+            // 数値系の col-no / col-count / col-momentum は省略されにくいが、整合性のため同じく title を付ける。
+            var titleAttr    = HtmlEscape.Attr(t.Title);
+            var boardAttr    = HtmlEscape.Attr(item.BoardName);
+            var momentumStr  = momentum.ToString("F1", CultureInfo.InvariantCulture);
             sb.Append(@"<td class=""col-log""><span class=""log-mark""></span></td>");
-            sb.Append(@"<td class=""col-no"">").Append(t.Order).Append("</td>");
-            sb.Append("<td>").Append(HtmlEscape.Text(t.Title)).Append("</td>");
-            sb.Append(@"<td class=""col-board"">").Append(HtmlEscape.Text(item.BoardName)).Append("</td>");
-            sb.Append(@"<td class=""col-count"">").Append(t.PostCount).Append("</td>");
-            sb.Append(@"<td class=""col-momentum"">").Append(momentum.ToString("F1", CultureInfo.InvariantCulture)).Append("</td>");
+            sb.Append(@"<td class=""col-no"" title=""").Append(t.Order).Append(@""">").Append(t.Order).Append("</td>");
+            sb.Append(@"<td class=""col-title"" title=""").Append(titleAttr).Append(@""">").Append(HtmlEscape.Text(t.Title)).Append("</td>");
+            sb.Append(@"<td class=""col-board"" title=""").Append(boardAttr).Append(@""">").Append(HtmlEscape.Text(item.BoardName)).Append("</td>");
+            sb.Append(@"<td class=""col-count"" title=""").Append(t.PostCount).Append(@""">").Append(t.PostCount).Append("</td>");
+            sb.Append(@"<td class=""col-momentum"" title=""").Append(momentumStr).Append(@""">").Append(momentumStr).Append("</td>");
             sb.Append("</tr>");
         }
     }

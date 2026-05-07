@@ -266,8 +266,8 @@ public sealed partial class MainViewModel
     {
         try
         {
-            tab.IsBusy    = true;
-            StatusMessage = $"お気に入り「{aggregateName}」を取得中...";
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"お気に入り「{aggregateName}」を取得中...";
 
             // VM ツリーを再帰的に走って thread エントリを集める。
             // 「板として開く」では fav board エントリは展開せず、登録スレだけを表示する。
@@ -276,7 +276,11 @@ public sealed partial class MainViewModel
             foreach (var child in children)
                 CollectFavoriteEntriesFromVm(child, boards, threads);
 
-            // 登録スレの出元板の subject.txt のみ取得 (新着 / Dropped 判定に必要)。
+            // 「板として開く」では更新チェックは行わない (= サーバには問い合わせない)。
+            // ローカルにキャッシュ済みの subject.txt があればそれを使い、無ければ空扱い。
+            // 「Dropped (subject.txt から消えた)」「Updated (新着あり)」のマーク色は付けず、
+            // dat の有無だけで Cached/None を出す (= BuildLogStates は読了状態の比較ベースなので、
+            // 直近の subject.txt が空でも誤判定はしない、ただし Updated は出ない)。
             var subjectByBoard = new Dictionary<(string host, string dir), IReadOnlyList<ThreadInfo>>();
             var resolvedBoards = new Dictionary<(string host, string dir), Board>();
             foreach (var ft in threads)
@@ -287,11 +291,11 @@ public sealed partial class MainViewModel
                 resolvedBoards[key] = board;
                 try
                 {
-                    subjectByBoard[key] = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
+                    subjectByBoard[key] = await _subjectClient.LoadFromDiskAsync(board).ConfigureAwait(true);
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[Favorites] subject {ft.Host}/{ft.DirectoryName} 失敗: {ex.Message}");
+                    Debug.WriteLine($"[Favorites] subject {ft.Host}/{ft.DirectoryName} (disk only) 失敗: {ex.Message}");
                     subjectByBoard[key] = Array.Empty<ThreadInfo>();
                 }
             }
@@ -309,8 +313,21 @@ public sealed partial class MainViewModel
                 LogMarkState state;
                 if (info is null)
                 {
-                    info  = new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0);
-                    state = LogMarkState.Dropped;
+                    // 「板として開く」ではネットワークアクセスをしないため、subject.txt キャッシュ自体が
+                    // 無い (= infos が空) ケースもありうる。その場合は Dropped と決めつけずに
+                    // ローカルの dat があれば Cached、なければ None として表示する (= 誤情報を出さない)。
+                    info = new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0);
+                    if (infos.Count == 0)
+                    {
+                        var board = resolvedBoards[key];
+                        var datExists = System.IO.File.Exists(_paths.DatPath(board.Host, board.DirectoryName, ft.ThreadKey));
+                        state = datExists ? LogMarkState.Cached : LogMarkState.None;
+                    }
+                    else
+                    {
+                        // subject.txt は読めたが該当 key が無い = 本当に dat 落ちと判断
+                        state = LogMarkState.Dropped;
+                    }
                 }
                 else
                 {
@@ -322,12 +339,12 @@ public sealed partial class MainViewModel
             }
 
             tab.SetItems(items, DateTimeOffset.UtcNow);
-            tab.Header   = $"★ {aggregateName} ({items.Count})";
-            StatusMessage = $"お気に入り「{aggregateName}」: {items.Count} 件";
+            tab.Header        = $"★ {aggregateName} ({items.Count})";
+            tab.StatusMessage = $"お気に入り「{aggregateName}」: {items.Count} 件";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"お気に入り展開失敗: {ex.Message}";
+            tab.StatusMessage = $"お気に入り展開失敗: {ex.Message}";
         }
         finally
         {

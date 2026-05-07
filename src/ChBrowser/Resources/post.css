@@ -32,8 +32,8 @@
  *   has-replies-few  … 1-2 件 → 薄いピンク (赤との差を出すため淡い色)
  *   has-replies-many … 3 件以上 → 赤 (テンプレ側で 1 つだけ排他的に付くようになっている)
  */
-.post-no.has-replies-few  { color: #ff8888; }
-.post-no.has-replies-many { color: #aa0000; }
+.post-no.has-replies-few  { color: #af00cf; }
+.post-no.has-replies-many { color: #ff0000; }
 
 .post-name {
     color: #006400;
@@ -113,6 +113,17 @@
 /* ツリー (重複あり / 重複なし) の forward (親) / reverse (子) 別の色 */
 .inline-expansion.forward .post.embedded { background: #f7faff; border-color: #e0e8f5; }
 .inline-expansion.reverse .post.embedded { background: #f7fff8; border-color: #e0f0e4; }
+
+/* 返信が深くネストすると .post.embedded の border が階層数分重なって右辺・下辺が
+   何重もの 1px ラインに見えてしまう。最も外側の .post.embedded だけが右辺・下辺の border を
+   持つようにし、内側 (= 2 階層目以降のネスト) は border-right / border-bottom を消して
+   ツリー全体の右下が単一の 1px ラインに揃うようにする。
+   左辺・上辺は階層を視覚的に分けるためそのまま残す。 */
+.post.embedded .post.embedded {
+    border-right:  none;
+    border-bottom: none;
+    border-radius: 0;
+}
 
 /* 新規取得レス (= スレを最初に開いた後の差分取得 / お気に入りチェックで来た分) のレス No を強調。
  * 取得済 / 初回 dat 取得分は既定の通常太さで描画される (is-new クラスが付かないため)。 */

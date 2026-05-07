@@ -139,6 +139,46 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private OwnPostsUpdateData? _ownPostsUpdate;
 
+    /// <summary>絞り込みのテキストボックス (= スレッドペイン ヘッダ左) にバインドされる文字列。
+    /// 変更で <see cref="Filter"/> が再構築される (= JS への push 経由で表示が即時更新される)。</summary>
+    [ObservableProperty]
+    private string _searchQuery = "";
+
+    /// <summary>このタブ専用のステータス文字列 (= スレ取得進捗 / 結果 / エラー等)。
+    /// MainViewModel が SelectedThreadTab 切替時にこの値を読み取ってステータスバーに反映する仕組みのため、
+    /// タブごとに最後の状態が保持され、タブを切り替えれば過去のメッセージが復元される。
+    /// 空文字なら「特に通知なし」(= ステータスバーは前の値のまま、もしくは別タブ / グローバルのものを維持)。</summary>
+    [ObservableProperty]
+    private string _statusMessage = "";
+
+    /// <summary>「人気のレス」フィルタトグル (= 👍 ボタン)。tree モードでは popular の配下も含めて表示。</summary>
+    [ObservableProperty]
+    private bool _isPopularFilterOn;
+
+    /// <summary>「画像/動画」フィルタトグル (= 🖼 ボタン)。本文に画像/動画 URL を含むレスのみ表示。</summary>
+    [ObservableProperty]
+    private bool _isMediaFilterOn;
+
+    /// <summary>現在のフィルタ条件。<see cref="SearchQuery"/> / <see cref="IsPopularFilterOn"/> /
+    /// <see cref="IsMediaFilterOn"/> から合成され、<see cref="ChBrowser.Controls.WebView2Helper"/> の
+    /// FilterPush 添付プロパティ経由で JS に push される。各タブが独立した状態を持つ。</summary>
+    [ObservableProperty]
+    private ThreadFilter _filter = new ThreadFilter();
+
+    partial void OnSearchQueryChanged(string value)        => RebuildFilter();
+    partial void OnIsPopularFilterOnChanged(bool value)    => RebuildFilter();
+    partial void OnIsMediaFilterOnChanged(bool value)      => RebuildFilter();
+
+    private void RebuildFilter()
+    {
+        // SearchQuery と toggle 群を 1 つの ThreadFilter にまとめる。
+        // テキストクエリは AND 条件、トグル 2 つは互いに OR (= JS 側 postMatchesFilter で合成判定)。
+        Filter = new ThreadFilter(
+            TextQuery:   SearchQuery ?? "",
+            PopularOnly: IsPopularFilterOn,
+            MediaOnly:   IsMediaFilterOn);
+    }
+
     IReadOnlyCollection<int> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;
 
     public bool IsViewModeFlat       => ViewMode == ThreadViewMode.Flat;

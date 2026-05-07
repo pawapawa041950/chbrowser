@@ -81,6 +81,201 @@
     // であってほしい (= 再オープン直後で 0 件取得なら太字レスも 0 件) ので別管理。
     const sessionNewPostNumbers = new Set();
 
+    // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
+    // 評価ルール:
+    //   - textQuery (= AND 条件): 本文に含まれていれば match (= 大文字小文字無視)。空なら本文条件なし。
+    //   - popularOnly + mediaOnly (= 互いに OR): どちらかでも ON なら、その条件に match するレスだけ表示。
+    //     両方 OFF なら toggle 条件なし (textQuery のみで判定)。
+    let currentFilter = { textQuery: '', popularOnly: false, mediaOnly: false };
+
+    // popularOnly フィルタの「展開済み include 集合」キャッシュ。
+    // tree / dedupTree モードでは popular レス自身 + その配下 (= 返信チェイン) を全て表示する仕様で、
+    // この集合を毎レス毎に計算するのは無駄なので、setFilter / appendPosts 時に一括計算してキャッシュする。
+    let popularIncludeCache = null;
+
+    /** 現在のフィルタが「全レス可視」(= フィルタなし) と等価か。短絡判定用。 */
+    function isFilterEmpty() {
+        return !currentFilter.textQuery && !currentFilter.popularOnly && !currentFilter.mediaOnly;
+    }
+
+    /** popularOnly フィルタ用の include 集合を組む。
+     *   - flat モード: popular なレス番号 (= 返信数 >= POPULAR_THRESHOLD) のみ
+     *   - tree / dedupTree モード: popular なレスとその配下 (= 返信チェイン全て) を BFS で展開して含める */
+    function rebuildPopularIncludeSet() {
+        const set = new Set();
+        if (!currentFilter.popularOnly) { popularIncludeCache = set; return; }
+
+        const reverseIdx = currentReverseIndex && currentReverseIndex.size > 0
+            ? currentReverseIndex
+            : buildReverseIndex();
+        // popular レスを列挙
+        const popularNums = [];
+        for (const p of allPosts) {
+            const refs = reverseIdx.get(p.number);
+            if (refs && refs.length >= POPULAR_THRESHOLD) popularNums.push(p.number);
+        }
+        for (const n of popularNums) set.add(n);
+
+        // tree 系では配下 (= 返信チェイン) を BFS で展開
+        if (viewMode !== 'flat') {
+            const queue = popularNums.slice();
+            while (queue.length > 0) {
+                const cur = queue.shift();
+                const replies = reverseIdx.get(cur) || [];
+                for (const r of replies) {
+                    if (!set.has(r)) { set.add(r); queue.push(r); }
+                }
+            }
+        }
+        popularIncludeCache = set;
+    }
+
+    /** 1 レス (= JS の post オブジェクト = postsByNumber の値) がフィルタ条件に match するか。
+     *  textQuery は AND、popularOnly / mediaOnly は互いに OR。 */
+    function postMatchesFilter(post) {
+        if (!post) return true;
+
+        // (1) textQuery (AND): 検索対象は本文 + 名前行のすべての要素
+        //     (name = ワッチョイ含む / mail / dateText / id ユーザ ID)。
+        //     post-no (レス番号) は対象外 (= 数字を打つと意図せずレス番号が引っかかるのを避ける)。
+        if (currentFilter.textQuery) {
+            const q = currentFilter.textQuery.toLowerCase();
+            const haystack = (
+                (post.body || '')     + '\n' +
+                (post.name || '')     + '\n' +
+                (post.mail || '')     + '\n' +
+                (post.dateText || '') + '\n' +
+                (post.id || '')
+            ).toLowerCase();
+            if (haystack.indexOf(q) < 0) return false;
+        }
+
+        // (2) popularOnly / mediaOnly (互いに OR、どちらか ON なら match 必須)
+        const popOn = currentFilter.popularOnly === true;
+        const medOn = currentFilter.mediaOnly === true;
+        if (popOn || medOn) {
+            const popMatch = popOn && popularIncludeCache && popularIncludeCache.has(post.number);
+            const medMatch = medOn && (bodyContainsImage(post.body) || bodyContainsVideo(post.body));
+            if (!popMatch && !medMatch) return false;
+        }
+        return true;
+    }
+
+    /** 現状の DOM 内全 .post に対して filter-hidden クラスを付け外しする。
+     *  primary レス (id="rN") を見て、その body で評価。embedded duplicate (= ツリー埋め込み) は
+     *  自分自身の所属 number で判定する (= 同じ post オブジェクトを参照するので結果は一致)。
+     *  filter 条件が空ならまとめて class を剥がして早期 return。
+     *  最後に <see cref="applySearchHighlightToAll"/> を呼んでマッチ箇所のハイライトも更新する。 */
+    function applyFilterToAllPosts() {
+        const root = document.getElementById('posts');
+        if (!root) return;
+        // popularOnly トグル用の include 集合をここで毎回再計算 (= allPosts や viewMode の変化に追従)。
+        rebuildPopularIncludeSet();
+        if (isFilterEmpty()) {
+            root.querySelectorAll('.filter-hidden').forEach(function (el) { el.classList.remove('filter-hidden'); });
+            applySearchHighlightToAll();
+            return;
+        }
+        root.querySelectorAll('.post').forEach(function (el) {
+            const id = el.id || '';
+            // primary レスは id="rN"。embedded は id 無し or 別 — その場合は親要素の data-from 等から番号を引きたいが
+            // 簡単のためコメント本文をテキスト走査で評価する。
+            let post = null;
+            if (id.startsWith('r')) {
+                const n = parseInt(id.slice(1), 10);
+                if (!isNaN(n)) post = postsByNumber.get(n);
+            }
+            // post オブジェクトが取れなければ DOM テキストで判定 (embedded などのフォールバック)。
+            const matched = post
+                ? postMatchesFilter(post)
+                : (currentFilter.textQuery
+                    ? (el.textContent || '').toLowerCase().indexOf(currentFilter.textQuery.toLowerCase()) >= 0
+                    : true);
+            if (matched) el.classList.remove('filter-hidden');
+            else         el.classList.add('filter-hidden');
+        });
+        // dedupTree モードの incremental-block (= 「以降新レス」ラベル以下の各ブロック) は
+        // トップレベル要素が祖先レス (id 無し) で、新着デルタ本体は内部の embedded で配置されている。
+        // 内部の ID 付きレス (= 新着デルタ) が全て filter-hidden ならブロック自体も非表示にする
+        // (= さもないと祖先 wrapper だけ残ってフィルタが効いていないように見える)。
+        root.querySelectorAll('.incremental-block').forEach(function (block) {
+            const inner = block.querySelectorAll('.post[id^="r"]');
+            let anyVisible = false;
+            for (let i = 0; i < inner.length; i++) {
+                if (!inner[i].classList.contains('filter-hidden')) { anyVisible = true; break; }
+            }
+            if (anyVisible || inner.length === 0) block.classList.remove('filter-hidden');
+            else                                  block.classList.add('filter-hidden');
+        });
+        applySearchHighlightToAll();
+    }
+
+    /** スレッド内の全 .post-body 配下のテキストノードを走査し、textQuery に一致する箇所を
+     *  <mark class="search-highlight"> でラップしてハイライトする。
+     *  既存ハイライトは毎回剥がしてから掛け直すので、クエリ変更や差分追加にも追従する。
+     *  primary / embedded どちらの .post-body でも同じ処理。 */
+    function applySearchHighlightToAll() {
+        const root = document.getElementById('posts');
+        if (!root) return;
+
+        // Step 1: 既存ハイライトを unwrap (= mark を中身のテキストに置換) → normalize で隣接テキスト統合
+        const olds = root.querySelectorAll('mark.search-highlight');
+        olds.forEach(function (m) {
+            const text = document.createTextNode(m.textContent || '');
+            m.parentNode.replaceChild(text, m);
+        });
+        if (olds.length > 0) root.normalize();
+
+        if (isFilterEmpty()) return;
+        const query = currentFilter.textQuery || '';
+        if (!query) return;
+        const queryLower = query.toLowerCase();
+        const queryLen   = query.length;
+
+        // Step 2: 検索対象領域のテキストノードを走査して該当箇所を <mark> で囲む。
+        // フィルタ判定 (postMatchesFilter) と整合させるため、対象は本文 + 名前行 (= 名前 / メール /
+        // メタ = 日付・ID)。post-no (レス番号) はフィルタ対象外なのでハイライトもしない。
+        root.querySelectorAll('.post-body, .post-name, .post-mail, .post-meta').forEach(function (el) {
+            highlightTextNodesIn(el, queryLower, queryLen);
+        });
+    }
+
+    /** 指定要素配下の全テキストノードを走査し、queryLower (= 既に小文字化済) を含むものを
+     *  <mark class="search-highlight"> 入りの DocumentFragment に置換する。
+     *  ミューテーションを避けるため事前にテキストノード一覧を集めてから処理。
+     *  既に <mark.search-highlight> 内のテキストは対象外 (= 二重ラップ防止)。 */
+    function highlightTextNodesIn(rootEl, queryLower, queryLen) {
+        const texts = [];
+        const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) texts.push(walker.currentNode);
+
+        for (var i = 0; i < texts.length; i++) {
+            const tn = texts[i];
+            if (!tn.parentNode) continue;
+            const parent = tn.parentNode;
+            if (parent.classList && parent.classList.contains('search-highlight')) continue;
+
+            const text = tn.nodeValue || '';
+            const lower = text.toLowerCase();
+            let idx = lower.indexOf(queryLower);
+            if (idx < 0) continue;
+
+            const frag = document.createDocumentFragment();
+            let pos = 0;
+            while (idx >= 0) {
+                if (idx > pos) frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+                const mark = document.createElement('mark');
+                mark.className = 'search-highlight';
+                mark.textContent = text.slice(idx, idx + queryLen);
+                frag.appendChild(mark);
+                pos = idx + queryLen;
+                idx = lower.indexOf(queryLower, pos);
+            }
+            if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+            parent.replaceChild(frag, tn);
+        }
+    }
+
     /** allPosts における「ラベル位置」(= markPostNumber 以上の最初のレスの index)。
      *  null = ラベルなし or ラベル以降のレスがまだ存在しない。
      *  dedup-tree の Section A/B 分割と markNewPosts の境界判定に使う。 */
@@ -796,6 +991,7 @@
         markNewPosts();
         recomputeMetaMaps();
         decorateMeta();
+        applyFilterToAllPosts();
     }
 
     /** 「今セッションで新着として届いたレス」を is-new クラスでマークする。
@@ -2426,15 +2622,36 @@
             postsByNumber.set(p.number, p);
         }
 
-        if (viewMode !== 'flat') {
-            // 親/子のネスト関係が変わるので、一括再描画する。
+        // 既存 DOM が空 (= 初回ロード) は viewMode 問わず renderCurrentViewMode で全構築。
+        // 既に DOM がある場合は viewMode ごとに「ツリー形のまま末尾にレスを追加」する経路に流す
+        // (= 既存 DOM はノータッチ、ラベルだけ updateNewPostsMarkBand で新位置に移動)。
+        if (root.children.length === 0) {
             renderCurrentViewMode();
             return;
         }
 
-        // ---- flat モード: 末尾に追記するだけの高速経路 ----
+        // ---- 末尾追記経路 (flat / tree / dedupTree いずれも 既存 DOM 維持) ----
         let html = '';
-        for (const p of batch) html += buildPostHtml(p);
+        if (viewMode === 'flat') {
+            for (const p of batch) html += buildPostHtml(p);
+        } else if (viewMode === 'tree') {
+            // tree (重複あり): 各レスを「祖先 + 直近の子」入りのツリーノードで末尾に並べる。
+            // 既存ツリー側の reverseIndex は触らないので、過去レスの「子」追記は次のフルレンダ時まで保留。
+            for (const p of batch) html += buildTreePostHtml(p, currentReverseIndex, false);
+        } else {
+            // dedupTree (重複なし): 新着 batch だけで forest を組んで .incremental-block 単位で末尾に追加。
+            // 既存の .incremental-section (= 初回 render の section B) や過去 delta が出したブロックは
+            // そのまま残し、新ブロックは root の末尾に兄弟として並べる (= 過去ブロック内の祖先と新ブロック内の
+            // 祖先は重複しうるが、既存 DOM 不可侵を優先する)。
+            const incNumbers = batch.map(p => p.number);
+            const incSet     = new Set(incNumbers);
+            const forest     = buildIncrementalForest(incNumbers);
+            for (const node of forest.values()) {
+                html += '<div class="incremental-block">';
+                html += renderIncrementalForestNode(node, incSet, /*isEmbedded*/ false);
+                html += '</div>';
+            }
+        }
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
 
@@ -2480,6 +2697,7 @@
         updateThreadEndMarkBand();
         updateMarkScrollbarMarker();
         markNewPosts();
+        applyFilterToAllPosts();
         // 増分追加で同 ID/ワッチョイの件数が変わるので、既存装飾を破棄して全体を再装飾する。
         // (新規装飾だけだと、既に decoration 済の post も "5 件超え → 赤化" 等のしきい値変化に追従できない)
         clearMetaDecorations(root);
@@ -2544,6 +2762,16 @@
                     break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
+                case 'setFilter':
+                    // C# 側 ThreadFilter record の JSON 反映。新条件は currentFilter のフィールドを
+                    // 増やすだけで対応できる (= 同時に postMatchesFilter にも条件評価を追加する)。
+                    currentFilter = {
+                        textQuery:   typeof msg.textQuery === 'string' ? msg.textQuery : '',
+                        popularOnly: msg.popularOnly === true,
+                        mediaOnly:   msg.mediaOnly   === true,
+                    };
+                    applyFilterToAllPosts();
+                    break;
                 case 'setMarkPostNumber':
                     // 「以降新レス」ラベル位置の単独 push (= 新着 0 件 refresh で mark を null クリアする等)。
                     // 数値なら設定、それ以外 (= null) ならクリア。後者では updateNewPostsMarkBand が
@@ -2555,14 +2783,11 @@
                         + ', allPosts=' + allPosts.length
                         + ', viewMode=' + viewMode);
                     if (allPosts.length > 0) {
-                        // tree モードでは mark の有無で section A/B 分割が変わるので再描画が必要。
-                        // flat モードは band/scrollbar マーカーの再配置だけで済む。
-                        if (viewMode !== 'flat') {
-                            renderCurrentViewMode();
-                        } else {
-                            updateNewPostsMarkBand();
-                            updateMarkScrollbarMarker();
-                        }
+                        // 全ビューモードで「ラベル位置の差分更新だけ」を行う (= フル再描画はしない)。
+                        // tree / dedupTree の dedup 状態 (= section A/B 分割) は次回ビューモード切替や
+                        // フル再オープンでだけ更新する方針 (= ユーザのスクロール位置と視線を温存)。
+                        updateNewPostsMarkBand();
+                        updateMarkScrollbarMarker();
                     }
                     break;
                 case 'setConfig':

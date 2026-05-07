@@ -203,8 +203,16 @@ public partial class App : Application
             PushCategoryBindings(mainVm, byCategory, "お気に入りペイン",   json => mainVm.FavoritesShortcutsJson  = json);
             PushCategoryBindings(mainVm, byCategory, "板一覧ペイン",       json => mainVm.BoardListShortcutsJson  = json);
         };
-        // ジェスチャー進捗の表示更新 (= MainViewModel.GestureStatus → ステータスバー)
-        _shortcutManager.OnGestureProgress = (cat, gs) => mainVm.UpdateGestureStatus(cat, gs);
+        // ジェスチャー進捗の表示更新 (= MainViewModel.GestureStatus → ステータスバー)。
+        // 現在の方向列がコマンドにマッチするなら DisplayName を引いて渡し、ステータスバーに
+        // 「→ コマンド名」を出して「右ボタンを離せばこれが発火」とユーザに予告する。
+        _shortcutManager.OnGestureProgress = (cat, gs) =>
+        {
+            string? matched = null;
+            if (!string.IsNullOrEmpty(cat) && !string.IsNullOrEmpty(gs))
+                matched = _shortcutManager?.TryGetActionDisplayName(cat, gs);
+            mainVm.UpdateGestureStatus(cat, gs, matched);
+        };
         _shortcutManager.Apply(_shortcutStorage.Load());
         _ = new ChBrowser.Services.Shortcuts.GestureRecognizer(window, _shortcutManager);
 
@@ -358,9 +366,31 @@ public partial class App : Application
             var t = ResolveTargetThreadListTab(src, vm);
             if (t is not null) _ = vm.RefreshThreadListTabAsync(t);
         }
-        void CloseThreadListTab(object? src) => ResolveTargetThreadListTab(src, vm)?.CloseCommand?.Execute(null);
+        // スレ一覧タブの close 操作。スレッドタブ側と同じく、空領域クリック時は直前に閉じたタブを復元。
+        void CloseThreadListTab(object? src)
+        {
+            if (ResolveTargetThreadListTab(src, vm) is { } t)
+            {
+                t.CloseCommand?.Execute(null);
+                return;
+            }
+            _ = vm.ReopenRecentlyClosedThreadListTabAsync();
+        }
         void RefreshThread(object? src) { if (ResolveTargetThreadTab(src, vm) is { } t) _ = vm.RefreshThreadAsync(t); }
-        void CloseThread(object? src) => ResolveTargetThreadTab(src, vm)?.CloseCommand?.Execute(null);
+        // タブ領域でのクローズ操作 (= 中クリック等) は、
+        //   - 具体的なタブ上で発動 → そのタブを閉じる (従来動作)
+        //   - タブの無い空き領域で発動 (mouse src は non-null だが解決失敗) → 直前に閉じたタブを復元
+        //   - キーボードショートカット (src=null) で SelectedThreadTab も無し → 復元 (= 何もしないより自然)
+        // これにより「中クリック連打で過去のタブをさかのぼって復元」できる。
+        void CloseThread(object? src)
+        {
+            if (ResolveTargetThreadTab(src, vm) is { } t)
+            {
+                t.CloseCommand?.Execute(null);
+                return;
+            }
+            _ = vm.ReopenRecentlyClosedThreadTabAsync();
+        }
     }
 
     /// <summary>マウス由来の操作 (source != null) なら、source から該当 <see cref="ThreadTabViewModel"/> を解決して返す

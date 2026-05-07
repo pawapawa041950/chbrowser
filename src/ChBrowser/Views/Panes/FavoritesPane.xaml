@@ -57,13 +57,14 @@
 
     <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
         <DockPanel>
-            <!-- ヘッダ (タイトル + 右端のリフレッシュボタン)。Phase 23: ヘッダ全体がドラッグハンドル。
+            <!-- ヘッダ (タイトル + 検索ボックス + 右端のリフレッシュボタン)。Phase 23: ヘッダ全体がドラッグハンドル。
                  ヘッダ下端に 1px ライン (Border) を入れて本体との区切りを明示。 -->
             <DockPanel x:Name="HeaderBar"
                        DockPanel.Dock="Top"
                        Background="{StaticResource PaneHeaderBackground}"
                        LastChildFill="True">
                 <Border DockPanel.Dock="Bottom" Height="1" Background="{StaticResource PaneBorderBrush}" />
+                <TextBlock DockPanel.Dock="Left" Text="お気に入り" Padding="6,4" FontWeight="SemiBold" />
                 <Button DockPanel.Dock="Right"
                         Style="{StaticResource ToolbarIconButton}"
                         Click="FavCheckUpdates_Click"
@@ -71,12 +72,17 @@
                     <TextBlock Text="🔄" FontSize="13"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Button>
-                <TextBlock Text="お気に入り" Padding="6,4" FontWeight="SemiBold" />
+                <!-- 絞り込み検索: タイトル / 🔄 ボタンの間の残りスペースを fill (= last child)。
+                     ペイン幅が狭くても × ボタンが画面内に残る。 -->
+                <ctrl:SearchBoxToggle Margin="2,2,4,2"
+                                      HintText="お気に入りを絞り込み (空欄で解除)"
+                                      Text="{Binding FavoritesSearchQuery, UpdateSourceTrigger=PropertyChanged}" />
             </DockPanel>
             <wv2:WebView2 x:Name="FavoritesWebView"
                           ctrl:WebView2Helper.Html="{Binding FavoritesHtml}"
                           ctrl:WebView2Helper.PaneConfigJson="{Binding FavoritesConfigJson}"
                           ctrl:WebView2Helper.PaneShortcutsJson="{Binding FavoritesShortcutsJson}"
+                          ctrl:WebView2Helper.PaneSearchPush="{Binding FavoritesSearchQuery}"
                           WebMessageReceived="FavoritesWebView_WebMessageReceived" />
         </DockPanel>
     </Border>

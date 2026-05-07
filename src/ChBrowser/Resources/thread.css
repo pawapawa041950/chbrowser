@@ -25,7 +25,9 @@ body.preview-mode {
     padding-right: 0;
 }
 body.preview-mode #richScrollbar,
-body.preview-mode #scrollThumb {
+body.preview-mode #scrollThumb,
+body.preview-mode .thread-end-mark-band,
+body.preview-mode .new-posts-mark-band {
     display: none;
 }
 
@@ -352,6 +354,29 @@ a.anchor.missing {
     user-select: none;
 }
 .thread-end-mark-band::before { content: '— 最後尾 —'; }
+
+/* ---- フィルタによる非表示 ---- */
+/* スレッド表示ヘッダの絞り込みテキストボックス (= ThreadTabViewModel.SearchQuery) などのフィルタで
+   条件にマッチしなかった要素は .filter-hidden が付与され完全に非表示になる。
+   対象:
+     - .post: primary / embedded を問わず個別レス
+     - .incremental-block: dedupTree の「以降新レス」配下のブロック単位 (= 内部の新着デルタが全て
+       hidden の時に block ごと隠す。さもないと祖先 wrapper だけ visible で残り、フィルタが効いてないように見える)
+   フィルタ解除 (= 全条件空) のときは JS 側がクラスを一括で剥がすのでこのルールは効かなくなる。 */
+.filter-hidden {
+    display: none !important;
+}
+
+/* ---- 検索ハイライト ---- */
+/* 検索ボックスに入力された文字列にマッチするテキストを <mark class="search-highlight"> で囲んだもの。
+   <mark> 自体はブラウザ既定で黄色背景だが、明示しておく (= テーマ依存を避ける + 角丸でやや柔らかく)。
+   対象は本文 + 名前行 (名前 / メール / 日付 / ID) — post-no (レス番号) は対象外。 */
+.post mark.search-highlight {
+    background: #fff176;       /* ソフトな黄色 */
+    color: inherit;
+    padding: 0 1px;
+    border-radius: 2px;
+}
 /* mark トラックは細い横バー。同じトラックに 2 種類のマーカーを色違いで並べる。
  *   .marker      = 「以降新レス」境界 (青)
  *   .marker-own  = 「自分の書き込み」位置 (アンバー)。.marker と両方付くので順序で background が上書きされる。 */

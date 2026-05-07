@@ -65,6 +65,19 @@ public sealed class ShortcutManager
         return new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
+    /// <summary>(category, descriptor) で発火するアクションの表示名を返す (= ShortcutAction.DisplayName)。
+    /// マッチが無ければ null。マウスジェスチャー進捗のステータスバー表示で「右ボタンを離せばこのコマンドが発火」と
+    /// 示すために使う。</summary>
+    public string? TryGetActionDisplayName(string category, string descriptor)
+    {
+        if (string.IsNullOrEmpty(category) || string.IsNullOrEmpty(descriptor)) return null;
+        if (!_inputsByCategory.TryGetValue(category, out var inner)) return null;
+        if (!inner.TryGetValue(descriptor, out var actionId)) return null;
+        foreach (var act in ShortcutRegistry.Actions)
+            if (act.Id == actionId) return act.DisplayName;
+        return null;
+    }
+
     public ShortcutManager(Window mainWindow, Dictionary<string, Action<object?>> handlers)
     {
         _mainWindow = mainWindow;

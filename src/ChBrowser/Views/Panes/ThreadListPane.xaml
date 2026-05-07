@@ -61,8 +61,10 @@
                 BorderBrush="{StaticResource PaneBorderBrush}"
                 BorderThickness="0,0,0,1">
             <DockPanel Margin="4,2">
-                <TextBlock Text="スレッド一覧" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock DockPanel.Dock="Left" Text="スレッド一覧" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
+                <!-- ボタン群は右端固定。SearchBoxToggle はその間 (= last child fill) に配置して
+                     ペイン幅が狭くても × ボタンが画面内に残るようにする。 -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                     <!-- 更新 (= 選択中のスレ一覧タブを再取得)。タブ種別 (板 / 全ログ / お気に入り) を問わず動作する。
                          SelectedThreadListTab が null なら無効化。 -->
                     <Button Click="RefreshThreadListButton_Click"
@@ -130,6 +132,22 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
                 </StackPanel>
+
+                <!-- 絞り込み検索: タイトルとボタン群の間の残りスペースを fill (= 最後の child)。
+                     SelectedThreadListTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                <ctrl:SearchBoxToggle Margin="0,0,6,0"
+                                      HintText="タイトルにこの文字列を含むスレッドだけ表示 (空欄でフィルタ解除)"
+                                      Text="{Binding SelectedThreadListTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                    <ctrl:SearchBoxToggle.Style>
+                        <Style TargetType="ctrl:SearchBoxToggle">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedThreadListTab}" Value="{x:Null}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ctrl:SearchBoxToggle.Style>
+                </ctrl:SearchBoxToggle>
             </DockPanel>
         </Border>
 
@@ -137,7 +155,8 @@
                     ItemsSource="{Binding ThreadListTabs}"
                     SelectedItem="{Binding SelectedThreadListTab}"
                     BorderThickness="0"
-                    Margin="1,0,1,0">
+                    Margin="1,0,1,0"
+                    MinHeight="24"><!-- タブ 0 件でも 1 段分の高さを維持 -->
             <!-- WrapPanel で「複数行 wrap」を実現。タブが画面幅を超えると次の行に折り返す。
                  デフォルトの TabPanel は環境によって wrap が機能しないことがあったため明示的に WrapPanel に変更。 -->
             <TabControl.Template>
@@ -194,6 +213,7 @@
                                   ctrl:WebView2Helper.ItemsHtmlPatch="{Binding ItemsHtmlPatch}"
                                   ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
                                   ctrl:WebView2Helper.FavoritedUpdate="{Binding FavoritedUpdate}"
+                                  ctrl:WebView2Helper.ThreadListSearchPush="{Binding SearchQuery}"
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadListWebView_WebMessageReceived"

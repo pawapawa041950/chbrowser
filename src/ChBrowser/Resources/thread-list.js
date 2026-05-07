@@ -256,12 +256,97 @@
                     var dir = activeTh.classList.contains('sort-asc') ? 1 : -1;
                     sortBy(activeTh.dataset.sort, activeTh.dataset.sortType, dir);
                 }
+                // 行が再生成されたので現在の検索クエリをかけ直す。
+                applyListSearch();
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;
                 }
+            } else if (msg.type === 'setListSearch') {
+                // C# 側 ThreadListTabViewModel.SearchQuery の反映。空文字なら絞り込み解除。
+                currentSearchQuery = typeof msg.query === 'string' ? msg.query : '';
+                applyListSearch();
             }
             // setShortcutBindings は shortcut-bridge.js 内で直接受信して処理する。
         });
+    }
+
+    // ---------- スレ一覧の絞り込み (タイトル文字列) ----------
+    // 各タブが独自に保持する状態。タブ切替で C# が setListSearch を送り直すので、
+    // ここでは「現在の WebView2 (= 1 タブ分) のクエリ」を保持するだけ。
+    var currentSearchQuery = '';
+
+    /** クエリにマッチしない行は filter-hidden で隠し、マッチする行は title セルに <mark.search-highlight> を入れる。
+     *  クエリが空なら全行可視 + 既存ハイライト除去。data-title (= 元タイトル) で大文字小文字無視の部分一致判定。 */
+    function applyListSearch() {
+        if (!tbody) return;
+        var rows = tbody.querySelectorAll('tr');
+        var query = currentSearchQuery || '';
+        var queryLower = query.toLowerCase();
+        var queryLen = query.length;
+
+        for (var i = 0; i < rows.length; i++) {
+            var tr = rows[i];
+            var titleCell = tr.querySelector('td.col-title');
+
+            // 既存ハイライトを unwrap (= 中身のテキストに戻す)
+            if (titleCell) {
+                var marks = titleCell.querySelectorAll('mark.search-highlight');
+                for (var j = 0; j < marks.length; j++) {
+                    var m = marks[j];
+                    var text = document.createTextNode(m.textContent || '');
+                    m.parentNode.replaceChild(text, m);
+                }
+                if (marks.length > 0) titleCell.normalize();
+            }
+
+            if (!query) {
+                tr.classList.remove('filter-hidden');
+                continue;
+            }
+
+            var title = (tr.dataset.title || '');
+            if (title.toLowerCase().indexOf(queryLower) < 0) {
+                tr.classList.add('filter-hidden');
+            } else {
+                tr.classList.remove('filter-hidden');
+                // タイトルセルの該当箇所を <mark> でラップ
+                if (titleCell) highlightInTitleCell(titleCell, queryLower, queryLen);
+            }
+        }
+    }
+
+    /** title セル内のテキストノードを走査し、queryLower (= 既に小文字化済) の出現を <mark.search-highlight> で囲む。
+     *  title セルは普通プレーンテキストだが、念のため TreeWalker で nested text にも対応。 */
+    function highlightInTitleCell(cellEl, queryLower, queryLen) {
+        var texts = [];
+        var walker = document.createTreeWalker(cellEl, NodeFilter.SHOW_TEXT, null);
+        while (walker.nextNode()) texts.push(walker.currentNode);
+
+        for (var i = 0; i < texts.length; i++) {
+            var tn = texts[i];
+            if (!tn.parentNode) continue;
+            var parent = tn.parentNode;
+            if (parent.classList && parent.classList.contains('search-highlight')) continue;
+
+            var text = tn.nodeValue || '';
+            var lower = text.toLowerCase();
+            var idx = lower.indexOf(queryLower);
+            if (idx < 0) continue;
+
+            var frag = document.createDocumentFragment();
+            var pos = 0;
+            while (idx >= 0) {
+                if (idx > pos) frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+                var mark = document.createElement('mark');
+                mark.className = 'search-highlight';
+                mark.textContent = text.slice(idx, idx + queryLen);
+                frag.appendChild(mark);
+                pos = idx + queryLen;
+                idx = lower.indexOf(queryLower, pos);
+            }
+            if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+            parent.replaceChild(frag, tn);
+        }
     }
 })();

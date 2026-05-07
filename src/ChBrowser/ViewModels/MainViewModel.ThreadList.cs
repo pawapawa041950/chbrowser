@@ -46,9 +46,9 @@ public sealed partial class MainViewModel
 
         try
         {
-            tab.IsBusy    = true;
-            tab.Header    = $"{board.BoardName} (取得中)";
-            StatusMessage = $"{board.BoardName} のスレ一覧を取得中...";
+            tab.IsBusy        = true;
+            tab.Header        = $"{board.BoardName} (取得中)";
+            tab.StatusMessage = $"{board.BoardName} のスレ一覧を取得中...";
 
             var subjectThreads = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
 
@@ -86,15 +86,15 @@ public sealed partial class MainViewModel
                 threadTab.State = states.TryGetValue(threadTab.ThreadKey, out var s) ? s : LogMarkState.None;
             }
 
-            tab.Header    = $"{board.BoardName} ({allThreads.Count})";
-            StatusMessage = droppedList.Count > 0
+            tab.Header        = $"{board.BoardName} ({allThreads.Count})";
+            tab.StatusMessage = droppedList.Count > 0
                 ? $"{board.BoardName}: {subjectThreads.Count} スレ (+ dat 落ち {droppedList.Count})"
                 : $"{board.BoardName}: {subjectThreads.Count} スレを表示";
         }
         catch (Exception ex)
         {
-            tab.Header    = $"{board.BoardName} (失敗)";
-            StatusMessage = $"スレ一覧の取得に失敗: {ex.Message}";
+            tab.Header        = $"{board.BoardName} (失敗)";
+            tab.StatusMessage = $"スレ一覧の取得に失敗: {ex.Message}";
         }
         finally
         {
@@ -196,16 +196,16 @@ public sealed partial class MainViewModel
     {
         try
         {
-            tab.IsBusy    = true;
-            StatusMessage = "全ログを収集中...";
-            var items     = BuildAllLogsItems();
+            tab.IsBusy        = true;
+            tab.StatusMessage = "全ログを収集中...";
+            var items         = BuildAllLogsItems();
             tab.SetItems(items, DateTimeOffset.UtcNow);
-            tab.Header    = $"📁 全ログ ({items.Count})";
-            StatusMessage = $"全ログ: {items.Count} 件";
+            tab.Header        = $"📁 全ログ ({items.Count})";
+            tab.StatusMessage = $"全ログ: {items.Count} 件";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"全ログ取得失敗: {ex.Message}";
+            tab.StatusMessage = $"全ログ取得失敗: {ex.Message}";
         }
         finally
         {
@@ -330,8 +330,8 @@ public sealed partial class MainViewModel
 
         try
         {
-            tab.IsBusy    = true;
-            StatusMessage = $"次スレ候補を検索中... ({board.BoardName})";
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"次スレ候補を検索中... ({board.BoardName})";
 
             var subjects = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
             var matches  = FuzzyMatchByTitle(sourceTitle, subjects, excludeKey);
@@ -348,12 +348,12 @@ public sealed partial class MainViewModel
             }
 
             tab.SetItems(items, DateTimeOffset.UtcNow);
-            tab.Header    = $"🔍 候補: {Truncate(sourceTitle, 18)} ({items.Count})";
-            StatusMessage = $"次スレ候補: {items.Count} 件 ({board.BoardName})";
+            tab.Header        = $"🔍 候補: {Truncate(sourceTitle, 18)} ({items.Count})";
+            tab.StatusMessage = $"次スレ候補: {items.Count} 件 ({board.BoardName})";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"次スレ候補検索失敗: {ex.Message}";
+            tab.StatusMessage = $"次スレ候補検索失敗: {ex.Message}";
         }
         finally
         {
