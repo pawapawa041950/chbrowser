@@ -10,11 +10,24 @@ namespace ChBrowser.Models;
 ///
 /// <para><see cref="WindowMaximized"/> が true の時、Width/Height/Left/Top には RestoreBounds (= 通常表示時の
 /// サイズ・位置) を入れて保存する。次回起動時にまず通常サイズで復元してから最大化する。</para>
+///
+/// <para><see cref="ViewerWindow"/> は画像ビューアウィンドウのジオメトリ。ビューアは lazy 生成 + 「✕」で
+/// Hide の常駐モデルだが、サイズ/位置はアプリ起動を跨いで保持する (= ユーザが調整した寸法を毎回作り直さない)。
+/// 一度も開かれずアプリを閉じた場合は、起動時に読み出した値が再保存され失われない。</para>
 /// </summary>
 public sealed record LayoutState(
-    double      WindowLeft,
-    double      WindowTop,
-    double      WindowWidth,
-    double      WindowHeight,
-    bool        WindowMaximized,
-    LayoutNode? PaneLayout = null);
+    double                WindowLeft,
+    double                WindowTop,
+    double                WindowWidth,
+    double                WindowHeight,
+    bool                  WindowMaximized,
+    LayoutNode?           PaneLayout   = null,
+    ViewerWindowGeometry? ViewerWindow = null);
+
+/// <summary>画像ビューアウィンドウのジオメトリ。最大化状態の場合 Left/Top/Width/Height は RestoreBounds 値。</summary>
+public sealed record ViewerWindowGeometry(
+    double Left,
+    double Top,
+    double Width,
+    double Height,
+    bool   Maximized);

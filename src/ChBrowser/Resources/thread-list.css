@@ -78,6 +78,7 @@ tbody td.col-log { position: relative; }
 tr.has-log     .log-mark { background: #1e88e5; }   /* 青: ログあり / 件数一致 */
 tr.has-update  .log-mark { background: #2e7d32; }   /* 緑: ログあり / 新着あり */
 tr.has-dropped .log-mark { background: #8d6e63; }   /* 茶: お気に入り表示で subject.txt から消えたスレ */
+tr.has-replied-to-own .log-mark { background: #e53935; } /* 赤: 自分の書き込みへの返信あり (= 上記より優先) */
 
 /* お気に入り済みスレ: 状態マーク背景に薄い ★ を重ねる */
 tr.is-favorited .col-log::before {

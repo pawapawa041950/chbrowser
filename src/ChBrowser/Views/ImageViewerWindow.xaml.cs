@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using ChBrowser.Controls;
+using ChBrowser.Models;
 using ChBrowser.Services.Image;
 using ChBrowser.ViewModels;
 using Microsoft.Web.WebView2.Core;
@@ -77,6 +78,13 @@ public partial class ImageViewerWindow : Window
                 e.Cancel = true;
                 Hide();
             }
+        };
+
+        // タブが全て閉じられたらウィンドウ自体を Hide する (= 次に画像を開いた時は OpenAndShow が再表示)。
+        // ImageViewerViewModel は singleton で再利用するため Close ではなく Hide で十分。
+        vm.Tabs.CollectionChanged += (_, _) =>
+        {
+            if (vm.Tabs.Count == 0 && IsVisible) Hide();
         };
     }
 
@@ -280,6 +288,36 @@ public partial class ImageViewerWindow : Window
         }
         catch (JsonException) { /* malformed message — ignore */ }
     }
+
+    /// <summary>layout.json から読んだ <see cref="ViewerWindowGeometry"/> を反映する。
+    /// 値の妥当性チェック (NaN / 負値 / MinWidth/MinHeight 未満) を入れて、
+    /// 不正値は無視して既定 (XAML 値) のままにする。</summary>
+    public void ApplyGeometry(ViewerWindowGeometry g)
+    {
+        if (IsFinitePositive(g.Width)  && g.Width  >= MinWidth)  Width  = g.Width;
+        if (IsFinitePositive(g.Height) && g.Height >= MinHeight) Height = g.Height;
+        if (IsFinite(g.Left)) Left = g.Left;
+        if (IsFinite(g.Top))  Top  = g.Top;
+        if (g.Maximized) WindowState = WindowState.Maximized;
+    }
+
+    /// <summary>現在のジオメトリを保存用にスナップショット。最大化中は <see cref="Window.RestoreBounds"/>
+    /// (= 通常表示時のサイズ・位置) を採用する。</summary>
+    public ViewerWindowGeometry CaptureGeometry()
+    {
+        var bounds = WindowState == WindowState.Maximized
+            ? RestoreBounds
+            : new Rect(Left, Top, Width, Height);
+        return new ViewerWindowGeometry(
+            Left:      bounds.Left,
+            Top:       bounds.Top,
+            Width:     bounds.Width,
+            Height:    bounds.Height,
+            Maximized: WindowState == WindowState.Maximized);
+    }
+
+    private static bool IsFinite(double v)         => !double.IsNaN(v) && !double.IsInfinity(v);
+    private static bool IsFinitePositive(double v) => IsFinite(v) && v > 0;
 
     /// <summary>新規にタブを開いてウィンドウを Show + 前面化する。</summary>
     public void OpenAndShow(string url)

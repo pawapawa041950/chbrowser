@@ -38,6 +38,10 @@ public partial class MainWindow : Window
     /// <summary>設定ウィンドウのシングルトン参照。</summary>
     private Views.SettingsWindow? _settingsWindow;
 
+    /// <summary>ログウィンドウのシングルトン参照。lazy 生成 (= 表示メニューで初めて ON にしたとき作る)、
+    /// 「✕」で閉じても破棄せず Hide のみ (= 再表示時はインスタンス再利用)。</summary>
+    private Views.LogWindow? _logWindow;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -59,6 +63,8 @@ public partial class MainWindow : Window
         if (_vm is null) return;
         _vm.PropertyChanged += Vm_PropertyChanged;
         AddressBar.Text = _vm.AddressBarUrl;
+        // 初期状態 (= 起動直後の VM 既定値) をログウィンドウの表示に反映。
+        ApplyLogWindowVisibility(_vm.IsLogPaneVisible);
     }
 
     // -----------------------------------------------------------------
@@ -77,6 +83,13 @@ public partial class MainWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
+
+        // 開いているすべてのスレタブの「最後にスクロールしていた位置」を idx.json に flush。
+        // 通常のタブクローズは MainViewModel の CollectionChanged で拾えるが、アプリ終了は ThreadTabs が
+        // 解体されないまま MainWindow が閉じるので、ここで明示的に flush する必要がある。
+        try { _vm?.FlushAllThreadScrollPositionsToDisk(); }
+        catch (Exception ex) { Debug.WriteLine($"[MainWindow] scroll pos flush failed: {ex.Message}"); }
+
         if (LayoutStorage is null) return;
         try { LayoutStorage.Save(CaptureLayout()); }
         catch (Exception ex) { Debug.WriteLine($"[MainWindow] layout save failed: {ex.Message}"); }
@@ -105,13 +118,18 @@ public partial class MainWindow : Window
             ? RestoreBounds
             : new Rect(Left, Top, Width, Height);
 
+        // ビューアウィンドウのジオメトリは App が保持している (= 開いていれば現在値、未起動なら起動時読み込み値)。
+        // どちらも null になり得るが、null は「保存項目なし」として layout.json に出る (受信側でデフォルトに戻る)。
+        var viewer = (Application.Current as App)?.CaptureViewerGeometryForSave();
+
         return new LayoutState(
             WindowLeft:      bounds.Left,
             WindowTop:       bounds.Top,
             WindowWidth:     bounds.Width,
             WindowHeight:    bounds.Height,
             WindowMaximized: WindowState == WindowState.Maximized,
-            PaneLayout:      LayoutHost.Layout?.Clone());
+            PaneLayout:      LayoutHost.Layout?.Clone(),
+            ViewerWindow:    viewer);
     }
 
     private static bool IsFinite(double v)         => !double.IsNaN(v) && !double.IsInfinity(v);
@@ -141,6 +159,34 @@ public partial class MainWindow : Window
     private void ResetLayoutMenu_Click(object sender, RoutedEventArgs e)
     {
         LayoutHost.Layout = PaneLayoutOps.BuildDefault();
+    }
+
+    /// <summary>VM.IsLogPaneVisible の変化に追従してログウィンドウを show / hide する。
+    /// 初回 ON で lazy 生成 (= MainWindow を Owner にして生成、画面右上に初期配置)。
+    /// 「✕」で閉じられた場合は <see cref="LogWindow.UserClosed"/> 経由で VM のフラグを落として
+    /// メニューのチェックを外す。</summary>
+    private void ApplyLogWindowVisibility(bool visible)
+    {
+        if (visible)
+        {
+            if (_logWindow is null)
+            {
+                _logWindow = new Views.LogWindow { Owner = this };
+                // 初期位置は MainWindow の右隣 (= 画面端を超えそうなら下にずらす)
+                _logWindow.Left = Math.Max(0, Left + Width - _logWindow.Width - 40);
+                _logWindow.Top  = Math.Max(0, Top + 60);
+                _logWindow.UserClosed += (_, _) =>
+                {
+                    if (_vm is not null) _vm.IsLogPaneVisible = false;
+                };
+            }
+            _logWindow.Show();
+            _logWindow.Activate();
+        }
+        else
+        {
+            _logWindow?.Hide();
+        }
     }
 
     /// <summary>ツール → 設定...</summary>

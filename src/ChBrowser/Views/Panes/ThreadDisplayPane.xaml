@@ -256,6 +256,7 @@
                 <DataTemplate DataType="{x:Type vm:ThreadTabViewModel}">
                     <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
                                   ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
+                                  ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"

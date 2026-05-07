@@ -48,6 +48,8 @@
                     <MenuItem Header="フォントサイズを大きく" />
                     <MenuItem Header="フォントサイズを小さく" />
                     <Separator />
+                    <MenuItem Header="ログペイン(_L)" IsCheckable="True"
+                              IsChecked="{Binding IsLogPaneVisible, Mode=TwoWay}" />
                     <MenuItem Header="ペインレイアウトをリセット(_R)" Click="ResetLayoutMenu_Click" />
                 </MenuItem>
                 <MenuItem Header="ツール(_T)">

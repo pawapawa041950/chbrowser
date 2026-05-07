@@ -102,22 +102,29 @@ public static partial class WebView2Helper
         if (d is not WebView2 wv) return;
         if (e.NewValue is not ChBrowser.ViewModels.AppendBatchData data) return;
 
-        // streaming 中もこのバッチで対象レスが現れる可能性があるので scroll target / read mark を併送
+        // streaming 中もこのバッチで対象レスが現れる可能性があるので scroll target / mark を併送
         var binding      = wv.DataContext as IThreadDisplayBinding;
         var scrollTarget = binding?.ScrollTargetPostNumber;
-        var readMark     = binding?.ReadMarkPostNumber;
+        var markPostNumber = binding?.MarkPostNumber;
         // 「自分の書き込み」のレス番号集合も併送 (= JS 側で「自分」バッジ表示)。
         // 集合は通常極小 (数件) なので毎バッチに同梱しても無害。
         var ownPosts     = binding?.OwnPostNumbers ?? System.Array.Empty<int>();
 
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[appendBatch] serialize: posts={data.Posts.Count}"
+            + $" (numbers {(data.Posts.Count > 0 ? data.Posts[0].Number : -1)}..{(data.Posts.Count > 0 ? data.Posts[data.Posts.Count - 1].Number : -1)})"
+            + $", incremental={data.IsIncremental}"
+            + $", binding.MarkPostNumber={markPostNumber?.ToString() ?? "null"}"
+            + $", binding.ScrollTargetPostNumber={scrollTarget?.ToString() ?? "null"}");
+
         var json = JsonSerializer.Serialize(new
         {
-            type               = "appendPosts",
-            posts              = data.Posts,
+            type             = "appendPosts",
+            posts            = data.Posts,
             scrollTarget,
-            readMarkPostNumber = readMark,
-            incremental        = data.IsIncremental,
-            ownPostNumbers     = ownPosts,
+            markPostNumber,
+            incremental      = data.IsIncremental,
+            ownPostNumbers   = ownPosts,
         }, PostJsonOptions);
 
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
@@ -141,6 +148,39 @@ public static partial class WebView2Helper
     {
         if (d is not WebView2 wv || e.NewValue is null) return;
         var json = JsonSerializer.Serialize(new { type = "updateOwnPosts", value = e.NewValue }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // MarkPostNumberPush (スレ表示: 「以降新レス」ラベル位置の単独 push)
+    //
+    // appendPosts ペイロードでも mark は併送しているが、それは「新着がある=appendPosts が呼ばれる」時のみ。
+    // 新着 0 件の refresh で mark を null にクリアしたい場合や、新着なしの状態で mark 値そのものが
+    // 変わった場合 (= レアだがありうる) は appendPosts が走らないので、ここで単独 push する。
+    //
+    // 値の型は object?。int? を boxed で持ち、null も valid な value (= ラベル消去) として扱う。
+    // 既存の Own / ViewMode 系 DP は NewValue==null で早期 return しているが、こちらは null 自体が
+    // 意味を持つ (= JS 側で markPostNumber を null にしてラベルを取り除く) ので return しない。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty MarkPostNumberPushProperty =
+        DependencyProperty.RegisterAttached(
+            "MarkPostNumberPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnMarkPostNumberPushChanged));
+
+    public static object? GetMarkPostNumberPush(DependencyObject d) => d.GetValue(MarkPostNumberPushProperty);
+    public static void    SetMarkPostNumberPush(DependencyObject d, object? value) => d.SetValue(MarkPostNumberPushProperty, value);
+
+    private static void OnMarkPostNumberPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[markPush] new value={e.NewValue?.ToString() ?? "null"} (was {e.OldValue?.ToString() ?? "null"})");
+        // value は int? の boxed か null。JsonSerializer は null を JSON null としてシリアライズするので
+        // JS 側で typeof === 'number' チェック → 数値なら設定、それ以外 (= null/undefined) なら markPostNumber=null。
+        var json = JsonSerializer.Serialize(new { type = "setMarkPostNumber", value = e.NewValue }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

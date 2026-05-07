@@ -424,7 +424,7 @@ public sealed class PostDialog : Window
 
         var label = new TextBlock
         {
-            Text                = "認証:",
+            Text                = "どんぐり:",
             VerticalAlignment   = VerticalAlignment.Center,
             Margin              = new Thickness(0, 0, 8, 0),
         };
@@ -446,12 +446,12 @@ public sealed class PostDialog : Window
             return r;
         }
 
-        var rNone   = MakeRadio("認証なし",       PostAuthMode.None,
-                                "Cookie を一切付けずに投稿。初回投稿相当 (= サーバが acorn を発行する経路)。");
-        var rCookie = MakeRadio("Cookie",          PostAuthMode.Cookie,
-                                "acorn / MonaTicket だけ送る。メール認証 Cookie は外す (= Lv が低めで目立たない)。");
+        var rNone   = MakeRadio("なし",           PostAuthMode.None,
+                                "Cookie を一切付けずに投稿。初回投稿相当 (= サーバが新規 anon acorn を発行する経路)。");
+        var rCookie = MakeRadio("通常",            PostAuthMode.Cookie,
+                                "通常 (anon) acorn / MonaTicket だけ送る。メール認証 acorn とは別スロットで管理され、3 時間以内に再投稿し続ける限り Lv が積み上がる。");
         var rMail   = MakeRadio("メール認証",      PostAuthMode.MailAuth,
-                                "acorn + メール認証 Cookie を全部送る (= 最高 Lv)。設定 → 認証 で事前ログイン要。");
+                                "メール認証 acorn + 関連 Cookie を全部送る (= 最高 Lv)。設定 → 認証 で事前ログイン要。");
 
         panel.Children.Add(rNone);
         panel.Children.Add(rCookie);

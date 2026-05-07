@@ -43,14 +43,6 @@
                  HorizontalAlignment="Left"
                  Margin="0,0,0,16" />
 
-        <CheckBox IsChecked="{Binding ShowReadMark, Mode=TwoWay}"
-                  Content="「ここまで読んだ」帯を表示する"
-                  Margin="0,0,0,4" />
-        <TextBlock Text="スクロール中、レスを読み終えた箇所に控えめな帯を表示します。リッチスクロールバーにも該当位置が描画されます。OFF にしても位置自体は記録されるため、再度 ON にすると過去の位置から復活します。"
-                   Foreground="#666"
-                   TextWrapping="Wrap"
-                   Margin="0,0,0,16" />
-
         <TextBlock Text="ID 強調しきい値 (件)" FontWeight="SemiBold" Margin="0,0,0,4" />
         <TextBlock Text="同一 ID の書き込みがこの件数以上ある場合、レス先頭の「ID」文字列を赤色で強調表示します。1 にすると同 ID が 2 件以上で赤、5 にすると 5 件以上で赤になります。同 ID が 2 件以上のときの「ID」のリンク風装飾 (ホバーで一覧ポップアップ) は閾値に関係なく常時有効です。"
                    Foreground="#666"

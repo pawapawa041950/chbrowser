@@ -46,6 +46,10 @@
 
     // スクロール対象レス番号。setPosts / appendPosts のメッセージから受け取り、
     // 対象レスが DOM に現れたタイミングで scrollIntoView してクリアする。
+    // 「次回オープン時にこのレスを viewport 下端に揃えたい」レス番号 (= scroll restore target)。
+    // 値の意味は「読了 prefix の最大番号」(= 「先頭から連番が途切れず読み終えた」最後の番号)。
+    // findReadProgressMaxNumber が算定し scheduleSendScrollPosition が C# に保存させる。
+    // 復元時は el.scrollIntoView({ block: 'end' }) で対象レスの下端を viewport 下端に揃える。
     let pendingScrollTarget = null;
 
     // 設定 (Phase 11) で動的変更可能。setConfig メッセージで上書きされる。
@@ -62,25 +66,59 @@
     //   - 名前文字列に複数候補があった場合は最初の 1 件を採用する。
     const WATCHOI_RE = /[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4}/;
 
-    // 重複なしツリーの「incremental セクション」境界 (Phase 20)。
-    //   incrementalPivotIndex: allPosts のうち、最初の差分 append (= リフレッシュ後 / お気に入りチェック差分等) が
-    //                          始まる index。null = まだ差分 append が来ていない (= 通常の dedup-tree)。
-    //   一度 pivot が設定されたら、同じタブセッション中は固定 (= 後続の incremental 追加でも更新しない)。
-    //   ピボット以降のレスは Section B (末尾の chain block) として描画され、祖先付きで「ここまで読んだ」帯の
-    //   下に新着として表示される。
-    let incrementalPivotIndex = null;
+    // 「以降新レス」ラベル。
+    //   markPostNumber: ラベルを出すレス番号 (= リフレッシュで新たに来たレスの先頭番号)。
+    //                   毎 appendPosts のペイロードで C# から最新値が届く (= リフレッシュ完了で更新される)。
+    //                   null = ラベルなし (= まだリフレッシュで新着が来ていない初回オープン状態)。
+    //
+    //   ※ 旧「ここまで読んだ」帯 (= ユーザスクロールで C# に位置を通知し帯を更新する仕組み) は撤去。
+    //     ユーザ操作と auto-scroll の境界が曖昧で bug を生みやすかったため。
+    //     dedup-tree の「親ごと描写」境界 (= 旧 incrementalPivotIndex) もこのラベルに統一。
+    let markPostNumber = null;
 
-    // 「ここまで読んだ」帯 (Phase 19)。
-    //   readMarkPostNumber: 帯を出すレス番号。スレを開いた最初の appendPosts 時に C# から渡される値で固定し、
-    //                       以降はスクロールでもリフレッシュでも動かさない (= 次回オープン時に最新位置から表示される)。
-    //                       null = 未設定で帯なし。
-    //   readMarkInitialized: appendPosts で初回値を取り込み済みかどうか (リフレッシュで上書きされないよう一度きり)。
-    //   readMarkSentMax   : C# に送った最深値。同じ値を再送しないための dedupe 用 (帯位置とは独立)。
-    //   showReadMark      : 設定 ON/OFF。OFF でも値は記録され続け、ON にすれば再び帯が現れる。
-    let readMarkPostNumber  = null;
-    let readMarkInitialized = false;
-    let readMarkSentMax     = null;
-    let showReadMark        = true;
+    // 「今セッションで incremental=true で届いたレス番号」の集合。is-new (= レス No 太字) の判定に使う。
+    // markPostNumber はリフレッシュ境界として idx.json に永続化されるが、太字は「今セッションで届いたぶん」
+    // であってほしい (= 再オープン直後で 0 件取得なら太字レスも 0 件) ので別管理。
+    const sessionNewPostNumbers = new Set();
+
+    /** allPosts における「ラベル位置」(= markPostNumber 以上の最初のレスの index)。
+     *  null = ラベルなし or ラベル以降のレスがまだ存在しない。
+     *  dedup-tree の Section A/B 分割と markNewPosts の境界判定に使う。 */
+    function computeMarkIndex() {
+        if (markPostNumber == null) return null;
+        for (let i = 0; i < allPosts.length; i++) {
+            if (allPosts[i].number >= markPostNumber) return i;
+        }
+        return null;
+    }
+
+    // ユーザーが手動でスクロールしたか — 「ホイール / ドラッグ / 矢印キー / PageUp-Down / 触れる」
+    // のいずれかが起きた時点で true にする。一度 true になったら以降は元に戻さない。
+    //
+    // 用途:
+    //   - tryScrollToTarget は user input 前は batch ごとに繰り返し target を追従し続ける
+    //     (= ストリーミング中に layout shift が起きても最終的に target に着地)
+    //   - scrollPosition の送信は user input 後だけ行う
+    //     (= scrollIntoView 由来の auto-fire を吸収して idx.json と ScrollTargetPostNumber の
+    //        フィードバックループで scroll target がドリフトするのを防ぐ)
+    //
+    // capture フェーズで購読することで子要素の preventDefault 等の影響を受けない。
+    let userHasScrolled = false;
+    ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(function(ev) {
+        window.addEventListener(ev, function() { userHasScrolled = true; }, { passive: true, capture: true });
+    });
+
+    // ---------- C# 側 LogService への汎用デバッグ出力 ----------
+    // 用途: リリースビルド (= F12 DevTools が無い環境) でも JS の挙動を追えるようにする一時的な仕掛け。
+    // 必要なくなったら debugLog 呼び出し + WebMessageBridge.cs の "debugLog" case + 本ヘルパを削除する。
+    function debugLog(msg) {
+        try {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'debugLog', message: String(msg) });
+            }
+        } catch (_) { /* never throw */ }
+    }
+
 
     // ---------- escape helpers ----------
     function escapeHtml(s) {
@@ -701,20 +739,21 @@
         if (viewMode === 'tree') {
             for (const p of allPosts) html += buildTreePostHtml(p, currentReverseIndex, false);
         } else if (viewMode === 'dedupTree') {
-            // Phase 20: pivot 設定済 (= リフレッシュ等で差分 append が来た) なら 2 セクション構成。
-            //   Section A: pre-pivot レスを通常の dedup tree で描画。reverseIndex も pre-pivot 限定にして
-            //              incremental 分が祖先の子として埋め込まれてしまうのを防ぐ。
-            //   Section B: post-pivot レス (= 新規取得分) を、各レスの祖先 chain ごと末尾に並べる。
-            //              共通祖先は forest で merge。ancestor は embedded、incremental 自身は primary。
-            if (incrementalPivotIndex == null || incrementalPivotIndex >= allPosts.length) {
+            // ラベル境界 (= markPostNumber 以降) があれば 2 セクション構成。
+            //   Section A: ラベル前のレスを通常の dedup tree で描画。reverseIndex も pre-mark 限定にして
+            //              新着分が祖先の子として埋め込まれてしまうのを防ぐ。
+            //   Section B: ラベル以降のレス (= 新規取得分) を、各レスの祖先 chain ごと末尾に並べる。
+            //              共通祖先は forest で merge。ancestor は embedded、新着自身は primary。
+            const markIdx = computeMarkIndex();
+            if (markIdx == null || markIdx >= allPosts.length) {
                 const rendered = new Set();
                 for (const p of allPosts) {
                     if (rendered.has(p.number)) continue;
                     html += buildDedupPostHtml(p, currentReverseIndex, rendered, false);
                 }
             } else {
-                const sectionA = allPosts.slice(0, incrementalPivotIndex);
-                const sectionB = allPosts.slice(incrementalPivotIndex);
+                const sectionA = allPosts.slice(0, markIdx);
+                const sectionB = allPosts.slice(markIdx);
                 // Section A
                 const reverseA = buildReverseIndexFrom(sectionA);
                 const renderedA = new Set();
@@ -751,24 +790,41 @@
         observeImageSlots(document);
         tryScrollToTarget();
         updateRichScrollbar();
-        updateReadUpToBand();
-        updateReadMarkScrollbarMarker();
+        updateNewPostsMarkBand();
+        updateMarkScrollbarMarker();
         markNewPosts();
         recomputeMetaMaps();
         decorateMeta();
     }
 
-    /** スレを最初に開いた後の差分取得 (= incrementalPivotIndex 以降) で来たレスを「新規」として
-     *  is-new クラスでマークする。post.css 側で .post.is-new .post-no を太字強調。
-     *  primary instance (= id="rN" 付き) のみマークするので、tree モード重複表示の embedded 側は対象外
-     *  (= ユーザの主視点である primary のレスでだけ強調が出ればよい)。
-     *  classList.add は冪等なので renderCurrentViewMode + appendPosts flat の両方から呼んで OK。 */
+    /** 「今セッションで新着として届いたレス」を is-new クラスでマークする。
+     *  post.css 側で .post.is-new .post-no を太字強調。
+     *
+     *  is-new は markPostNumber (= 永続) とは別管理:
+     *    - markPostNumber はリフレッシュ時の境界として idx.json に永続化されるが、
+     *      「太字 = 新規レス」の感覚は「今このセッションで増えたレス」であってほしい。
+     *    - したがって sessionNewPostNumbers (Set) を appendPosts(incremental=true) のときだけ追記し、
+     *      JS リロード (= 別タブ切替・再オープン) で空に戻る。
+     *    - 結果、再オープン直後に新着取得が無ければ太字レスは 0、リフレッシュで N 件来れば N 件だけ太字。 */
     function markNewPosts() {
-        if (incrementalPivotIndex == null) return;
-        for (let i = incrementalPivotIndex; i < allPosts.length; i++) {
-            const el = document.getElementById('r' + allPosts[i].number);
-            if (el) el.classList.add('is-new');
+        if (sessionNewPostNumbers.size === 0) {
+            debugLog('markNewPosts: sessionNewPostNumbers is empty → no-op');
+            return;
         }
+        let added = 0;
+        let missing = 0;
+        for (const num of sessionNewPostNumbers) {
+            const el = document.getElementById('r' + num);
+            if (el) {
+                el.classList.add('is-new');
+                added++;
+            } else {
+                missing++;
+            }
+        }
+        debugLog('markNewPosts: sessionNewPostNumbers.size=' + sessionNewPostNumbers.size
+            + ', applied is-new to ' + added + ' element(s), missing=' + missing
+            + ' (sample: ' + Array.from(sessionNewPostNumbers).slice(0, 5).join(',') + ')');
     }
 
     // ---------- ID / ワッチョイの集計と装飾 (Phase 22) ----------
@@ -834,15 +890,28 @@
                 const list = currentIdMap.get(p.id);
                 if (list && list.length > 1) {
                     const metaEl = postEl.querySelector(':scope > .post-header > .post-meta');
-                    if (metaEl) wrapTextMatches(metaEl, /\bID(?=:)/, function (matched) {
-                        const span = document.createElement('span');
-                        span.className = 'id-link';
-                        if (list.length >= ID_HIGHLIGHT_THRESHOLD) span.classList.add('id-many');
-                        span.dataset.id = p.id;
-                        span.dataset.idList = list.join(',');
-                        span.textContent = matched;
-                        return span;
-                    }, /*onlyFirst*/ true);
+                    if (metaEl) {
+                        wrapTextMatches(metaEl, /\bID(?=:)/, function (matched) {
+                            const span = document.createElement('span');
+                            span.className = 'id-link';
+                            if (list.length >= ID_HIGHLIGHT_THRESHOLD) span.classList.add('id-many');
+                            span.dataset.id = p.id;
+                            span.dataset.idList = list.join(',');
+                            span.textContent = matched;
+                            return span;
+                        }, /*onlyFirst*/ true);
+
+                        // [N/M] 表示: このレスが同 ID 中で何番目かと、総数。N は list 内の position+1。
+                        // list は recomputeMetaMaps が allPosts 順 (= レス番号昇順) で push しているので、
+                        // indexOf(p.number) は「何番目の書き込みか」を返す。
+                        const indexInList = list.indexOf(p.number) + 1;
+                        if (indexInList > 0) {
+                            const counter = document.createElement('span');
+                            counter.className = 'id-count';
+                            counter.textContent = ' [' + indexInList + '/' + list.length + ']';
+                            metaEl.appendChild(counter);
+                        }
+                    }
                 }
             }
             postEl.dataset.metaDecorated = '1';
@@ -859,6 +928,10 @@
         if (!root) return;
         root.querySelectorAll('.watchoi-link, .id-link').forEach(function (el) {
             el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
+        });
+        // .id-count は装飾の付帯要素なので、再装飾前にまるごと取り除く。
+        root.querySelectorAll('.id-count').forEach(function (el) {
+            if (el.parentNode) el.parentNode.removeChild(el);
         });
         root.querySelectorAll('.post[data-meta-decorated="1"]').forEach(function (postEl) {
             delete postEl.dataset.metaDecorated;
@@ -1112,6 +1185,10 @@
         scrollbarUpdateTimer = setTimeout(function () {
             scrollbarUpdateTimer = null;
             updateRichScrollbar();
+            // mark トラック (= 「以降新レス」/ 「自分の書き込み」) の位置も
+            // scrollHeight 変化に追従させる。画像 lazy load で本文高が伸びると
+            // 比率位置が古いままだとマーカーがズレるため。
+            updateMarkScrollbarMarker();
         }, 200);
     }
     document.addEventListener('load', function (e) {
@@ -1535,48 +1612,105 @@
 
     // ---------- scroll target (initial restore + tab-switch restore) ----------
     // pendingScrollTarget は setPosts/appendPosts のメッセージから受け取って保持。
-    // tryScrollToTarget は対象レスが DOM に出現したらスクロールしてクリア。
-    function tryScrollToTarget() {
-        if (pendingScrollTarget == null) return;
-        const el = document.getElementById('r' + pendingScrollTarget);
-        if (!el) return; // まだ DOM に居ない、後続の append で再試行
-
-        // 対象レスが viewport 内に少しでも見えていれば scroll しない (jolt 防止)。
-        const rect = el.getBoundingClientRect();
-        const vh = document.documentElement.clientHeight;
-        const visible = rect.bottom > 0 && rect.top < vh;
-        if (!visible) {
-            el.scrollIntoView({ block: 'start' });
+    // tryScrollToTarget は対象レスが DOM に出現したら scrollIntoView する。
+    //
+    // 設計メモ:
+    //   - ユーザーが手動でスクロール (userHasScrolled) する前は、batch 到着のたびに繰り返し追従する。
+    //     ツリーモードの appendPosts は innerHTML 全置換で scrollY=0 にリセットされるため、
+    //     都度再 anchor しないと target から離れたまま固まる。
+    //   - 一度 userHasScrolled が立ったら追従終了 (= ユーザの位置を尊重)。
+    //   - pendingScrollTarget はクリアしない (= 後続の batch でも再追従するため)。
+    //     visible 判定により、target が既に viewport 内に居れば scroll は発火しないので jolt は出ない。
+    /** {r1..rN} の primary instance (id="rN") のうち、DOM 上で最も下にある要素を返す。
+     *  途中の番号が DOM に存在しない (= 通常はないが防御的) ものはスキップ。
+     *  すべて存在しない場合は null。 */
+    function findBottommostPrimaryInRange(N) {
+        let best = null;
+        let bestY = -Infinity;
+        const sy = window.scrollY || window.pageYOffset || 0;
+        for (let n = 1; n <= N; n++) {
+            const el = document.getElementById('r' + n);
+            if (!el) continue;
+            const absY = el.getBoundingClientRect().top + sy;
+            if (absY > bestY) {
+                bestY = absY;
+                best = el;
+            }
         }
-        pendingScrollTarget = null;
+        return best;
+    }
+
+    /** スレ開いた直後に保存値 N にあわせて復元スクロールを行う。
+     *
+     *  方針 (= ユーザ仕様):
+     *    1..N のレス番号それぞれの primary instance (id="rN") のうち、DOM 上で最も下に位置するものを選び、
+     *    その要素の下端を viewport 下端に揃える (= scrollIntoView({block:'end'}))。
+     *
+     *  なぜ rN 自体ではないのか:
+     *    tree モードで N が他レスへの返信として nest されている場合、N の primary instance は DOM の
+     *    途中に置かれることがあり、そこに揃えると「読了した位置より大きく戻った」場所に着地する。
+     *    {1..N} の中で DOM 上の最後尾 (= 「読了済集合の DOM 上の境界」) に揃えれば visually 連続感が出る。
+     *    flat モードでは番号順 = DOM 順なので bottommost = rN となり、結果は従来同等。
+     *
+     *  streaming 中: allPosts.length < N の段階では繰り延べ (= 続く batch 到着で再度呼ばれる)。 */
+    function tryScrollToTarget() {
+        if (userHasScrolled) return;
+        if (pendingScrollTarget == null) return;
+        const N = pendingScrollTarget;
+        // 1..N が全部届くまでは繰り延べ。途中で部分的にスクロールすると、後続 batch で再度動いて jitter になる。
+        if (allPosts.length < N) return;
+
+        const bottomMost = findBottommostPrimaryInRange(N);
+        if (!bottomMost) return;
+
+        // jolt 防止: 既に bottommost の下端が viewport 下端 ±4px AND 上端も viewport 内なら no-op
+        const rect = bottomMost.getBoundingClientRect();
+        const vh = document.documentElement.clientHeight;
+        if (Math.abs(rect.bottom - vh) <= 4 && rect.top >= 0 && rect.top < vh) return;
+        bottomMost.scrollIntoView({ block: 'end' });
     }
 
     // ---------- scroll position save (debounced) ----------
     // 各タブが専属 WebView2 なので、ユーザーがスクロールした時にだけイベントが発火する。
     // 過渡的な scrollY 値の汚染対策 (suppress) は不要。シンプルな debounce のみ。
     let scrollSaveTimer = null;
-    let scrollSaveLastSent = null;
+    let scrollSaveLastSent = null;       // 直近送信した「読了 prefix」の最大番号
     const SCROLL_SAVE_DEBOUNCE_MS = 200;
 
-    function findTopmostVisiblePostNumber() {
-        const root = document.getElementById('posts');
-        if (!root) return null;
-        for (const post of root.children) {
-            const id = post.id;
-            if (!id || !id.startsWith('r')) continue;
-            const rect = post.getBoundingClientRect();
-            if (rect.bottom > 0) {
-                return parseInt(id.slice(1), 10);
-            }
+    /** 「読了 prefix」の最大レス番号を算出する (= 次回オープン時の scroll restore target)。
+     *
+     *  方針:
+     *    1. 各レス番号 N (= 1, 2, 3, ...) の primary instance (id="rN") の下端が viewport 下端以下にあるか調べる。
+     *       条件 (rect.bottom <= clientHeight) を満たすレスは「下端まで見終えた」と扱う。
+     *       これは「画面内で全部見えている」と「上にスクロールして去った」の両方をカバーする。
+     *    2. 1, 2, 3, ... と連番でこの条件を満たし続ける限り進み、初めて満たさなくなった瞬間で停止して、
+     *       直前の番号 N を返す。
+     *
+     *  ツリー表示でレスが番号順に並んでいない場合でも、「先頭から連番が途切れず読了した最大番号」が安定して取れる。
+     *  例: ツリーモードで DOM 順 1,2,3,10,12,4,5,13,6,7,8,9 のスレで「13 まで見えて 6 が下端切れ」だと、
+     *  rendered = {1,2,3,10,12,4,5,13} (6 は下端切れで除外)、1 から連番は {1,2,3,4,5} → N=5。 */
+    function findReadProgressMaxNumber() {
+        const vh = document.documentElement.clientHeight;
+        let lastValid = 0;
+        for (let n = 1; ; n++) {
+            const el = document.getElementById('r' + n);
+            if (!el) break; // 番号が DOM に居ない (= 通常はない) 時点で打ち切り
+            if (el.getBoundingClientRect().bottom > vh) break; // 連番が途切れた → 確定
+            lastValid = n;
         }
-        return null;
+        return lastValid > 0 ? lastValid : null;
     }
 
     function scheduleSendScrollPosition() {
         if (scrollSaveTimer != null) return; // 既に飛んでいる timer に統合
         scrollSaveTimer = setTimeout(function () {
             scrollSaveTimer = null;
-            const num = findTopmostVisiblePostNumber();
+            // user input 前 (= scrollIntoView の auto-fire 経路) は送信抑止。
+            // ここを抑えないと: 自動スクロール → scroll event → scrollPosition 送信 →
+            // C# が ScrollTargetPostNumber を上書き → 次 batch で別の値が pending に入る、
+            // という feedback loop で target がドリフトする。
+            if (!userHasScrolled) return;
+            const num = findReadProgressMaxNumber();
             if (num == null) return;
             if (num === scrollSaveLastSent) return; // 変化なしは送らない
             scrollSaveLastSent = num;
@@ -1586,103 +1720,117 @@
         }, SCROLL_SAVE_DEBOUNCE_MS);
     }
 
-    // ---------- 「ここまで読んだ」帯 (Phase 19) ----------
-    // 判定基準: primary レス (= #posts の直下子、id="rN") のうち
-    //   rect.bottom <= window.innerHeight (= レス下端が viewport 下端以下)
-    // を満たす最大番号。
-    //   - 短文レス: 全体表示で即条件成立
-    //   - 長文レス: 読み飛ばしてスクロールが下端を抜けたとき成立
-    //   - 末尾レス: スレ最下端までスクロールしたとき成立
-    // 値は減少しない (前回より大きいときだけ採用)。
-    let readMarkSendTimer = null;
-    function findDeepestReadMarkPostNumber() {
-        const root = document.getElementById('posts');
-        if (!root) return null;
-        const vh   = window.innerHeight;
-        let best   = null;
-        for (const post of root.children) {
-            const id = post.id;
-            if (!id || !id.startsWith('r')) continue;
-            const rect = post.getBoundingClientRect();
-            if (rect.bottom <= vh) {
-                const n = parseInt(id.slice(1), 10);
-                if (best == null || n > best) best = n;
-            }
-        }
-        return best;
-    }
-    function scheduleSendReadMark() {
-        if (readMarkSendTimer != null) return;
-        readMarkSendTimer = setTimeout(function () {
-            readMarkSendTimer = null;
-            const n = findDeepestReadMarkPostNumber();
-            if (n == null) return;
-            // dedupe: 同じ値や過去最大以下は C# に送らない。永続化された値は次回オープン時に取り込まれる。
-            if (readMarkSentMax != null && n <= readMarkSentMax) return;
-            readMarkSentMax = n;
-            // ※ 現セッション中は帯を動かさない (= readMarkPostNumber / 帯 DOM はそのまま)。
-            //   次回スレを開いた瞬間に C# から最新の readMarkPostNumber が来て、新しい位置に表示される。
-            if (window.chrome && window.chrome.webview) {
-                window.chrome.webview.postMessage({ type: 'readMark', postNumber: n });
-            }
-        }, SCROLL_SAVE_DEBOUNCE_MS);
-    }
+    // ---------- 「以降新レス」ラベル ----------
+    // markPostNumber は appendPosts のペイロードから受信して保持。
+    // ラベル位置はリフレッシュで新着が来たときだけ動く (= 旧 readMark のように scroll で動かない)。
 
-    /** 現在の readMarkPostNumber と DOM 状態を見て、ここまで読んだ帯を再配置する。
-     *  対象レスが DOM に居ない (= NG / view mode で primary でない) 場合は、
-     *  「番号がそれ以上の primary レスのうち最初のもの」の後ろに帯を挿入する。 */
-    function updateReadUpToBand() {
-        // 既存帯を一旦取り除く (= 配置場所の更新も再挿入で行う)
-        const existing = document.getElementById('read-up-to-band');
+    /** 「以降新レス」ラベル DOM を再配置する。
+     *
+     *  配置ロジック (優先度順):
+     *    1. r{markPostNumber} が #posts の直接の子なら、その前に挿入。
+     *    2. r{markPostNumber} が nested (= dedupTree section B のように forest 内に居る) なら、
+     *       そのレスを含む top-level 子要素の前に挿入する。
+     *       (※ section B の forest root は ancestor (= mark 未満の親) のことがあり id 無し。
+     *           したがって「root.children を id で検索」では届かないので必ず target から walk up する。)
+     *    3. 上記いずれも見つからなければ、root.children を頭から走査して
+     *       「番号 >= mark の最初の primary レス」または「番号 >= mark のレスを内包する top-level」を探す。 */
+    function updateNewPostsMarkBand() {
+        // 既存ラベルを一旦取り除く (= 配置場所の更新も再挿入で行う)
+        const existing = document.getElementById('new-posts-mark-band');
         if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
-        if (readMarkPostNumber == null) return;
+        if (markPostNumber == null) {
+            debugLog('updateNewPostsMarkBand: markPostNumber=null → no band');
+            return;
+        }
 
         const root = document.getElementById('posts');
         if (!root) return;
 
-        // 対象レス、無ければ番号 >= readMark の最初の primary レスを探す
-        let target = document.getElementById('r' + readMarkPostNumber);
-        if (!target || target.parentNode !== root) {
-            target = null;
+        let target = null;
+        let route  = '';
+
+        // ① / ② r{markPostNumber} が DOM 上にあれば、それを内包する top-level 要素を target に
+        const direct = document.getElementById('r' + markPostNumber);
+        if (direct) {
+            let topLevel = direct;
+            while (topLevel && topLevel.parentNode !== root) topLevel = topLevel.parentNode;
+            if (topLevel && topLevel.parentNode === root) { target = topLevel; route = 'direct'; }
+        }
+
+        // ③ それでも見つからない (= 該当レスが DOM に存在しない) 場合は番号 >= mark を探す
+        if (!target) {
             for (const post of root.children) {
                 const id = post.id;
-                if (!id || !id.startsWith('r')) continue;
-                const n = parseInt(id.slice(1), 10);
-                if (n >= readMarkPostNumber) { target = post; break; }
+                // id 付きの primary レスならその番号で判定
+                if (id && id.startsWith('r')) {
+                    const n = parseInt(id.slice(1), 10);
+                    if (n >= markPostNumber) { target = post; route = 'fallback-id'; break; }
+                    continue;
+                }
+                // id 無しの top-level (= dedupTree section B の forest root が ancestor のとき) は
+                // 内部に r{>=mark} が居るかを後方互換的にチェックする
+                const inner = post.querySelector('[id^="r"]');
+                if (inner && inner.id) {
+                    const n = parseInt(inner.id.slice(1), 10);
+                    if (!isNaN(n) && n >= markPostNumber) { target = post; route = 'fallback-inner'; break; }
+                }
             }
         }
-        if (!target) return; // 帯を出す場所がない (該当以降に primary レスが無い)
+        if (!target) {
+            debugLog('updateNewPostsMarkBand: target NOT found for mark=' + markPostNumber
+                + ' (allPosts=' + allPosts.length + ', root.children=' + root.children.length
+                + ', getElementById(r' + markPostNumber + ')=' + (direct ? 'exists-but-orphan' : 'null') + ')');
+            return; // ラベルを出す場所がない
+        }
 
         const band = document.createElement('div');
-        band.id        = 'read-up-to-band';
-        band.className = 'read-up-to-band';
-        target.parentNode.insertBefore(band, target.nextSibling);
+        band.id        = 'new-posts-mark-band';
+        band.className = 'new-posts-mark-band';
+        target.parentNode.insertBefore(band, target);
+        debugLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
     }
 
-    /** リッチスクロールバーの readmark トラックに帯マーカーを描画。
-     *  対象レスの DOM 上の縦位置 (= scrollHeight に対する比率) に細い横線を出すだけ。 */
-    function updateReadMarkScrollbarMarker() {
+    /** リッチスクロールバーの mark トラック (= 一番右のトラック) に位置マーカーを描画。
+     *  以下の 2 種類を同じトラックに「色違い」で並べる:
+     *    1) 「以降新レス」境界の青ライン (= markPostNumber 位置、最大 1 本)
+     *    2) 「自分の書き込み」レスの位置マーカー (= ownPostNumbers の各位置、色は CSS の .marker-own で別)
+     *  対象レスの DOM 上の縦位置 (scrollHeight に対する比率) に細い横線を出すだけ。 */
+    function updateMarkScrollbarMarker() {
         const sb = document.getElementById('richScrollbar');
         if (!sb) return;
-        const track = sb.querySelector('.track-readmark');
+        const track = sb.querySelector('.track-mark');
         if (!track) return;
         track.innerHTML = '';
-        if (readMarkPostNumber == null) return;
         const scrollHeight = document.documentElement.scrollHeight;
         if (!scrollHeight) return;
-        // 帯か対象レス (帯が無ければレス本体) の Y 座標で位置を決める
-        const band = document.getElementById('read-up-to-band');
-        const ref  = band || document.getElementById('r' + readMarkPostNumber);
-        if (!ref) return;
-        const m = document.createElement('div');
-        m.className = 'marker';
-        m.style.top = ((ref.offsetTop + ref.offsetHeight) / scrollHeight * 100) + '%';
-        track.appendChild(m);
+
+        // (1) 「以降新レス」境界 (1 本だけ)
+        if (markPostNumber != null) {
+            const band = document.getElementById('new-posts-mark-band');
+            const ref  = band || document.getElementById('r' + markPostNumber);
+            if (ref) {
+                const m = document.createElement('div');
+                m.className = 'marker';
+                m.style.top = (ref.offsetTop / scrollHeight * 100) + '%';
+                track.appendChild(m);
+            }
+        }
+
+        // (2) 「自分の書き込み」マーカー (= 各レス位置、色違い)
+        if (ownPostNumbers && ownPostNumbers.size > 0) {
+            for (const num of ownPostNumbers) {
+                const el = document.getElementById('r' + num);
+                if (!el) continue;
+                const m = document.createElement('div');
+                m.className = 'marker marker-own';
+                m.style.top = (el.offsetTop / scrollHeight * 100) + '%';
+                track.appendChild(m);
+            }
+        }
     }
 
     window.addEventListener('scroll', scheduleSendScrollPosition, { passive: true });
-    window.addEventListener('scroll', scheduleSendReadMark,       { passive: true });
 
     // ---------- click handling (anchor scroll / external URL / inline image) ----------
     // 注意: スレ表示内の <a> は href 属性を持たず非 focusable にしている (Chromium が
@@ -1691,6 +1839,7 @@
     function postOpenUrl(url) {
         if (!url) return;
         if (url.indexOf('http://') !== 0 && url.indexOf('https://') !== 0) return;
+        debugLog('postOpenUrl: sending url=' + url);
         if (window.chrome && window.chrome.webview) {
             window.chrome.webview.postMessage({ type: 'openUrl', url: url });
         }
@@ -1760,6 +1909,9 @@
                 badge.remove();
             }
         }
+        // 自分マーカーは scrollbar の mark トラックにも色違いで出している。
+        // toggle 直後に必ず再描画 (= 即時反映、追加/解除の両方)。
+        updateMarkScrollbarMarker();
     }
 
     function showPostNoMenu(postNo, anchorEl) {
@@ -2140,6 +2292,49 @@
         });
     }
 
+    /** カーソルが矩形のいずれかに入っているか (= 1 つでも該当すれば true)。
+     *  境界はクライアント座標 (e.clientX/Y) と getBoundingClientRect の比較。 */
+    function isPointInsideAnyRect(x, y, els) {
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (!el) continue;
+            var r = el.getBoundingClientRect();
+            if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+        }
+        return false;
+    }
+
+    /** ポップアップが消え残るバグ回避用のグローバル mousemove セーフティネット。
+     *
+     *  典型的な漏れ: 深いポップアップ N からカーソルが直線的に外側へ抜けると、
+     *    - mouseleave は popup N でしか発火せず、popup 0..N-1 は閉じ予約が入らない
+     *    - その結果、popup N は 250ms 後に消えるが上位は残り続ける
+     *  これは mouseenter 時に cancelCloseAtOrBelow(level) で上位の close timer が
+     *  毎回キャンセルされるのが原因 (= 中間 popup には自身の close 予約がそもそも残らない)。
+     *
+     *  対策: mousemove で常時カーソル位置を見て、開いているポップアップ (および
+     *  そのアンカー) のいずれにも乗っていなければ level 0 から閉じるよう予約する。
+     *  既に level 0 の timer が走っているなら触らない (= 周期的に reset して
+     *  「永遠に消えない」状態にしないため)。
+     *
+     *  passive: true で hot path を維持。短時間に大量に飛んでくるが、
+     *  popups.length === 0 で即 return するので通常時はほぼノーコスト。 */
+    document.addEventListener('mousemove', function (e) {
+        if (popups.length === 0) return;
+        var x = e.clientX, y = e.clientY;
+        // 深い方から見て「ポップアップ or そのアンカー」にカーソルが乗っているレベルを探す。
+        // 見つかったら、その level 以下の close は全部キャンセル (= キープ)。
+        for (var i = popups.length - 1; i >= 0; i--) {
+            var p = popups[i];
+            if (isPointInsideAnyRect(x, y, [p.el, p.anchor])) {
+                cancelCloseAtOrBelow(i);
+                return;
+            }
+        }
+        // どのポップアップにも乗っていない → level 0 の close 予約が無いなら入れる。
+        if (!closeTimers.has(0)) scheduleCloseAt(0);
+    }, { passive: true });
+
     /** 既存レス DOM の返信数バッジ + post-no の色クラスを差分更新する (flat モード appendPosts 用)。
      *  テンプレで <span class="post-reply-count" data-replies=""> は常に出ている前提で、
      *  textContent と data-replies を書き換えるだけ。位置が動かないのでテンプレで指定した位置を保てる。
@@ -2173,24 +2368,37 @@
     // ---------- public API ----------
     /** streaming で逐次追加。flat モードは既存 DOM 末尾に増分追加、tree 系はフル再描画。
      *  スレ表示の唯一の描画 API。「全置換」は使わず、各 WebView2 はライフタイム中ずっと
-     *  この関数だけで posts が積み上がる前提で動作する (旧 setPosts チャネルは撤去)。 */
-    window.appendPosts = function (batch, scrollTarget, readMark, incremental) {
+     *  この関数だけで posts が積み上がる前提で動作する (旧 setPosts チャネルは撤去)。
+     *
+     *  signature: (batch, scrollTarget, mark, incremental)
+     *   - mark: 「以降新レス」ラベルの対象レス番号 (session-local; 永続化されない)
+     *           毎 batch ペイロードで C# から最新値が届く (= リフレッシュで新着が来た瞬間に値が立ち、
+     *           タブ閉じ / アプリ再起動でリセットされる)。
+     *   - incremental: dat 差分追加フラグ。true でも mark 自体は更新しない (= mark は C# 側で算定)。
+     *                  flat モードの末尾増分 vs tree モードのフル再描画を分岐するためだけに使う。 */
+    window.appendPosts = function (batch, scrollTarget, mark, incremental) {
         if (!Array.isArray(batch) || batch.length === 0) return;
         const root = document.getElementById('posts');
         if (!root) return;
 
+        debugLog('appendPosts: batch=' + batch.length
+            + ' (numbers ' + batch[0].number + '..' + batch[batch.length-1].number + ')'
+            + ', incremental=' + (incremental === true)
+            + ', mark=' + mark
+            + ', scrollTarget=' + scrollTarget
+            + ', allPostsBefore=' + allPosts.length
+            + ', viewMode=' + viewMode);
+
         // 同梱された scrollTarget があれば保留中ターゲットを更新
         if (typeof scrollTarget === 'number') pendingScrollTarget = scrollTarget;
-        // 「ここまで読んだ」帯の対象 (Phase 19) — 初回 appendPosts のみ採用 (= リフレッシュでは動かさない)。
-        if (!readMarkInitialized) {
-            if (typeof readMark === 'number') readMarkPostNumber = readMark;
-            readMarkInitialized = true;
-        }
+        // 「以降新レス」ラベルは毎 batch で C# から最新値を受け取り上書き。null なら据え置きせずクリア
+        // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
+        markPostNumber = (typeof mark === 'number') ? mark : null;
 
-        // 重複なしツリー用 incremental pivot (Phase 20) — 初めて incremental=true が来たとき
-        // この時点での allPosts.length を pivot として固定する。以降は pivot は動かさない。
-        if (incremental === true && incrementalPivotIndex == null) {
-            incrementalPivotIndex = allPosts.length;
+        // incremental=true (= リフレッシュで届いた差分) の batch だけ、is-new 太字対象として記憶。
+        // 初回ロード (= incremental=false) のレスは「今セッションで増えたものではない」ので太字対象外。
+        if (incremental === true) {
+            for (const p of batch) sessionNewPostNumbers.add(p.number);
         }
 
         // 内部状態は常に同じ更新
@@ -2249,8 +2457,8 @@
         observeImageSlots(root);
         tryScrollToTarget();
         updateRichScrollbar();
-        updateReadUpToBand();
-        updateReadMarkScrollbarMarker();
+        updateNewPostsMarkBand();
+        updateMarkScrollbarMarker();
         markNewPosts();
         // 増分追加で同 ID/ワッチョイの件数が変わるので、既存装飾を破棄して全体を再装飾する。
         // (新規装飾だけだと、既に decoration 済の post も "5 件超え → 赤化" 等のしきい値変化に追従できない)
@@ -2270,21 +2478,20 @@
      * 書き込みダイアログのプレビュー専用エントリ。スレ表示シェル全体を流用しつつ、
      * 唯一の post として渡された 1 件を「全リセット → 単発 append」で再描画する。
      * post 形式は appendPosts と同じ ({number, name, mail, dateText, id, body, threadTitle?})。
-     * preview 用にスクロール / readMark / 差分管理は無効化、body に preview-mode class を付与して
+     * preview 用にスクロール / mark / 差分管理は無効化、body に preview-mode class を付与して
      * CSS でリッチスクロールバー等を非表示にする。
      */
     window.setPreviewPost = function (post) {
         // body に preview class を付ける (= CSS で richScrollbar / 右 padding を消す目印)
         document.body.classList.add('preview-mode');
 
-        // 内部状態を全クリア (allPosts / 重複ツリー pivot / scrollTarget / readMark / 逆引き indexes)
+        // 内部状態を全クリア (allPosts / scrollTarget / mark / 逆引き indexes)
         allPosts                = [];
         postsByNumber           = new Map();
         currentReverseIndex     = new Map();
-        incrementalPivotIndex   = null;
         pendingScrollTarget     = null;
-        readMarkInitialized     = true;   // 初回 readMark を採用しないようにフラグだけ立てる
-        readMarkPostNumber      = null;
+        markPostNumber          = null;
+        sessionNewPostNumbers.clear();
 
         // DOM クリア + post-template の再使用は appendPosts に任せる
         const root = document.getElementById('posts');
@@ -2306,7 +2513,7 @@
                     if (Array.isArray(msg.ownPostNumbers)) {
                         ownPostNumbers = new Set(msg.ownPostNumbers);
                     }
-                    window.appendPosts(msg.posts, msg.scrollTarget, msg.readMarkPostNumber, msg.incremental);
+                    window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental);
                     break;
                 case 'updateOwnPosts':
                     // 自分マークの増分トグル (post-no メニュー → ToggleOwnPost 経由)。
@@ -2317,14 +2524,31 @@
                     break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
+                case 'setMarkPostNumber':
+                    // 「以降新レス」ラベル位置の単独 push (= 新着 0 件 refresh で mark を null クリアする等)。
+                    // 数値なら設定、それ以外 (= null) ならクリア。後者では updateNewPostsMarkBand が
+                    // 既存ラベルを取り除く + scrollbar マーカーも消す。
+                    // is-new (= sessionNewPostNumbers) は別管理なのでここでは触らない (= 太字状態は維持)。
+                    markPostNumber = (typeof msg.value === 'number') ? msg.value : null;
+                    debugLog('setMarkPostNumber recv: value=' + msg.value
+                        + ', resolved markPostNumber=' + markPostNumber
+                        + ', allPosts=' + allPosts.length
+                        + ', viewMode=' + viewMode);
+                    if (allPosts.length > 0) {
+                        // tree モードでは mark の有無で section A/B 分割が変わるので再描画が必要。
+                        // flat モードは band/scrollbar マーカーの再配置だけで済む。
+                        if (viewMode !== 'flat') {
+                            renderCurrentViewMode();
+                        } else {
+                            updateNewPostsMarkBand();
+                            updateMarkScrollbarMarker();
+                        }
+                    }
+                    break;
                 case 'setConfig':
                     // Phase 11: アプリ設定の即時反映
                     if (typeof msg.popularThreshold     === 'number') POPULAR_THRESHOLD     = msg.popularThreshold;
                     if (typeof msg.imageSizeThresholdMb === 'number') IMAGE_SIZE_THRESHOLD  = msg.imageSizeThresholdMb * 1024 * 1024;
-                    if (typeof msg.showReadMark         === 'boolean') {
-                        showReadMark = msg.showReadMark;
-                        document.body.classList.toggle('no-read-mark', !showReadMark);
-                    }
                     if (typeof msg.idHighlightThreshold === 'number' && msg.idHighlightThreshold !== ID_HIGHLIGHT_THRESHOLD) {
                         ID_HIGHLIGHT_THRESHOLD = msg.idHighlightThreshold;
                         // しきい値変化で id-many クラスの付与判定が変わるので decoration を再計算

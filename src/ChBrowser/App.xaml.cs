@@ -54,6 +54,12 @@ public partial class App : Application
     private ImageViewerViewModel?  _imageViewerVm;
     private ImageViewerWindow?     _imageViewerWindow;
 
+    /// <summary>起動時に layout.json から読み出したビューアウィンドウの保存ジオメトリ。
+    /// ビューアが lazy 生成された瞬間に <see cref="ImageViewerWindow.ApplyGeometry"/> へ流す。
+    /// 一度もビューアを開かずにアプリを閉じた場合は <see cref="CaptureViewerGeometryForSave"/> 経由で
+    /// このまま再保存される (= 過去に保存した値を破壊しない)。</summary>
+    private ChBrowser.Models.ViewerWindowGeometry? _savedViewerGeometry;
+
     /// <summary>MainWindow から呼ばれる。最初の呼び出しで Window と ViewModel を作る (lazy)。
     /// 同じ URL を 2 度送ったら既存タブをアクティブ化、別 URL なら新規タブを追加。</summary>
     public void ShowImageInViewer(string url)
@@ -69,12 +75,22 @@ public partial class App : Application
             {
                 Owner = MainWindow,
             };
+            // 前回起動時に保存しておいたサイズ/位置を復元 (= XAML の Width/Height を上書き)。
+            // OpenAndShow 前に適用しておかないと「初期サイズで一瞬表示 → リサイズ」のチラつきになる。
+            if (_savedViewerGeometry is not null)
+                _imageViewerWindow.ApplyGeometry(_savedViewerGeometry);
             // Phase 16+: ビューアウィンドウを ShortcutManager に attach。
             // "ビューアウィンドウ" カテゴリの KeyBinding がここへ登録される。
             _shortcutManager?.AttachViewerWindow(_imageViewerWindow);
         }
         _imageViewerWindow!.OpenAndShow(url);
     }
+
+    /// <summary>layout.json 保存時 (= MainWindow.OnClosing) に呼ばれる。
+    /// ビューアが既に開かれていれば現在のジオメトリ、未生成なら起動時に読んだキャッシュ値を返す
+    /// (= 一度も使わないままアプリを閉じても保存値が消えない)。</summary>
+    public ChBrowser.Models.ViewerWindowGeometry? CaptureViewerGeometryForSave()
+        => _imageViewerWindow?.CaptureGeometry() ?? _savedViewerGeometry;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -136,6 +152,11 @@ public partial class App : Application
 
         // ウィンドウ/ペインサイズの永続化
         var layoutStorage = new LayoutStorage(paths);
+        // ビューアウィンドウのサイズ/位置はメイン (= MainWindow) と同じ layout.json に同居して保存している。
+        // 起動時に一度だけ読み出してキャッシュし、ビューアが lazy 生成された瞬間に適用する。
+        // ビューア未使用でアプリを閉じた場合の再保存にも使うので、起動時に読み逃すと値が消える。
+        try { _savedViewerGeometry = layoutStorage.Load()?.ViewerWindow; }
+        catch (Exception ex) { Debug.WriteLine($"[App] viewer geometry load failed: {ex.Message}"); }
 
         // お気に入り (Phase 7)
         var favoritesStorage = new FavoritesStorage(paths);

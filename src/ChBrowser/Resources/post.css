@@ -149,3 +149,11 @@
 .id-link.id-many:hover {
     color: #a00;
 }
+
+/* 同一 ID 複数件のレスでだけ ID 値の直後に [N/M] (= このスレでの何番目の書き込み / 総書き込み数) を表示する。
+ * decorateMeta が動的に追加する小さなテキスト span。装飾が無いレス (= 同 ID 単発) には付かない。 */
+.id-count {
+    color: #888;
+    font-size: 0.85em;
+    margin-left: 2px;
+}

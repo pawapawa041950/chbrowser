@@ -33,6 +33,7 @@ public static class WebMessageBridge
     }
 
     /// <summary>4 共通系統 (shortcut / gesture / gestureProgress / gestureEnd / bridgeReady) を dispatch する。
+    /// 加えて debugLog (= JS 側からの汎用デバッグ出力) を LogService に橋渡しする。
     /// これらが消費されたら true を返す (呼出元はその時点で return)。</summary>
     public static bool TryDispatchCommonMessage(object? sender, string type, JsonElement payload, string category)
     {
@@ -49,6 +50,13 @@ public static class WebMessageBridge
         if (type == "bridgeReady")
         {
             PushBindingsTo(sender, category);
+            return true;
+        }
+        if (type == "debugLog")
+        {
+            var msg = payload.TryGetProperty("message", out var mp) ? (mp.GetString() ?? "") : "";
+            if (!string.IsNullOrEmpty(msg))
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[js/{category}] {msg}");
             return true;
         }
         return false;

@@ -84,7 +84,7 @@ public sealed class PostClient
             if (class1.Outcome != PostOutcome.NeedsConfirm)
             {
                 // 規制 / Lv不足 / brokenAcorn 等は 1 段目で確定する場合がある
-                if (class1.Outcome == PostOutcome.BrokenAcorn) _donguri.HandleBrokenAcorn();
+                if (class1.Outcome == PostOutcome.BrokenAcorn) _donguri.HandleBrokenAcorn(request.AuthMode);
                 return class1;
             }
 
@@ -104,7 +104,7 @@ public sealed class PostClient
             var class2 = Classify(html2);
 
             if (class2.Outcome == PostOutcome.Success)        { _donguri.NoteWriteSucceeded(); AppendKakikomi(request); }
-            if (class2.Outcome == PostOutcome.BrokenAcorn)    _donguri.HandleBrokenAcorn();
+            if (class2.Outcome == PostOutcome.BrokenAcorn)    _donguri.HandleBrokenAcorn(request.AuthMode);
             return class2;
         }
         finally
@@ -130,7 +130,8 @@ public sealed class PostClient
         }
         var jarMona  = _donguri.MonaTicketValue;
         var jarAcorn = _donguri.AcornValue;
-        Debug.WriteLine($"[PostClient]   jar.MonaTicket={(jarMona  is null ? "(null)" : "(present)")}, jar.acorn={(jarAcorn is null ? "(null)" : "(present)")}");
+        var anonAcorn = _donguri.AnonAcornValue;
+        Debug.WriteLine($"[PostClient]   jar.MonaTicket={(jarMona  is null ? "(null)" : "(present)")}, jar.acorn={(jarAcorn is null ? "(null)" : "(present)")}, anon.acorn={(anonAcorn is null ? "(null)" : "(present)")}");
         var snippet = html.Length > 1200 ? html[..1200] + " …(truncated)" : html;
         Debug.WriteLine($"[PostClient]   HTML: {snippet.Replace('\n', ' ').Replace('\r', ' ')}");
     }
@@ -245,7 +246,10 @@ public sealed class PostClient
         _donguri.ApplyToRequest(req, authMode);
 
         var resp = await _http.Http.SendAsync(req, ct).ConfigureAwait(false);
-        _donguri.MergeFromResponse(resp);
+        // モードを伝えて Set-Cookie の振り分けを行う:
+        //   MailAuth → jar (= 通常 acorn / メール認証 acorn = 同じスロット = jar 側) を更新
+        //   Cookie / None → state.json の anon acorn / anon MonaTicket を更新 (= jar は触らない)
+        _donguri.MergeFromResponse(resp, authMode);
         return resp;
     }
 

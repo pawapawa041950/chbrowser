@@ -18,14 +18,23 @@ public partial class MainWindow
         AddressBar.SelectAll();
     }
 
-    /// <summary>VM の AddressBarUrl が変わったらテキストを同期。
-    /// ただしユーザがアドレスバーを編集中 (= IsKeyboardFocusWithin) は上書きしない。</summary>
+    /// <summary>VM の AddressBarUrl / IsLogPaneVisible が変わったときの bridge。
+    /// AddressBarUrl は TextBox.Text に同期 (ユーザ編集中 = IsKeyboardFocusWithin のときは保留)。
+    /// IsLogPaneVisible は別ウィンドウ (LogWindow) の show / hide に反映する。</summary>
     private void Vm_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(MainViewModel.AddressBarUrl)) return;
         if (_vm is null) return;
-        if (AddressBar.IsKeyboardFocusWithin) return;
-        AddressBar.Text = _vm.AddressBarUrl;
+        if (e.PropertyName == nameof(MainViewModel.AddressBarUrl))
+        {
+            if (!AddressBar.IsKeyboardFocusWithin)
+                AddressBar.Text = _vm.AddressBarUrl;
+            return;
+        }
+        if (e.PropertyName == nameof(MainViewModel.IsLogPaneVisible))
+        {
+            ApplyLogWindowVisibility(_vm.IsLogPaneVisible);
+            return;
+        }
     }
 
     /// <summary>アドレスバー: フォーカス取得時に全選択。Ctrl+L / Tab / クリック (= 別ハンドラ経由) すべてで効く。</summary>

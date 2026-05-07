@@ -12,6 +12,13 @@ namespace ChBrowser.Services.Storage;
 /// 5ch.io / bbspink.com は内部に多数のサブドメイン (hayabusa9.5ch.io 等) を持ち、
 /// 板はそれぞれ異なる host にホストされる。このため板ディレクトリは
 /// <c>data/&lt;rootDomain&gt;/&lt;directory_name&gt;/</c> 形式で配置する。
+///
+/// 単一ファイル exe (= <c>PublishSingleFile=true</c>) との共存:
+///   <see cref="AppContext.BaseDirectory"/> は単一ファイル + <c>IncludeAllContentForSelfExtract=true</c>
+///   の構成だと一時展開ディレクトリ (= <c>%LOCALAPPDATA%\Temp\.net\...</c>) を指してしまうため、
+///   ポータブル運用 (= exe と同じ場所の <c>data/</c>) が壊れる。
+///   <see cref="Environment.ProcessPath"/> は実際に起動した exe の絶対パスを返すので、
+///   そのディレクトリを使うことでこの問題を回避する。
 /// </summary>
 public sealed class DataPaths
 {
@@ -21,7 +28,21 @@ public sealed class DataPaths
     {
         Root = rootOverride
                ?? Environment.GetEnvironmentVariable("CHBROWSER_DATA_DIR")
-               ?? Path.Combine(AppContext.BaseDirectory, "data");
+               ?? Path.Combine(GetExeDirectory(), "data");
+    }
+
+    /// <summary>実際に起動した .exe が置かれているディレクトリの絶対パスを返す。
+    /// <see cref="Environment.ProcessPath"/> (NET 6+) の dirname を採用、取得不能な
+    /// 開発時のレアケースだけ <see cref="AppContext.BaseDirectory"/> へフォールバックする。</summary>
+    private static string GetExeDirectory()
+    {
+        var exePath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(exePath))
+        {
+            var dir = Path.GetDirectoryName(exePath);
+            if (!string.IsNullOrEmpty(dir)) return dir;
+        }
+        return AppContext.BaseDirectory;
     }
 
     public string AppDir          => EnsureDir(Path.Combine(Root, "app"));

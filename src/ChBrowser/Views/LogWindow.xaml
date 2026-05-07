@@ -1,0 +1,57 @@
+<Window x:Class="ChBrowser.Views.LogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:logging="clr-namespace:ChBrowser.Services.Logging"
+        Title="ChBrowser ログ"
+        Width="640" Height="400"
+        MinWidth="320" MinHeight="200"
+        ShowInTaskbar="False"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True">
+    <!--
+      ログウィンドウ。MainWindow とは別ウィンドウとして表示される。
+      表示メニューの「ログペイン」トグルで開閉、Owner=MainWindow にして本体の上に従属表示。
+      LogService.Instance を DataContext にしてテキスト変化を OneWay で取り込む。
+    -->
+    <Window.DataContext>
+        <Binding Source="{x:Static logging:LogService.Instance}" />
+    </Window.DataContext>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top"
+                Background="{x:Static SystemColors.ControlBrush}"
+                BorderBrush="{x:Static SystemColors.ControlDarkBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="8,4">
+            <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Right"
+                        Content="クリア"
+                        Padding="10,2"
+                        Click="ClearButton_Click" />
+                <TextBlock Text="ステータスバー履歴 / デバッグ出力"
+                           VerticalAlignment="Center"
+                           Foreground="#444" />
+            </DockPanel>
+        </Border>
+
+        <!--
+          長い行はそのまま 1 行で出して横スクロールに任せる (= TextWrapping=NoWrap)。
+          狭い幅で wrap させると 1 文字単位で改行されて読めなくなるため。
+          IsReadOnly + AcceptsReturn でテキスト選択 + Ctrl+C コピー可。
+        -->
+        <TextBox x:Name="LogBox"
+                 Text="{Binding Text, Mode=OneWay}"
+                 IsReadOnly="True"
+                 IsReadOnlyCaretVisible="False"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas, MS Gothic, monospace"
+                 FontSize="11"
+                 BorderThickness="0"
+                 Background="#FAFAFA"
+                 Padding="6,4"
+                 TextChanged="LogBox_TextChanged" />
+    </DockPanel>
+</Window>

@@ -53,6 +53,9 @@ public sealed class DatClient
 
         long existing = File.Exists(path) ? new FileInfo(path).Length : 0;
 
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[datFetch] GET {url} (board.Host='{board.Host}', existing={existing} bytes)");
+
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         if (existing > 0)
             req.Headers.Range = new RangeHeaderValue(existing, null);
@@ -60,6 +63,9 @@ public sealed class DatClient
         using var resp = await _client.Http
             .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
             .ConfigureAwait(false);
+
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[datFetch]   status={(int)resp.StatusCode} ({resp.StatusCode}) for {url}");
 
         var allPosts = new List<Post>();
         long finalSize;
@@ -111,6 +117,25 @@ public sealed class DatClient
                     finalSize = new FileInfo(path).Length;
                     break;
                 }
+            case 404: // dat 落ち (アーカイブ送り)。read.cgi の HTML から逆変換を試みる。
+                {
+                    var fallbackBytes = await TryHtmlFallbackAsync(board, threadKey, ct).ConfigureAwait(false);
+                    if (fallbackBytes is null || fallbackBytes.Length == 0)
+                    {
+                        // 変換失敗時は通常の 404 例外を投げて、上位 (OpenThreadAsync) のブラウザフォールバックに任せる。
+                        resp.EnsureSuccessStatusCode();
+                        finalSize = existing;
+                        break;
+                    }
+                    // 変換成功: 通常の dat と同じパスにキャッシュ書き出し → 以降は普通に取れる。
+                    await using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+                        await fs.WriteAsync(fallbackBytes, ct).ConfigureAwait(false);
+                    var posts = DatParser.Parse(fallbackBytes);
+                    allPosts.AddRange(posts);
+                    if (posts.Count > 0) progress.Report(posts);
+                    finalSize = fallbackBytes.LongLength;
+                    break;
+                }
             default:
                 resp.EnsureSuccessStatusCode();
                 finalSize = existing;
@@ -118,6 +143,35 @@ public sealed class DatClient
         }
 
         return new DatFetchResult(allPosts, finalSize);
+    }
+
+    /// <summary>dat 404 時のフォールバック: <c>read.cgi</c> から HTML を取得して
+    /// <see cref="HtmlToDatConverter"/> で dat 形式バイト列に変換する。
+    /// HTML 取得自体が失敗 / パース不能の場合は null を返し、呼出元は通常の 404 として扱う。</summary>
+    private async Task<byte[]?> TryHtmlFallbackAsync(Board board, string threadKey, CancellationToken ct)
+    {
+        var htmlUrl = $"https://{board.Host}/test/read.cgi/{board.DirectoryName}/{threadKey}/";
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[datFetch]   404 fallback: GET {htmlUrl}");
+        try
+        {
+            using var hreq  = new HttpRequestMessage(HttpMethod.Get, htmlUrl);
+            using var hresp = await _client.Http.SendAsync(hreq, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[datFetch]     html status={(int)hresp.StatusCode}");
+            if (!hresp.IsSuccessStatusCode) return null;
+            var bytes = await hresp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            var converted = HtmlToDatConverter.Convert(bytes);
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[datFetch]     html→dat: input={bytes.Length} bytes, output={converted?.Length ?? 0} bytes");
+            return converted;
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[datFetch]     html fallback failed: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>板ディレクトリにある *.dat のスレッドキー一覧を返す (ログが存在するスレ)。</summary>

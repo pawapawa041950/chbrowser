@@ -103,7 +103,9 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>各スレッドのログ状態を判定する。
-    /// ログ無し → None / ログあり &amp; 件数一致 → Cached / ログあり &amp; subject の方が多い → Updated。</summary>
+    /// ログ無し → None / ログあり &amp; 件数一致 → Cached / ログあり &amp; subject の方が多い → Updated。
+    /// <see cref="LogMarkState.RepliedToOwn"/> (= 赤) はここでは付かない (= 永続化されないため、
+    /// 直前の差分取得イベントから tab に保持されている <c>tab.HasReplyToOwn</c> 経由でだけ表示される)。 </summary>
     private IReadOnlyDictionary<string, LogMarkState> BuildLogStates(Board board, IReadOnlyList<ThreadInfo> threads)
     {
         var keysWithLog = _datClient.EnumerateExistingThreadKeys(board);
@@ -113,10 +115,10 @@ public sealed partial class MainViewModel
         foreach (var t in threads)
         {
             if (!keysWithLog.Contains(t.Key)) continue;
-            var idx        = _threadIndex.Load(board.Host, board.DirectoryName, t.Key);
-            var fetched    = idx?.LastFetchedPostCount;
-            var hasNew     = fetched is int f && t.PostCount > f;
-            dict[t.Key]    = hasNew ? LogMarkState.Updated : LogMarkState.Cached;
+            var idx     = _threadIndex.Load(board.Host, board.DirectoryName, t.Key);
+            var fetched = idx?.LastFetchedPostCount;
+            var hasNew  = fetched is int f && t.PostCount > f;
+            dict[t.Key] = hasNew ? LogMarkState.Updated : LogMarkState.Cached;
         }
         return dict;
     }
@@ -298,11 +300,16 @@ public sealed partial class MainViewModel
     /// <summary>あるスレ表示タブから「同じ板にある似たタイトルのスレ」を一覧として表示する。
     /// 元スレタイトルとの最長共通部分文字列で類似度を採点し、上位を専用の集約タブで表示する。
     /// 同じ (板, タイトル) で再度呼ばれたら既存タブを再利用する。</summary>
-    public async Task OpenNextThreadSearchAsync(ThreadTabViewModel sourceTab)
+    public Task OpenNextThreadSearchAsync(ThreadTabViewModel sourceTab)
     {
-        if (sourceTab is null) return;
-        var board       = sourceTab.Board;
-        var sourceTitle = sourceTab.Title ?? "";
+        if (sourceTab is null) return Task.CompletedTask;
+        return OpenNextThreadSearchAsync(sourceTab.Board, sourceTab.Title ?? "", sourceTab.ThreadKey);
+    }
+
+    /// <summary>(板, スレタイトル, 自身を除外する key) を直接渡すプリミティブ版。
+    /// タブを開いていない経路 (= スレ一覧行の右クリック) から呼べる。</summary>
+    public async Task OpenNextThreadSearchAsync(Board board, string sourceTitle, string excludeKey)
+    {
         if (string.IsNullOrWhiteSpace(sourceTitle))
         {
             StatusMessage = "次スレ候補: 元スレのタイトルが空です";
@@ -327,7 +334,7 @@ public sealed partial class MainViewModel
             StatusMessage = $"次スレ候補を検索中... ({board.BoardName})";
 
             var subjects = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
-            var matches  = FuzzyMatchByTitle(sourceTitle, subjects, sourceTab.ThreadKey);
+            var matches  = FuzzyMatchByTitle(sourceTitle, subjects, excludeKey);
 
             // ローカルログの状態 (青/緑) と お気に入り ★ を行に乗せる。
             var states  = BuildLogStates(board, matches);

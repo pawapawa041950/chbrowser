@@ -85,10 +85,27 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private int? _scrollTargetPostNumber;
 
-    /// <summary>「ここまで読んだ」帯の対象レス番号 (Phase 19)。
-    /// idx.json の <c>LastReadMarkPostNumber</c> から初期化、JS からの readMark メッセージで増加方向のみ更新される。</summary>
+    /// <summary>「以降新レス」ラベルの対象レス番号 (= ラベルがその直前に挿入される番号)。
+    /// 永続化はしない (= 本アプリ起動以降の差分取得で来た新着のみを示す session-local な値)。
+    /// 新規タブ生成時は null、<see cref="MainViewModel.RefreshThreadAsync"/> 等で差分取得が新着を
+    /// もたらした瞬間にその先頭番号で更新される。タブ閉じ / アプリ再起動でリセットされる。
+    /// JS 側はここの値を <c>appendPosts</c> ペイロード経由で受け取り、ラベル位置と
+    /// dedup-tree モードでの「親ごと描写」境界に使う。</summary>
     [ObservableProperty]
-    private int? _readMarkPostNumber;
+    private int? _markPostNumber;
+
+    /// <summary>「直前の差分取得で来た新着レスのいずれかが、自分のレス (<see cref="OwnPostNumbers"/>) を参照していた」
+    /// と検出された状態。立っているとスレ一覧の状態マークが赤 (<see cref="LogMarkState.RepliedToOwn"/>) になる。
+    ///
+    /// 仕様 (= Phase 23+):
+    ///   - 永続化しない (= idx.json に持たない)。アプリ再起動でリセットされる。
+    ///   - cache load では立てない (= 既存スレ内の旧返信は赤化対象外)。
+    ///   - <see cref="MainViewModel.ToggleOwnPost"/> でも立てない (= own 切替は対象イベントではない)。
+    ///   - 差分取得 (= ApplyFetchDelta / Favorites cycle) で「新着レス」を取った瞬間にだけ
+    ///     <see cref="MainViewModel.DeltaHasReplyToOwn"/> でチェックされ、true / false がセットされる。
+    ///   - 直後の状態算定 (<see cref="MainViewModel.ComputeMarkState"/>) で読まれ、スレ一覧マーク色を決める。</summary>
+    [ObservableProperty]
+    private bool _hasReplyToOwn;
 
     /// <summary>
     /// このタブが現在 TabControl で選択されているか。各タブが専有する WebView2 の

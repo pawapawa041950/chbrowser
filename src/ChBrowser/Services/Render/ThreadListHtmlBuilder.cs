@@ -62,14 +62,15 @@ public static class ThreadListHtmlBuilder
             var t        = item.Info;
             var momentum = CalcMomentum(t.Key, now, t.PostCount);
             var state    = item.State;
-            var sortVal  = (int)state; // None=0, Cached=1, Updated=2, Dropped=3
+            var sortVal  = (int)state; // None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
 
             sb.Append(@"<tr class=""");
             switch (state)
             {
-                case LogMarkState.Cached:  sb.Append("has-log "); break;
-                case LogMarkState.Updated: sb.Append("has-update "); break;
-                case LogMarkState.Dropped: sb.Append("has-dropped "); break;
+                case LogMarkState.Cached:       sb.Append("has-log "); break;
+                case LogMarkState.Updated:      sb.Append("has-update "); break;
+                case LogMarkState.Dropped:      sb.Append("has-dropped "); break;
+                case LogMarkState.RepliedToOwn: sb.Append("has-replied-to-own "); break;
             }
             if (item.IsFavorited) sb.Append("is-favorited ");
             sb.Append('"');

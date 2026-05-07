@@ -49,8 +49,8 @@ public partial class ThreadDisplayPane : UserControl
         switch (type)
         {
             case "openUrl":            HandleOpenUrl(payload); break;
+            // ↑ HandleOpenUrl 内で 5ch.io スレ URL を検出した場合だけ本アプリの新タブで開く分岐をする。
             case "scrollPosition":     HandleScrollPosition(sender, payload); break;
-            case "readMark":           HandleReadMark(sender, payload); break;
             case "imageMetaRequest":   HandleImageMetaRequest(sender, payload); break;
             case "aiMetadataRequest":  HandleAiMetadataRequest(sender, payload); break;
             case "openInViewer":       HandleOpenInViewer(payload); break;
@@ -154,7 +154,10 @@ public partial class ThreadDisplayPane : UserControl
         if (Application.Current is App app) app.ShowImageInViewer(url);
     }
 
-    private static void HandleOpenUrl(JsonElement payload)
+    /// <summary>JS の <c>postOpenUrl</c> から届いた URL クリック通知を捌く。
+    /// 5ch.io / bbspink.com のスレ URL なら本アプリの新タブで開き (= スレ間移動の同一アプリ完結)、
+    /// それ以外 (画像 / 外部サイト等) は <see cref="Process.Start"/> でシステムブラウザに渡す。</summary>
+    private void HandleOpenUrl(JsonElement payload)
     {
         if (!payload.TryGetProperty("url", out var urlProp)) return;
         var url = urlProp.GetString();
@@ -162,6 +165,24 @@ public partial class ThreadDisplayPane : UserControl
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
 
+        ChBrowser.Services.Logging.LogService.Instance.Write($"[openUrl] received: {url}");
+
+        // 5ch.io / bbspink.com スレ URL は本アプリの新タブで開く。
+        // AddressBarParser はアドレスバー入力用だが純粋関数なので URL 種別判定にそのまま流用できる。
+        var parsed = ChBrowser.Services.Url.AddressBarParser.Parse(url);
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[openUrl] parsed: Kind={parsed.Kind}, Host='{parsed.Host}', Dir='{parsed.Directory}', Key='{parsed.ThreadKey}'");
+
+        if (parsed.Kind == ChBrowser.Services.Url.AddressBarTargetKind.Thread
+            && DataContext is MainViewModel main)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[openUrl] → OpenThreadByUrlAsync(host='{parsed.Host}', dir='{parsed.Directory}', key='{parsed.ThreadKey}')");
+            _ = main.OpenThreadByUrlAsync(parsed.Host, parsed.Directory, parsed.ThreadKey);
+            return;
+        }
+
+        ChBrowser.Services.Logging.LogService.Instance.Write($"[openUrl] → external (Process.Start)");
         try
         {
             Process.Start(new ProcessStartInfo
@@ -184,18 +205,9 @@ public partial class ThreadDisplayPane : UserControl
         if (!payload.TryGetProperty("postNumber", out var numProp)) return;
         if (numProp.ValueKind != JsonValueKind.Number) return;
         if (!numProp.TryGetInt32(out var num)) return;
+        // 受信値を in-memory に保持するだけ (= idx.json への書き出しはタブクローズ / アプリ終了時に
+        // MainViewModel.FlushScrollPositionToDisk で一括して行う設計)。
         main.UpdateScrollPosition(tab.Board, tab.ThreadKey, num);
-    }
-
-    private void HandleReadMark(object sender, JsonElement payload)
-    {
-        if (sender is not WebView2 wv) return;
-        if (wv.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
-        if (!payload.TryGetProperty("postNumber", out var numProp)) return;
-        if (numProp.ValueKind != JsonValueKind.Number) return;
-        if (!numProp.TryGetInt32(out var num)) return;
-        main.UpdateReadMark(tab.Board, tab.ThreadKey, num);
     }
 
     private void HandleImageMetaRequest(object sender, JsonElement payload)

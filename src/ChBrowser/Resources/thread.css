@@ -324,24 +324,25 @@ a.anchor.missing {
 .track-image   .marker { background: #f57c00; }
 .track-video   .marker { background: #7b1fa2; }
 
-/* ---- ここまで読んだ帯 (Phase 19) ---- */
-/* レスの直後に挿入する細い水平帯 (控えめな配色)。 */
-.read-up-to-band {
+/* ---- 「以降新レス」ラベル ---- */
+/* 直前 fetch まで存在しなかった最初のレスの「前」に挿入される細い水平帯。
+   リフレッシュで新着が来たときだけ位置が更新される (= ユーザのスクロールでは動かない)。 */
+.new-posts-mark-band {
     margin: 4px 0 6px 0;
     padding: 1px 0;
-    border-top: 1px dashed #888;
-    color: #888;
+    border-top: 1px dashed #1e88e5;
+    color: #1565c0;
     font-size: 11px;
     text-align: center;
-    background: rgba(140, 140, 160, 0.06);
+    background: rgba(30, 136, 229, 0.06);
     user-select: none;
 }
-.read-up-to-band::before { content: '— ここまで読んだ —'; }
-/* OFF 設定で帯と scrollbar マーカーを非表示。 */
-body.no-read-mark .read-up-to-band,
-body.no-read-mark .track-readmark .marker { display: none; }
-/* readmark トラックは細い横バー (5px 幅、薄い紫)。 */
-.track-readmark .marker { background: #9575cd; height: 3px; }
+.new-posts-mark-band::before { content: '— 以降新レス —'; }
+/* mark トラックは細い横バー。同じトラックに 2 種類のマーカーを色違いで並べる。
+ *   .marker      = 「以降新レス」境界 (青)
+ *   .marker-own  = 「自分の書き込み」位置 (アンバー)。.marker と両方付くので順序で background が上書きされる。 */
+.track-mark .marker     { background: #1e88e5; height: 3px; }
+.track-mark .marker-own { background: #f9a825; height: 3px; }
 
 /* ---- スクロールサム (現在の表示範囲、ドラッグで移動) ---- */
 #scrollThumb {

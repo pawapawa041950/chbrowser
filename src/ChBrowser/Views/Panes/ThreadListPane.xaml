@@ -25,6 +25,25 @@
                 <MenuItem Tag="copyUrl" Header="タイトルとURLコピー"   Click="ThreadListTabCopyTitleAndUrl_Click" />
             </MenuItem>
         </ContextMenu>
+
+        <!-- スレ一覧の各行 (= WebView2 内の <tr>) を右クリックしたときに WPF 側で popup するメニュー。
+             スレ表示タブの右クリックメニューと同じ並び。「板を開く」だけ除外している (= 行のスレが
+             属する板は今いるスレ一覧そのものなので意味が無いため)。
+             DataContext には JS から飛んできた {host, directoryName, key, title} を ThreadListRowMenuContext
+             として詰めて placement 直前にセットする。 -->
+        <ContextMenu x:Key="ThreadListRowContextMenu" x:Shared="False"
+                     Opened="ThreadListRowContextMenu_Opened">
+            <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListRowFav_Click" />
+            <Separator />
+            <MenuItem Header="コピー">
+                <MenuItem Header="タイトルコピー"        Click="ThreadListRowCopyTitle_Click" />
+                <MenuItem Header="URLコピー"             Click="ThreadListRowCopyUrl_Click" />
+                <MenuItem Header="タイトルとURLコピー"   Click="ThreadListRowCopyTitleAndUrl_Click" />
+            </MenuItem>
+            <Separator />
+            <MenuItem Header="次スレ候補検索" Click="ThreadListRowFindNext_Click" />
+            <MenuItem Header="ログ削除"       Click="ThreadListRowDeleteLog_Click" />
+        </ContextMenu>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">

@@ -6,7 +6,8 @@ using System.Text.Json.Serialization;
 namespace ChBrowser.Models;
 
 /// <summary>4 ペインの識別子。レイアウトツリーの leaf がこの値を持つ (Phase 23 / docking 化)。
-/// 文字列値は <c>layout.json</c> のシリアライズ表現として固定 (rename 不可、互換のため)。</summary>
+/// 文字列値は <c>layout.json</c> のシリアライズ表現として固定 (rename 不可、互換のため)。
+/// ログ表示は別ウィンドウ (= <see cref="ChBrowser.Views.LogWindow"/>) に分離されているのでここには無い。</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PaneId
 {

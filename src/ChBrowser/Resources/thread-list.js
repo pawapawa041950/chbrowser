@@ -188,6 +188,27 @@
         if (!openOnSingleClick) openTr(tr);
     });
 
+    // 行の右クリック → C# 側に「右クリックメニューを出して」と通知。
+    // メニュー本体 (お気に入り追加 / コピー / 次スレ候補検索 / ログ削除) は WPF 側で popup する
+    // (= スレタブ右クリックメニューと同じ並び。「板を開く」だけ除外)。
+    tbody.addEventListener('contextmenu', function(e) {
+        var tr = e.target.closest && e.target.closest('tr');
+        if (!tr) return;
+        e.preventDefault();
+        if (!window.chrome || !window.chrome.webview) return;
+        // 行をハイライト (= 操作対象が視覚的に分かるよう left-click と同じ "selected" を付ける)。
+        if (selected) selected.classList.remove('selected');
+        tr.classList.add('selected');
+        selected = tr;
+        window.chrome.webview.postMessage({
+            type:          'threadListRowMenu',
+            host:          tr.dataset.host,
+            directoryName: tr.dataset.dir,
+            key:           tr.dataset.key,
+            title:         tr.dataset.title,
+        });
+    });
+
     // C# からの増分通知 (LogMarkUpdate / setConfig) を受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function(e) {
@@ -203,11 +224,12 @@
                             + '[data-key="'  + change.key + '"]';
                     var tr = tbody.querySelector(sel);
                     if (!tr) return;
-                    tr.classList.remove('has-log', 'has-update', 'has-dropped');
+                    tr.classList.remove('has-log', 'has-update', 'has-dropped', 'has-replied-to-own');
                     var sortVal = 0;
-                    if      (change.state === 'cached')  { tr.classList.add('has-log');     sortVal = 1; }
-                    else if (change.state === 'updated') { tr.classList.add('has-update');  sortVal = 2; }
-                    else if (change.state === 'dropped') { tr.classList.add('has-dropped'); sortVal = 3; }
+                    if      (change.state === 'cached')        { tr.classList.add('has-log');             sortVal = 1; }
+                    else if (change.state === 'updated')       { tr.classList.add('has-update');          sortVal = 2; }
+                    else if (change.state === 'dropped')       { tr.classList.add('has-dropped');         sortVal = 3; }
+                    else if (change.state === 'repliedToOwn')  { tr.classList.add('has-replied-to-own');  sortVal = 4; }
                     tr.dataset.log = String(sortVal);
                 });
             } else if (msg.type === 'updateFavorited' && msg.value) {

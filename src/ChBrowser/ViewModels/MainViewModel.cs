@@ -47,6 +47,16 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _statusMessage = "準備完了";
     [ObservableProperty] private bool   _isBusy;
 
+    /// <summary>ログウィンドウ (= 表示メニュー → ログペイン) の表示状態。
+    /// MainWindow.xaml.cs が値変化を観測して別ウィンドウ <see cref="ChBrowser.Views.LogWindow"/> を show / hide する。
+    /// 起動直後は閉じた状態 (= 必要なときだけメニューから開く)。</summary>
+    [ObservableProperty] private bool _isLogPaneVisible;
+
+    /// <summary>StatusMessage が変わるたびに <see cref="ChBrowser.Services.Logging.LogService"/> へ転記。
+    /// これにより一時的にステータスバーに出て消える短いメッセージも、ログペインで時系列に追跡できる。</summary>
+    partial void OnStatusMessageChanged(string value)
+        => ChBrowser.Services.Logging.LogService.Instance.Write(value);
+
     /// <summary>あぼーん件数のステータスバー表示。SelectedThreadTab の hidden 数を表示。</summary>
     [ObservableProperty] private string _aboneStatus = "あぼーん 0";
 
@@ -272,6 +282,11 @@ public sealed partial class MainViewModel : ObservableObject
         Favorites.Changed += RefreshTopButtons;
         RefreshTopButtons();
 
+        // タブを閉じる瞬間に「最後にスクロールしていた位置」を idx.json に書き出すため、
+        // CollectionChanged を購読する。スクロール中の都度書き込みは行わない設計
+        // (= MainViewModel.UpdateScrollPosition は in-memory 更新のみ)。
+        ThreadTabs.CollectionChanged += OnThreadTabsCollectionChanged;
+
         // どんぐり経過時間表示を 30 秒ごとに更新。起動直後にも 1 度実行。
         _donguriTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _donguriTimer.Tick += (_, _) => UpdateDonguriStatus();
@@ -398,7 +413,6 @@ public sealed partial class MainViewModel : ObservableObject
             type                  = "setConfig",
             popularThreshold      = config.PopularThreshold,
             imageSizeThresholdMb  = config.ImageSizeThresholdMb,
-            showReadMark          = config.ShowReadMark,
             idHighlightThreshold  = config.IdHighlightThreshold,
         });
 

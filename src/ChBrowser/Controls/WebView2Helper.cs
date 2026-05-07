@@ -17,11 +17,13 @@ namespace ChBrowser.Controls;
 /// <see cref="WebView2Helper"/> が DataContext からこの値を読んで appendPosts メッセージに含める。</summary>
 public interface IThreadDisplayBinding
 {
+    /// <summary>次回オープン時に viewport 下端に揃えたいレス番号 (= 「読了 prefix」の最大番号)。
+    /// JS の <c>findReadProgressMaxNumber</c> が算定して保存し、appendPosts ペイロード経由で復元時に渡される。</summary>
     int? ScrollTargetPostNumber { get; }
 
-    /// <summary>「ここまで読んだ」帯の対象レス番号 (Phase 19)。null なら帯を表示しない。
-    /// appendPosts のメッセージに同梱して JS に push する。</summary>
-    int? ReadMarkPostNumber { get; }
+    /// <summary>「以降新レス」ラベルの対象レス番号。null ならラベル非表示。
+    /// appendPosts のメッセージに同梱して JS に push し、ラベル描画と dedup-tree の境界判定に使う。</summary>
+    int? MarkPostNumber { get; }
 
     /// <summary>「自分の書き込み」としてマークされているレス番号集合。
     /// appendPosts のメッセージに同梱して JS に push し、レンダ時に「自分」バッジを表示させる。</summary>
@@ -106,12 +108,33 @@ public static partial class WebView2Helper
 
     /// <summary>WebView2 のシェル準備 (= 該当する NavScope のナビ完了) を待ってから、
     /// 与えられた JSON メッセージを <see cref="CoreWebView2.PostWebMessageAsJson"/> で送る。
+    ///
+    /// FIFO 保証: 同一 WebView2 への複数同時送信を直列化する。
+    /// 直列化なしの場合、3 つの async 呼び出しが同じ shell-nav Task を await すると、
+    /// Task 完了後の継続再開順は .NET の TaskAwaiter 内部実装に依存し FIFO が保証されない。
+    /// その結果「最初に発火した append が後着でレス順を破壊」する事象が観測されたため、
+    /// 各 WebView2 ごとの「直前送信完了 Task」をチェーンして送信順を保証する。
+    ///
     /// 例外は呼び出し元に伝搬させず Debug.WriteLine で握り潰す (= 添付プロパティハンドラが
     /// async void で動くため、UI スレッドへの伝搬を防ぐ意味でもここで吸収する)。</summary>
     private static async Task PostJsonWhenReadyAsync(WebView2 wv, string json, NavScope scope)
     {
+        // 前回の send 完了を予約する: my=この送信の完了通知 TCS、prev=直前の send Task。
+        // ロックは状態の読み取り/差し替えだけで、await 自体はロック外で行う。
+        var state = SendQueues.GetValue(wv, _ => new SendQueueState());
+        Task previous;
+        var myCompletion = new TaskCompletionSource();
+        lock (state.Lock)
+        {
+            previous = state.LastSend;
+            state.LastSend = myCompletion.Task;
+        }
+
         try
         {
+            // 前の送信完了まで待機 (= FIFO 保証)。前のが失敗した場合もこちらは続行する。
+            try { await previous.ConfigureAwait(true); } catch { /* 前の失敗を引き継がない */ }
+
             await EnsureCoreAsync(wv).ConfigureAwait(true);
 
             var waitTask = scope switch
@@ -130,7 +153,19 @@ public static partial class WebView2Helper
         {
             Debug.WriteLine($"[WebView2Helper] post failed (scope={scope}): {ex.Message}");
         }
+        finally
+        {
+            // 例外を拾っても必ず完了通知する (= でないと後続が永久にブロックされる)。
+            myCompletion.TrySetResult();
+        }
     }
+
+    private sealed class SendQueueState
+    {
+        public Task         LastSend = Task.CompletedTask;
+        public readonly object Lock  = new();
+    }
+    private static readonly ConditionalWeakTable<WebView2, SendQueueState> SendQueues = new();
 
     private static Task GetHtmlPaneNavTask(WebView2 wv)
     {

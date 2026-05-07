@@ -56,27 +56,33 @@ public sealed partial class MainViewModel
         RefreshFavoritedStateOfAllTabs();
     }
 
-    /// <summary>スレ ★ ボタン押下: 既に登録済みなら外す、未登録なら追加する (トグル)。</summary>
+    /// <summary>スレ ★ ボタン押下: 既に登録済みなら外す、未登録なら追加する (トグル)。
+    /// タブが開いていない経路 (= スレ一覧の行を右クリック) からも使えるよう、
+    /// プリミティブ受けの <see cref="ToggleThreadFavorite(Board, string, string)"/> に委譲する。</summary>
     public void ToggleThreadFavorite(ThreadTabViewModel tab)
+        => ToggleThreadFavorite(tab.Board, tab.ThreadKey, tab.Title);
+
+    /// <summary>(板, スレキー, スレタイトル) を引数に取るプリミティブ版。
+    /// スレタブを開かず、スレ一覧の行などから直接トグルしたい時に使う。</summary>
+    public void ToggleThreadFavorite(Board board, string threadKey, string title)
     {
-        var b = tab.Board;
-        var existing = Favorites.FindThread(b.Host, b.DirectoryName, tab.ThreadKey);
+        var existing = Favorites.FindThread(board.Host, board.DirectoryName, threadKey);
         if (existing is not null)
         {
             Favorites.Remove(existing);
-            StatusMessage = $"{tab.Title} をお気に入りから外しました";
+            StatusMessage = $"{title} をお気に入りから外しました";
         }
         else
         {
             Favorites.AddRoot(new FavoriteThread
             {
-                Host          = b.Host,
-                DirectoryName = b.DirectoryName,
-                ThreadKey     = tab.ThreadKey,
-                Title         = tab.Title,
-                BoardName     = b.BoardName,
+                Host          = board.Host,
+                DirectoryName = board.DirectoryName,
+                ThreadKey     = threadKey,
+                Title         = title,
+                BoardName     = board.BoardName,
             });
-            StatusMessage = $"{tab.Title} をお気に入りに追加しました";
+            StatusMessage = $"{title} をお気に入りに追加しました";
         }
         RefreshFavoritedStateOfAllTabs();
     }
@@ -507,7 +513,7 @@ public sealed partial class MainViewModel
             StatusMessage = $"お気に入りチェック: 更新スレ取得 {i}/{totalUpdate} (完了 {datDone}/{totalUpdate})";
             var (board, info, result, error) = await t.ConfigureAwait(true);
             if (result is null) continue;
-            try { OpenThreadFromPrefetched(board, info, result); }
+            try { await OpenThreadFromPrefetchedAsync(board, info, result).ConfigureAwait(true); }
             catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
         }
 
@@ -515,8 +521,15 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>事前に取得済みの <see cref="DatFetchResult"/> からスレタブを作成 / 既存タブに反映する。
-    /// HTTP は呼ばない (= 並列 fetch 済の結果を流し込むだけ)。</summary>
-    private void OpenThreadFromPrefetched(Board board, ThreadInfo info, DatFetchResult result)
+    /// HTTP は呼ばない (= 並列 fetch 済の結果を流し込むだけ)。
+    ///
+    /// async である理由: 新規タブ作成ブランチで、ThreadTabs.Add 直後に AppendPostsWithNg を 2 回続けると、
+    /// WPF が WebView2 を materialize する dispatcher cycle を回す前に LatestAppendBatch が 2 回上書きされ、
+    /// 1 回目 (= cache 部分) の DP callback が発火しない race condition が起きる。
+    /// <see cref="System.Threading.Tasks.Task.Yield"/> で 1 cycle 譲ると、Add → materialize → binding 確立まで
+    /// 進んでから append が走るので問題なく両方届く。
+    /// 既存タブブランチは tab が既に bound 済なので race にならない (= 同期処理で十分)。 </summary>
+    private async Task OpenThreadFromPrefetchedAsync(Board board, ThreadInfo info, DatFetchResult result)
     {
         // 既存タブがあれば差分を append して終わり
         var existing = FindThreadTab(board, info.Key);
@@ -528,22 +541,37 @@ public sealed partial class MainViewModel
                 var added = new List<Post>(result.Posts.Count - prevCount);
                 for (var n = prevCount; n < result.Posts.Count; n++) added.Add(result.Posts[n]);
                 AppendPostsWithNg(existing, added, isIncremental: true);
+                // 仕様: 「差分取得で来た新着」が own への返信を含む場合だけ赤化フラグを立てる。
+                existing.HasReplyToOwn = DeltaHasReplyToOwn(existing, added);
+            }
+            else
+            {
+                // 新着 0 件 = 状態更新イベントなので赤化フラグはリセット (= 上書き許可)。
+                existing.HasReplyToOwn = false;
             }
             existing.DatSize = result.DatSize;
             SaveFetchedPostCount(board, info.Key, result.Posts.Count);
-            NotifyThreadListLogMark(board, info.Key, LogMarkState.Cached);
-            existing.State = LogMarkState.Cached;
+            // 最終状態を ComputeMarkState で算定 (= HasReplyToOwn が true なら RepliedToOwn、それ以外は Cached)。
+            var finalState = ComputeMarkState(existing, stateHint: null);
+            NotifyThreadListLogMark(board, info.Key, finalState);
+            existing.State = finalState;
             return;
         }
 
-        // 新規タブ作成
+        // 新規タブ作成。idx.json から既知情報を復元する:
+        //   - LastReadPostNumber → tab.ScrollTargetPostNumber (= 前回スクロール位置の復元)
+        //   - LastFetchedPostCount → prevFetchedCount (= 前回取得時のレス数。delta の境界として使う)
+        //   - OwnPostNumbers → tab.OwnPostNumbers (= 自分の書き込みマークの復元。HasReplyToOwn 判定に必要)
         var tab = CreateThreadTab(board, info);
 
         var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
         if (savedIndex?.LastReadPostNumber is int savedPos)
             tab.ScrollTargetPostNumber = savedPos;
-        if (savedIndex?.LastReadMarkPostNumber is int savedMark)
-            tab.ReadMarkPostNumber = savedMark;
+        if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
+        {
+            foreach (var n in savedOwn) tab.OwnPostNumbers.Add(n);
+        }
+        var prevFetchedCount = savedIndex?.LastFetchedPostCount ?? 0;
 
         tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
         tab.State       = LogMarkState.Cached;
@@ -551,10 +579,56 @@ public sealed partial class MainViewModel
         ThreadTabs.Add(tab);
         SelectedThreadTab = tab;
 
-        AppendPostsWithNg(tab, result.Posts);
-        tab.DatSize = result.DatSize;
+        // ★ race 回避 (1): Background 優先度で待ち、ItemsControl の DataTemplate materialize +
+        //    AppendBatch DP の binding 確立 + binding の初期 push まで完了させる。
+        //    Task.Yield() は WPF SyncContext で Normal priority に post されるため
+        //    DataBind / Render より「先」に再開してしまい、binding 確立前に AppendPostsWithNg
+        //    が走って DP callback が空打ちになる (= 取得済みレスが消える原因)。
+        //    Background priority は DataBind / Render より低いので、Render 完了後に再開する。
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+            () => { },
+            System.Windows.Threading.DispatcherPriority.Background);
 
+        // result.Posts (= 全件) を「既存分」と「delta」に分割して append。
+        //   - 既存分 (= 1..prevFetchedCount): cache load 相当、isIncremental=false で投入
+        //   - delta  (= prevFetchedCount+1..end): 新着扱い、isIncremental=true で投入 + mark / HasReplyToOwn 判定
+        // prevFetchedCount==0 (= 初取得相当) のときは全件を 1 batch 投入し、mark / 太字対象は出さない。
+        if (prevFetchedCount > 0 && result.Posts.Count > prevFetchedCount)
+        {
+            var preFetched = new List<Post>(prevFetchedCount);
+            for (var i = 0; i < prevFetchedCount && i < result.Posts.Count; i++) preFetched.Add(result.Posts[i]);
+            AppendPostsWithNg(tab, preFetched);
+
+            // ★ race 回避 (2): 1 回目の LatestAppendBatch 更新が WPF binding 経由で DP まで届くのを
+            //    確実にしてから 2 回目を書く。これがないと WPF の binding update coalescing で
+            //    1 回目 (preFetched) が 2 回目 (delta) によって上書きされ、preFetched が JS に届かない。
+            //    やはり Background priority で待つ。
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => { },
+                System.Windows.Threading.DispatcherPriority.Background);
+
+            var delta = new List<Post>(result.Posts.Count - prevFetchedCount);
+            for (var i = prevFetchedCount; i < result.Posts.Count; i++) delta.Add(result.Posts[i]);
+            // mark は AppendPostsWithNg より前に書く必要がある (= 同期 DP 発火時に JSON に乗せるため)。
+            tab.MarkPostNumber = prevFetchedCount + 1;
+            AppendPostsWithNg(tab, delta, isIncremental: true);
+            tab.HasReplyToOwn = DeltaHasReplyToOwn(tab, delta);
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[favCycle] {info.Title}: 新規タブ作成、delta={delta.Count} (prev={prevFetchedCount} → now={result.Posts.Count}), HasReplyToOwn={tab.HasReplyToOwn}");
+        }
+        else
+        {
+            AppendPostsWithNg(tab, result.Posts);
+            tab.HasReplyToOwn = false;
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[favCycle] {info.Title}: 新規タブ作成 (初取得相当、prev={prevFetchedCount}, now={result.Posts.Count})、mark / 太字無し");
+        }
+
+        tab.DatSize = result.DatSize;
         SaveFetchedPostCount(board, info.Key, result.Posts.Count);
-        NotifyThreadListLogMark(board, info.Key, LogMarkState.Cached);
+
+        var newTabState = ComputeMarkState(tab, stateHint: null);
+        NotifyThreadListLogMark(board, info.Key, newTabState);
+        tab.State = newTabState;
     }
 }
