@@ -2622,10 +2622,16 @@
             postsByNumber.set(p.number, p);
         }
 
-        // 既存 DOM が空 (= 初回ロード) は viewMode 問わず renderCurrentViewMode で全構築。
-        // 既に DOM がある場合は viewMode ごとに「ツリー形のまま末尾にレスを追加」する経路に流す
-        // (= 既存 DOM はノータッチ、ラベルだけ updateNewPostsMarkBand で新位置に移動)。
-        if (root.children.length === 0) {
+        // 末尾追加経路を通す条件:
+        //   - flat モード: 常に末尾追加 (= 線形リスト、順序保存)
+        //   - tree / dedupTree モード: incremental=true (= 真の差分取得) かつ既に DOM がある場合のみ
+        //     (= ユーザの目線を維持するため。incremental=false は「初回ロード」or「ストリーミング途中の chunk」で、
+        //      これらは全構築しないと dedupTree のツリー構造が意味的に壊れる)。
+        // 上記条件外 (= 初回ロード / ストリーミング chunk / 強制再構築) は renderCurrentViewMode で全構築。
+        const canTailAppend =
+            viewMode === 'flat'
+            || (incremental === true && root.children.length > 0);
+        if (!canTailAppend) {
             renderCurrentViewMode();
             return;
         }
