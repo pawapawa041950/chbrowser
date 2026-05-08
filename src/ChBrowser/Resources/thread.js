@@ -76,10 +76,17 @@
     //     dedup-tree の「親ごと描写」境界 (= 旧 incrementalPivotIndex) もこのラベルに統一。
     let markPostNumber = null;
 
-    // 「今セッションで incremental=true で届いたレス番号」の集合。is-new (= レス No 太字) の判定に使う。
-    // markPostNumber はリフレッシュ境界として idx.json に永続化されるが、太字は「今セッションで届いたぶん」
-    // であってほしい (= 再オープン直後で 0 件取得なら太字レスも 0 件) ので別管理。
+    // 「最新リフレッシュ (= 直近の delta batch group) で届いたレス番号」の集合。
+    // section B (= 「以降新レス」ラベル以降) の描画コンテンツと、is-new (= レス No 太字) の判定の両方に使う。
+    // 新しい refresh の境界 (= mark 値変化) で本 Set はリセットされ、前 refresh のレスは section A に昇格する。
+    // ⇒ 結果、section B には「今 refresh の新着レス + その祖先 chain」だけが残り、太字も今 refresh 分だけになる。
     const sessionNewPostNumbers = new Set();
+
+    // appendPosts 経路だけが見る「最後に観測した delta refresh の mark 値」。
+    // 新 refresh 検出 (= newMark !== lastDeltaMark) に使う。
+    // setMarkPostNumber メッセージは appendPosts より先に届いて markPostNumber を上書きしてしまうため、
+    // markPostNumber を比較に使うとタイミング問題で検出が漏れる。それを避けるための独立トラッカー。
+    let lastDeltaMark = null;
 
     // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
     // 評価ルール:
@@ -981,15 +988,13 @@
         for (const n of seen) updateReplyCountBadge(n);
     }
 
-    /** 「今セッションで新着として届いたレス」を is-new クラスでマークする。
+    /** 「最新リフレッシュ (= 直近の delta batch group) で届いたレス」を is-new クラスでマークする。
      *  post.css 側で .post.is-new .post-no を太字強調。
      *
-     *  is-new は markPostNumber (= 永続) とは別管理:
-     *    - markPostNumber はリフレッシュ時の境界として idx.json に永続化されるが、
-     *      「太字 = 新規レス」の感覚は「今このセッションで増えたレス」であってほしい。
-     *    - したがって sessionNewPostNumbers (Set) を appendPosts(incremental=true) のときだけ追記し、
-     *      JS リロード (= 別タブ切替・再オープン) で空に戻る。
-     *    - 結果、再オープン直後に新着取得が無ければ太字レスは 0、リフレッシュで N 件来れば N 件だけ太字。 */
+     *  sessionNewPostNumbers は per-refresh で運用される:
+     *    - 新しい refresh の境界 (= mark 値変化) で appendPosts 側が本 Set をリセットしてくれる前提。
+     *    - 旧 delta レスは section A に昇格しているので、本 Set には今 refresh のレスだけが残る。
+     *    - JS リロード (= 別タブ切替・再オープン) でも空に戻るので、再オープン直後で 0 件取得なら太字レスも 0 件。 */
     function markNewPosts() {
         if (sessionNewPostNumbers.size === 0) {
             debugLog('markNewPosts: sessionNewPostNumbers is empty → no-op');
@@ -2152,7 +2157,7 @@
 
         // 自分の書き込みトグル — 現在の状態によって label が反転、isOwn=新状態 を C# に送る。
         const isCurrentlyOwn = ownPostNumbers.has(postNo);
-        addItem(isCurrentlyOwn ? '自分の書き込み解除' : '自分の書き込みに登録',
+        addItem(isCurrentlyOwn ? '自分の書き込み解除' : '自分の書き込みにする',
                 'toggleOwnPost', { isOwn: !isCurrentlyOwn }, false);
 
         // NG 親項目 — クリックで子項目 (名前/ID/ワッチョイ) をインライン展開する。
@@ -2756,11 +2761,46 @@
 
         // 同梱された scrollTarget があれば保留中ターゲットを更新
         if (typeof scrollTarget === 'number') pendingScrollTarget = scrollTarget;
+        const newMark = (typeof mark === 'number') ? mark : null;
+        const isDelta = (incremental === true);
+
+        // 新しい delta refresh の境界 (= mark 値が変わった = 別の refresh が始まった) を検出。
+        // 比較に markPostNumber を使うと setMarkPostNumber メッセージで先行更新されているので使えず、
+        // appendPosts 経路だけが書き込む lastDeltaMark を見る。
+        const isNewRefresh = isDelta && newMark != null && newMark !== lastDeltaMark;
+
+        // 新 refresh 境界処理:
+        //   1. 前 refresh で太字 (= is-new) になっていたレスを細字に戻す。
+        //   2. dedupTree のみ: 旧 section B (= .incremental-section) を撤去して、前 refresh の delta レスを
+        //      section A に「昇格」(= 通常の primary 配置で再挿入) する。これによりラベル位置は今 refresh の
+        //      mark に追従し、section B には今 refresh 分のレスだけが残る。
+        //   3. sessionNewPostNumbers をリセット (= 後続の per-post loop で current batch が積まれる)。
+        // tree / flat モードには section A/B 概念がないので、太字解除と Set リセットだけで済む。
+        if (isNewRefresh) {
+            for (const n of sessionNewPostNumbers) {
+                const el = document.getElementById('r' + n);
+                if (el) el.classList.remove('is-new');
+            }
+            if (viewMode === 'dedupTree') {
+                const existingSection = root.querySelector(':scope > .incremental-section');
+                if (existingSection) existingSection.remove();
+                const promoteList = [...sessionNewPostNumbers].sort(function (a, b) { return a - b; });
+                sessionNewPostNumbers.clear();
+                // 昇格: 番号の昇順で per-post 挿入。親→子の順なので embed 先 (= 親の primary) が先に DOM に出る。
+                for (const n of promoteList) {
+                    const p = postsByNumber.get(n);
+                    if (p) insertPostIncremental(p);
+                }
+            } else {
+                sessionNewPostNumbers.clear();
+            }
+        }
+        if (isDelta && newMark != null) lastDeltaMark = newMark;
+
         // 「以降新レス」ラベルは毎 batch で C# から最新値を受け取り上書き。null なら据え置きせずクリア
         // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
-        markPostNumber = (typeof mark === 'number') ? mark : null;
+        markPostNumber = newMark;
 
-        const isDelta = (incremental === true);
         // dedupTree の差分取得は per-post 経路ではなく batch 末に section B を一括再構築する経路を取る
         // (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を素直に表現するため)。
         const useDedupBulkRebuild = (viewMode === 'dedupTree' && isDelta);
@@ -2846,6 +2886,7 @@
         pendingScrollTarget     = null;
         markPostNumber          = null;
         sessionNewPostNumbers.clear();
+        lastDeltaMark = null;
 
         // DOM クリア + post-template の再使用は appendPosts に任せる
         const root = document.getElementById('posts');

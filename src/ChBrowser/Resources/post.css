@@ -45,7 +45,7 @@
 }
 
 /* 「自分の書き込み」バッジ。post-no の右、post-name の左に挿入される (post.html テンプレート参照)。
- * post-no メニュー → 「自分の書き込みに登録」/「自分の書き込み解除」でトグル。 */
+ * post-no メニュー → 「自分の書き込みにする」/「自分の書き込み解除」でトグル。 */
 .post-own {
     display: inline-block;
     padding: 0 4px;
