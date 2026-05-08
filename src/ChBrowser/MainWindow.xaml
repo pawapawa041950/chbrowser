@@ -26,28 +26,10 @@
                 <MenuItem Header="ファイル(_F)">
                     <MenuItem Header="板一覧を更新(_U)" Command="{Binding RefreshBoardListCommand}" />
                     <MenuItem Header="お気に入りチェック(_C)" Click="MenuFavCheckUpdates_Click" />
-                    <MenuItem Header="新規スレッド作成(_N)..." />
                     <Separator />
                     <MenuItem Header="終了(_X)" Click="ExitMenu_Click" />
                 </MenuItem>
-                <MenuItem Header="編集(_E)">
-                    <MenuItem Header="コピー(_C)" Command="ApplicationCommands.Copy" />
-                    <MenuItem Header="検索(_F)..." InputGestureText="Ctrl+F" />
-                    <MenuItem Header="URL をコピー(_U)" />
-                </MenuItem>
                 <MenuItem Header="表示(_V)">
-                    <MenuItem Header="スクロールバートラック(_T)">
-                        <MenuItem Header="既読/未読境界" IsCheckable="True" IsChecked="True" />
-                        <MenuItem Header="人気レス" IsCheckable="True" IsChecked="True" />
-                        <MenuItem Header="自分のレス" IsCheckable="True" IsChecked="True" />
-                        <MenuItem Header="URL" IsCheckable="True" IsChecked="True" />
-                        <MenuItem Header="画像" IsCheckable="True" IsChecked="True" />
-                        <MenuItem Header="動画" IsCheckable="True" IsChecked="True" />
-                    </MenuItem>
-                    <Separator />
-                    <MenuItem Header="フォントサイズを大きく" />
-                    <MenuItem Header="フォントサイズを小さく" />
-                    <Separator />
                     <MenuItem Header="ログペイン(_L)" IsCheckable="True"
                               IsChecked="{Binding IsLogPaneVisible, Mode=TwoWay}" />
                     <MenuItem Header="ペインレイアウトをリセット(_R)" Click="ResetLayoutMenu_Click" />
@@ -56,11 +38,9 @@
                     <MenuItem Header="NG 設定(_N)..." Click="OpenNgWindow_Click" />
                     <MenuItem Header="ショートカット &amp; ジェスチャー(_K)..." Click="OpenShortcutsWindow_Click" />
                     <MenuItem Header="設定(_S)..." Click="OpenSettings_Click" />
-                    <Separator />
-                    <MenuItem Header="キャッシュをクリア" />
                 </MenuItem>
                 <MenuItem Header="ヘルプ(_H)">
-                    <MenuItem Header="バージョン情報(_A)..." />
+                    <MenuItem Header="バージョン情報(_A)..." Click="OpenAbout_Click" />
                 </MenuItem>
             </Menu>
             <TextBox x:Name="AddressBar"
@@ -112,34 +92,31 @@
         </panes:TopButtonsPane>
 
         <!-- ステータスバー -->
+        <!-- StatusBar の既定 ItemsPanel は DockPanel (LastChildFill=true)。
+             StatusMessage 以外は DockPanel.Dock="Right" で右側に積み、StatusMessage は最後に置いて残りスペースを埋めさせる。
+             Dock="Right" は XAML 順に右から積まれるので、表示左→右順 (Abone, DatSize, Gesture, Donguri, DonguriLogin) とは
+             逆順で並べる。 -->
         <StatusBar DockPanel.Dock="Bottom">
-            <StatusBarItem><TextBlock Text="{Binding StatusMessage}" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem><TextBlock x:Name="StatusPostCount" Text="-- レス" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem><TextBlock x:Name="StatusFetchTime" Text="取得 --:--" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem><TextBlock Text="{Binding AboneStatus}" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem><TextBlock x:Name="StatusThreadSize" Text="-- KB" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem>
-                <TextBlock Text="{Binding GestureStatus}" Foreground="#1E88E5" FontWeight="SemiBold" />
-            </StatusBarItem>
-            <Separator />
-            <StatusBarItem HorizontalAlignment="Right">
-                <TextBlock Text="{Binding DonguriStatus}" ToolTip="acorn (どんぐり) Cookie の経過時間と推定 Lv (5 分で 1 上昇 / 約 3 時間で失効)" />
-            </StatusBarItem>
-            <Separator />
-            <!-- どんぐりメール認証のログイン状態 (空文字なら表示しない、メアド未設定時は表示無し) -->
-            <StatusBarItem HorizontalAlignment="Right">
+            <StatusBar.Resources>
+                <!-- "|" 区切り (Separator) は使わず、各項目の Padding で空白による soft separation にする。 -->
+                <Style TargetType="StatusBarItem">
+                    <Setter Property="Padding" Value="8,2" />
+                </Style>
+            </StatusBar.Resources>
+            <StatusBarItem DockPanel.Dock="Right">
                 <TextBlock Text="{Binding DonguriLoginStatus}"
                            ToolTip="どんぐりメール認証のログイン状態 (設定 → 認証 で構成)" />
             </StatusBarItem>
-            <Separator />
-            <StatusBarItem HorizontalAlignment="Right"><TextBlock x:Name="StatusTabCount"   Text="タブ 0" /></StatusBarItem>
-            <Separator />
-            <StatusBarItem HorizontalAlignment="Right"><TextBlock x:Name="StatusCacheUsage" Text="キャッシュ 0 MB" /></StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right">
+                <TextBlock Text="{Binding DonguriStatus}" ToolTip="acorn (どんぐり) Cookie の経過時間と推定 Lv (5 分で 1 上昇 / 約 3 時間で失効)" />
+            </StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right">
+                <TextBlock Text="{Binding GestureStatus}" Foreground="#1E88E5" FontWeight="SemiBold" />
+            </StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right"><TextBlock Text="{Binding DatSizeStatus}" /></StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right"><TextBlock Text="{Binding AboneStatus}" /></StatusBarItem>
+            <!-- 残りスペースを埋める StatusMessage (= LastChildFill=true なので最後に置く)。 -->
+            <StatusBarItem><TextBlock Text="{Binding StatusMessage}" /></StatusBarItem>
         </StatusBar>
 
         <!-- 4 ペインを binary tree レイアウトで配置するカスタム Panel (Phase 23 docking)。

@@ -220,4 +220,11 @@ public partial class MainWindow : Window
     {
         if (Application.Current is App app) app.ShowShortcutsWindow();
     }
+
+    /// <summary>ヘルプ → バージョン情報...</summary>
+    private void OpenAbout_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Views.AboutDialog { Owner = this };
+        dlg.ShowDialog();
+    }
 }

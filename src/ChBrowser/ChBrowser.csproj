@@ -12,7 +12,19 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\icon\app.ico</ApplicationIcon>
     <NeutralLanguage>ja-JP</NeutralLanguage>
+
+    <!-- バージョン情報ダイアログ用。ビルド時に評価され、AssemblyInformationalVersionAttribute に
+         "v20260508" 形式で焼きこまれる (= ハードコードしないので毎ビルド自動更新)。
+         IncludeSourceRevisionInInformationalVersion=false で、SDK が "+commitsha" を付けるのを抑止。 -->
+    <InformationalVersion>v$([System.DateTime]::Now.ToString('yyyyMMdd'))</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- バージョン情報ダイアログがアイコンを表示するため、WPF Resource としても埋め込む
+         (= ApplicationIcon は EXE 自体のアイコンであり、別経路)。 -->
+    <Resource Include="Resources\icon\app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />

@@ -1,0 +1,53 @@
+<Window x:Class="ChBrowser.Views.AboutDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="ChBrowser について"
+        Width="380" SizeToContent="Height"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel LastChildFill="True" Margin="16">
+
+        <!-- 下部: OK ボタン -->
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,16,0,0">
+            <Button Content="OK"
+                    Width="84"
+                    IsDefault="True"
+                    IsCancel="True"
+                    Click="OkButton_Click" />
+        </StackPanel>
+
+        <!-- 中央: 左にアイコン、右にバージョン情報 -->
+        <DockPanel LastChildFill="True">
+            <!-- Source は code-behind で .ico の最大フレーム (256px) を選択して差し込む。
+                 XAML で Source 直書きすると WPF が小さいフレーム (32px 等) を拾って拡大表示し、
+                 ぼやけるため。 -->
+            <Image x:Name="IconImage"
+                   DockPanel.Dock="Left"
+                   Width="64" Height="64"
+                   VerticalAlignment="Top"
+                   Margin="0,0,16,0"
+                   RenderOptions.BitmapScalingMode="HighQuality" />
+            <StackPanel VerticalAlignment="Top">
+                <TextBlock Text="ChBrowser"
+                           FontSize="20"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="VersionText"
+                           Margin="0,4,0,0"
+                           FontSize="13" />
+                <TextBlock Margin="0,10,0,0"
+                           Foreground="#666"
+                           TextWrapping="Wrap"
+                           Text="WPF + .NET 8 + WebView2 で 5ch.io / bbspink.com を見るブラウザ" />
+            </StackPanel>
+        </DockPanel>
+    </DockPanel>
+</Window>

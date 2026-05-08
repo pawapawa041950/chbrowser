@@ -60,6 +60,11 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>あぼーん件数のステータスバー表示。SelectedThreadTab の hidden 数を表示。</summary>
     [ObservableProperty] private string _aboneStatus = "あぼーん 0";
 
+    /// <summary>選択中スレタブの dat サイズ (KB) のステータスバー表示。
+    /// SelectedThreadTab 切替時 / そのタブの DatSize 更新時に <see cref="OnSelectedThreadTabChanged"/> /
+    /// <see cref="OnActiveThreadTabPropertyChanged"/> から書き換える。タブ未選択時は空文字。</summary>
+    [ObservableProperty] private string _datSizeStatus = "";
+
     /// <summary>ステータスバーに出すどんぐり (acorn) の状態テキスト。30 秒ごとに更新。</summary>
     [ObservableProperty] private string _donguriStatus = "🌰 未取得";
 
@@ -143,8 +148,9 @@ public sealed partial class MainViewModel : ObservableObject
         // 各タブの WebView2 は専属インスタンス (TabControl ではなく ItemsControl で並列描画)。
         // Visibility 切替で選択タブだけ可視にするため、IsSelected を更新する。
         foreach (var t in ThreadTabs) t.IsSelected = ReferenceEquals(t, value);
-        // ステータスバーの「あぼーん N」を選択タブのものに更新
-        AboneStatus = value is null ? "あぼーん 0" : $"あぼーん {value.HiddenCount}";
+        // ステータスバーの「あぼーん N」「dat サイズ」を選択タブのものに更新
+        AboneStatus    = value is null ? "あぼーん 0" : $"あぼーん {value.HiddenCount}";
+        DatSizeStatus  = value is null ? ""           : FormatDatSize(value.DatSize);
 
         // 旧タブ購読を解除 → 新タブ購読
         if (_statusListenerThreadTab is not null)
@@ -163,7 +169,12 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (e.PropertyName == nameof(ThreadTabViewModel.StatusMessage))
             SyncStatusFromActivePane();
+        if (e.PropertyName == nameof(ThreadTabViewModel.DatSize) && sender is ThreadTabViewModel tab)
+            DatSizeStatus = FormatDatSize(tab.DatSize);
     }
+
+    /// <summary>dat サイズ (バイト) を「N KB」表記に整形。1024 で割って整数 + 桁区切り。</summary>
+    private static string FormatDatSize(long bytes) => $"{bytes / 1024:N0} KB";
 
     private void OnActiveThreadListTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
