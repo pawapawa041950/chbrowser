@@ -1,32 +1,27 @@
 # ChBrowser
 
-Windows 用の 5ch.io 専用ブラウザ。WPF + .NET 8 + WebView2 で実装。
+Windows 用の 5ch.io 専用ブラウザ。
 
 <!-- スクリーンショット (任意): docs/screenshots/ にファイルを置いて差し替え -->
 <!-- ![スクリーンショット](docs/screenshots/main.png) -->
 
 ## 主な機能
 
-- **4 ペイン構成** (お気に入り / 板一覧 / スレ一覧 / スレ表示) — ペインヘッダのドラッグでレイアウト変更可
-- **スレ表示モード** — レス順 / ツリー (重複あり) / ツリー (重複なし) を切替
-- **どんぐり (acorn) 認証 + 書き込み機能** — メール認証 Cookie の自動更新、書込ログ (`kakikomi.txt`) 出力
-- **画像 / 動画 / YouTube サムネイルのインライン表示** — クリックでアプリ内画像ビューアに遷移、AI 生成画像メタデータ (Stable Diffusion infotext / ComfyUI workflow) の自動抽出表示
-- **x.com / pixiv URL の自動展開** — fxtwitter API / pixiv ajax 経由でサムネ画像 URL に解決
-- **NG ルール** — 名前 / ID / ワッチョイ / 本文 × 部分一致 / 正規表現、グローバルまたは板単位、有効期限付き、連鎖あぼーん対応
-- **ショートカット / マウスジェスチャー** — カテゴリ別 (全体 / スレ表示 / スレ一覧 / 板一覧 / お気に入り) にカスタマイズ可
-- **テーマ** — レス HTML テンプレ (`post.html`) と各ペインの CSS をユーザが編集可
+- **ポータブル構成** 設定ファイルはexeのあるフォルダに保存
+- **4 ペイン構成** かちゅ～しゃやJaneなどの一般的なレイアウトをデフォルトとし、ペインヘッダのドラッグでレイアウトを自由に変更可
+- **スレ表示モード** レス順 / ツリー (重複あり) / ツリー (重複なし) を切替可
+- **リッチスクロールバー** 今どきの「スレ内で返信の多いレス」「画像URLが張られてるレス」などがスクロールバー上に表示
+- **どんぐり対応** — 通常どんぐりとメール認証どんぐりを切り替えて書き込み可能
+- **生成AI画像対応** プロンプトなどの情報を取得できるものはポップアップで表示
+- **ビューワー搭載** JaneXenoライクなビューワー搭載
 
 ## 動作要件
 
-- Windows 10 1809 以降 (x64)
-- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) — Windows 11 では標準同梱
-- (ソースからビルドする場合) [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Windows 11 : 追加モジュールなしに動作可。
+- (ソースからビルドする場合) : [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)が必要
 
-配布バイナリは self-contained / single-file 形式なので .NET 8 ランタイムを別途インストールする必要はありません。
-
-## ダウンロード
-
-[Releases](../../releases) ページから最新の `ChBrowser.exe` を取得してください。
+配布バイナリは .NET 8 ランタイム内包しており、初回起動時に展開処理が走るため少々起動に時間がかかります。
+Windows10でもWebView2を入れれば理論上動作しますが、動作確認をとっていません。
 
 ## ビルド
 
@@ -42,7 +37,7 @@ dotnet publish src/ChBrowser/ChBrowser.csproj `
 
 ## 実行 / データの保存場所
 
-ポータブル運用が前提です。`ChBrowser.exe` を任意のフォルダに置いて実行すると、その横に `data/` フォルダが作られ、以下が全部そこに保存されます:
+`ChBrowser.exe` を任意のフォルダに置いて実行すると、その横に `data/` フォルダが作られ、以下が全部そこに保存されます:
 
 - `app/config.json` — アプリ設定
 - `app/favorites.json` — お気に入り
@@ -52,9 +47,10 @@ dotnet publish src/ChBrowser/ChBrowser.csproj `
 - `donguri/` — どんぐり Cookie / 推定 Lv 状態
 - `ng/rules.json` — NG ルール
 - `kakikomi.txt` — 書き込みログ (任意機能)
-- `themes/default/` — `post.html` / `post.css` / 各ペイン CSS のユーザカスタマイズ用 (設定画面 → デザイン → 「既定 CSS / HTML を生成」で展開)
+- `themes/default/` — `post.html` / `post.css` / 各ペイン CSS のユーザカスタマイズ用
+(初期では配置されていません。本ディレクトリにないファイルは規定値で動作します)
 
-別マシンへ移行する場合は `ChBrowser.exe` と `data/` フォルダごとコピーすれば設定込みで動きます。
+別マシンへ移行する場合は `ChBrowser.exe` と `data/` フォルダだけコピーすれば設定込みで動きます。
 
 開発時は環境変数 `CHBROWSER_DATA_DIR` でデータディレクトリを差し替え可能です。
 
@@ -80,4 +76,4 @@ src/ChBrowser/
 
 ## ライセンス
 
-(策定中。MIT ライクで非商用利用に限定する方向で検討中。)
+本プロジェクトは[MIT License](https://github.com/pawapawa041950/chbrowser/blob/main/LICENSE)です。
