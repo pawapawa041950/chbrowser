@@ -678,6 +678,19 @@
         }
     }
 
+    // ---- 返信数による post-no の色階層 (ピンク / 赤) しきい値 ----
+    // テンプレの post-no class (= has-replies-few / has-replies-many) と JS 差分更新
+    // (updateReplyCountBadge) の両方から replyTierClass で参照され、しきい値は 1 箇所に集約。
+    const REPLY_TIER_PINK = 1; // 1 件以上 (かつ赤未満) で post-no をピンク
+    const REPLY_TIER_RED  = 3; // 3 件以上で post-no を赤 (= 排他的に上書き)
+
+    /** 返信数 count に対応する post-no クラス名 ('' / 'has-replies-few' / 'has-replies-many') を返す。 */
+    function replyTierClass(count) {
+        if (count >= REPLY_TIER_RED)  return 'has-replies-many';
+        if (count >= REPLY_TIER_PINK) return 'has-replies-few';
+        return '';
+    }
+
     /** post 1 件の view-data を作る (テンプレに渡す変数たち)。 */
     function postDataFor(p, isEmbedded, omitId, children) {
         const num     = p.number;
@@ -695,8 +708,8 @@
             media:          built.media,
             replyCount:     count,
             replyNumbers:   replies.join(','),       // バッジの data-replies 用 (ホバーポップアップで使う)
-            hasFewReplies:  count >= 1 && count < 3, // 1-2 件 → ピンク
-            hasManyReplies: count >= 3,              // 3+ 件 → 赤
+            hasFewReplies:  count >= REPLY_TIER_PINK && count < REPLY_TIER_RED,
+            hasManyReplies: count >= REPLY_TIER_RED,
             isOwn:          ownPostNumbers.has(num), // 「自分の書き込み」バッジ表示用
             isEmbedded:     !!isEmbedded,
             domId:          !omitId,
@@ -704,35 +717,16 @@
         };
     }
 
-    /** テンプレートに data を当てて 1 レス分の HTML を返す。テンプレ未読なら fallback。 */
+    /** テンプレートに data を当てて 1 レス分の HTML を返す。
+     *  C# 側 LoadThreadShellHtml が必ずテンプレ (ユーザ編集 or 埋め込み既定) を thread.html に注入するため、
+     *  通常テンプレ未読 / parse 失敗には到達しない。万一起きた場合は構造を JS 側で再実装せず
+     *  エラー placeholder だけ返す (= テンプレが唯一のレス DOM 構造定義になることを保証)。 */
     function renderPost(data) {
         _ensurePostTemplate();
         if (_postTemplateChunks && _postTemplateChunks.length > 0) {
             return _renderTemplate(_postTemplateChunks, data);
         }
-        // 組み込み fallback: テーマ読込が失敗した時用に最低限の HTML を返す。
-        // バッジ span は :empty を使った incremental 更新前提で、常に DOM に出す形にする。
-        let html = '<div class="post' + (data.isEmbedded ? ' embedded' : '') + '"';
-        if (data.domId) html += ' id="r' + data.number + '"';
-        html += '><div class="post-header">';
-        let postNoCls = 'post-no';
-        if (data.hasManyReplies) postNoCls += ' has-replies-many';
-        else if (data.hasFewReplies) postNoCls += ' has-replies-few';
-        html += '<span class="' + postNoCls + '" data-number="' + data.number + '" role="button" tabindex="0">' + data.number + ': </span>';
-        html += '<span class="post-reply-count" data-replies="' + escapeHtml(data.replyNumbers) + '">';
-        if (data.replyCount > 0) html += '返信 ' + data.replyCount + ' 件';
-        html += '</span>';
-        if (data.isOwn) html += ' <span class="post-own">自分</span>';
-        html += ' <span class="post-name">' + data.name + '</span>';
-        if (data.mail) html += ' <span class="post-mail">[' + escapeHtml(data.mail) + ']</span>';
-        html += '<span class="post-meta">  ' + escapeHtml(data.date);
-        if (data.id) html += ' ID:' + escapeHtml(data.id);
-        html += '</span>';
-        html += '</div><div class="post-body">' + data.body + '</div>';
-        html += '<div class="post-media">' + (data.media || '') + '</div>';
-        html += data.children;
-        html += '</div>';
-        return html;
+        return '<div class="post post-template-error">post template missing (data.number=' + data.number + ')</div>';
     }
 
     /** flat (レス順) モードの 1 レス分。インライン展開なし。 */
@@ -1399,7 +1393,11 @@
         }
     }
 
-    /** 全 .image-slot.deferred を IntersectionObserver で監視し、近接時に HEAD 要求を送る。 */
+    /** 全 .image-slot.deferred を IntersectionObserver で監視し、近接時に HEAD 要求を送る。
+     *  rootMargin はビューポート前後に余白を持たせて「viewport 外でも前後数枚分はあらかじめ
+     *  HEAD → loadSlotImage が走り、ブラウザがデコード済みになった状態で viewport に入るようにする」設計。
+     *  値 1500px は概ねサムネイル 8–10 枚分。スクロールがだいぶ速くてもサムネ描画が追いつくよう、
+     *  HEAD のみ (= 帯域は数 KB / 枚) を先んじて打つ。実画像の取得帯域はキャッシュやしきい値で抑制。 */
     const imageSlotObserver = new IntersectionObserver(function (entries) {
         for (const ent of entries) {
             if (!ent.isIntersecting) continue;
@@ -1425,7 +1423,7 @@
             slot.dataset.metaState = 'requested';
             postImageMetaRequest(url);
         }
-    }, { rootMargin: '300px 0px' });
+    }, { rootMargin: '1500px 0px' });
 
     function observeImageSlots(root) {
         const scope = root || document;
@@ -1445,14 +1443,14 @@
         slot.dataset.metaState = 'resolved';
 
         // 非同期展開対象の slot で resolvedUrl が無い → 展開失敗 (媒体無し / login 要 / API ダウン)。
-        // 「画像取得失敗」プレースホルダにして以降ロードしない。
+        // 「クリックで再試行」プレースホルダにする (= 自動再試行はしない、ユーザクリック時のみ再要求)。
         const isAsyncSlot = slot.classList.contains('async');
         if (isAsyncSlot && !meta.resolvedUrl) {
             slot.classList.remove('deferred');
             slot.classList.add('expand-failed');
             const text = document.createElement('span');
             text.className = 'image-placeholder-text';
-            text.textContent = '画像取得失敗';
+            text.textContent = '画像取得失敗 — クリックで再試行';
             slot.appendChild(text);
             return;
         }
@@ -1479,18 +1477,63 @@
         }
     }
 
-    /** スロット内に <img> を生成して実際に画像を読み込む。 */
+    /** ユーザクリックで失敗スロットを再要求する。expand-failed (= 非同期 URL の展開失敗) と
+     *  load-failed (= 画像本体の取得失敗) の両方に対応。
+     *
+     *  C# 側 (UrlExpander / ImageMetaService) は失敗結果をキャッシュから外す設計になっているため、
+     *  この再要求は前回失敗時とは独立に新しい HTTP 呼び出しが走る。JS 側の imageMetaCache も
+     *  この URL に関しては破棄する (= でないと imageMetaRequest で C# まで届かない)。 */
+    function retrySlot(slot) {
+        // 非同期展開スロットでは applyMetaToSlot が data-src を resolvedUrl に書き換えていることが
+        // ある。再展開させたいので元 URL に戻す (= data-url にオリジナルが保持されている)。
+        if (slot.classList.contains('async') && slot.dataset.url) {
+            slot.dataset.src = slot.dataset.url;
+        }
+        const url = slot.dataset.src;
+        if (!url) return;
+
+        // JS 側のメタキャッシュをクリア (= でないと applyImageMeta 経由で同じ失敗結果が返ってきて
+        // C# まで届かない)。
+        imageMetaCache.delete(url);
+
+        // 状態を初期 deferred に戻し、プレースホルダを除去。
+        slot.classList.remove('expand-failed', 'load-failed', 'loaded', 'over-threshold');
+        slot.classList.add('deferred');
+        slot.dataset.metaState = '';
+        slot.innerHTML = '';
+
+        // 再リクエスト (C# 側 UrlExpander は失敗 entry を evict 済みなので新規 API を叩く)。
+        slot.dataset.metaState = 'requested';
+        postImageMetaRequest(url);
+    }
+
+    /** スロット内に <img> を生成して実際に画像を読み込む。
+     *  画像のロードに失敗した (= 404 / network error / DNS 失敗 等) 場合は load-failed クラスを付け、
+     *  「クリックで再試行」プレースホルダを表示する (= 自動リトライはしない、ユーザがクリックで明示再要求)。 */
     function loadSlotImage(slot) {
         const url = slot.dataset.src;
         if (!url) return;
-        slot.classList.remove('deferred', 'over-threshold');
+        slot.classList.remove('deferred', 'over-threshold', 'load-failed');
         slot.classList.add('loaded');
         slot.innerHTML = '';
         const img = document.createElement('img');
         img.className = 'inline-image';
-        img.loading   = 'lazy';
+        // loading="lazy" は付けない (= ブラウザが二重にビューポート判定して fetch/decode を
+        // 遅らせるのを避ける)。本コードではゲートは IntersectionObserver (rootMargin 1500px)
+        // の側で既に実施しており、loadSlotImage が呼ばれた時点で「描画して欲しい近接スロット」と
+        // 確定しているため、ここでは即時に fetch + decode を開始させる方が高速 (= スクロール
+        // 速度に対する追従性が上がる)。
         img.alt       = '';
         img.src       = url;
+        img.addEventListener('error', function () {
+            slot.classList.remove('loaded');
+            slot.classList.add('load-failed');
+            slot.innerHTML = '';
+            const text = document.createElement('span');
+            text.className = 'image-placeholder-text';
+            text.textContent = '画像読み込み失敗 — クリックで再試行';
+            slot.appendChild(text);
+        }, { once: true });
         slot.appendChild(img);
 
         // YouTube サムネイルには再生アイコンを重ねる (クリックで iframe に置換)
@@ -2061,17 +2104,11 @@
         }
     }
 
-    // ---------- post-no クリックメニュー (返信 / NG登録) ----------
-    // .post-no をクリックするとメニューを出し、選択でメッセージを C# に送る。
-    //   返信         → { type:'replyToPost', number }    : C# が「>>N」入りで投稿ダイアログを開く
-    //   NG: 名前/ID/ワッチョイ → { type:'ngAdd', target, value, number } : C# が NG 登録ダイアログを開く
-    // メニューは body 直下の単一 <div class="post-no-menu"> として管理。再表示時は前のを閉じる。
-    let postNoMenuEl = null;
-
-    function closePostNoMenu() {
-        if (postNoMenuEl && postNoMenuEl.parentNode) postNoMenuEl.parentNode.removeChild(postNoMenuEl);
-        postNoMenuEl = null;
-    }
+    // ---------- post-no コンテキストメニュー (返信 / 自分の書き込み / NG 登録) ----------
+    // .post-no を「左クリック または 右クリック」した時に C# 側にメッセージを送り、
+    // ネイティブ (= WPF ContextMenu) のメニューを表示してもらう。
+    // メニューの組み立ては全て C# 側 (ThreadDisplayPane.xaml の PostNoContextMenu リソース)。
+    // ペイロードに必要な値 (name / id / watchoi / isOwn) は JS 側で post から抽出して渡す。
 
     function extractWatchoiFromName(name) {
         if (!name) return '';
@@ -2121,149 +2158,66 @@
         updateMarkScrollbarMarker();
     }
 
-    function showPostNoMenu(postNo, anchorEl) {
-        closePostNoMenu();
+    /** post-no クリック / 右クリック時に C# にコンテキストメニュー表示を依頼する。
+     *  メニュー本体 (返信 / 自分の書き込み / NG …) は C# (ThreadDisplayPane) の WPF ContextMenu。 */
+    function postPostNoContextMenu(postNo) {
         const post = postsByNumber.get(postNo);
         if (!post) return;
-
-        const nameVal     = plainName(post.name);
-        const idVal       = post.id || '';
-        const watchoiVal  = extractWatchoiFromName(post.name);
-
-        const menu = document.createElement('div');
-        menu.className = 'post-no-menu';
-
-        // クリックで C# にメッセージを送るアクション項目
-        function addItem(label, action, payloadExtras, disabled, extraClass) {
-            const it = document.createElement('div');
-            it.className = 'menu-item' + (disabled ? ' disabled' : '') + (extraClass ? ' ' + extraClass : '');
-            it.textContent = label;
-            if (!disabled) {
-                it.addEventListener('mousedown', function(ev) {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    closePostNoMenu();
-                    if (window.chrome && window.chrome.webview) {
-                        window.chrome.webview.postMessage(Object.assign(
-                            { type: action, number: postNo }, payloadExtras || {}));
-                    }
-                });
-            }
-            return menu.appendChild(it);
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({
+                type:    'postNoContextMenu',
+                number:  postNo,
+                name:    plainName(post.name),
+                id:      post.id || '',
+                watchoi: extractWatchoiFromName(post.name),
+                isOwn:   ownPostNumbers.has(postNo),
+            });
         }
-
-        // 返信
-        addItem('返信', 'replyToPost', null, false);
-
-        // 自分の書き込みトグル — 現在の状態によって label が反転、isOwn=新状態 を C# に送る。
-        const isCurrentlyOwn = ownPostNumbers.has(postNo);
-        addItem(isCurrentlyOwn ? '自分の書き込み解除' : '自分の書き込みにする',
-                'toggleOwnPost', { isOwn: !isCurrentlyOwn }, false);
-
-        // NG 親項目 — クリックで子項目 (名前/ID/ワッチョイ) をインライン展開する。
-        // 親クリック自体は C# にメッセージを送らない (= toggle のみ)。
-        const ngParent = document.createElement('div');
-        ngParent.className = 'menu-item menu-parent';
-        const arrow = document.createElement('span');
-        arrow.className = 'menu-arrow';
-        arrow.textContent = '▶';   // ▶ (折り畳まれている時)
-        const ngLabel = document.createElement('span');
-        ngLabel.textContent = 'NG';
-        ngParent.appendChild(ngLabel);
-        ngParent.appendChild(arrow);
-        menu.appendChild(ngParent);
-
-        // 子項目コンテナ — display: none で初期は隠す。
-        const ngChildren = document.createElement('div');
-        ngChildren.className = 'menu-children';
-        ngChildren.style.display = 'none';
-        menu.appendChild(ngChildren);
-
-        function addNgChild(label, target, value) {
-            const disabled = !value;
-            const it = document.createElement('div');
-            it.className = 'menu-item menu-child' + (disabled ? ' disabled' : '');
-            it.textContent = label;
-            if (!disabled) {
-                it.addEventListener('mousedown', function(ev) {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    closePostNoMenu();
-                    if (window.chrome && window.chrome.webview) {
-                        window.chrome.webview.postMessage({
-                            type: 'ngAdd', number: postNo, target: target, value: value,
-                        });
-                    }
-                });
-            }
-            ngChildren.appendChild(it);
-        }
-        addNgChild('名前 — '       + (nameVal    || '(空)'),  'name',    nameVal);
-        addNgChild('ID — '         + (idVal      || '(空)'),  'id',      idVal);
-        addNgChild('ワッチョイ — ' + (watchoiVal || '(なし)'), 'watchoi', watchoiVal);
-
-        ngParent.addEventListener('mousedown', function(ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            const open = ngChildren.style.display !== 'none';
-            ngChildren.style.display = open ? 'none' : 'block';
-            arrow.textContent       = open ? '▶' : '▼';   // ▶ / ▼
-            // 子展開でメニューが伸びると画面下を超える可能性があるので再配置
-            repositionPostNoMenu(menu, anchorEl);
-        });
-
-        // 仮で body に追加してサイズを確定させてから配置
-        document.body.appendChild(menu);
-        repositionPostNoMenu(menu, anchorEl);
-        postNoMenuEl = menu;
     }
 
-    /** post-no メニューを anchor の周りに配置する。
-     *  既定は anchor の真下、画面下を超えるなら anchor の上にフリップ。
-     *  画面右端を超えるなら左にスライド。 */
-    function repositionPostNoMenu(menu, anchorEl) {
-        const r       = anchorEl.getBoundingClientRect();
-        const menuW   = menu.offsetWidth;
-        const menuH   = menu.offsetHeight;
-        const docW    = document.documentElement.clientWidth;
-        const vpTop   = window.scrollY;
-        const vpBot   = window.scrollY + window.innerHeight;
-
-        // 横: anchor の左揃え、右端を超えるなら左へスライド
-        let x = r.left + window.scrollX;
-        if (x + menuW > docW + window.scrollX) x = docW + window.scrollX - menuW - 4;
-        if (x < window.scrollX) x = window.scrollX + 4;
-
-        // 縦: 下に置けるなら下、ダメなら上にフリップ
-        let y = r.bottom + window.scrollY + 2;
-        if (y + menuH > vpBot) {
-            const above = r.top + window.scrollY - menuH - 2;
-            // 上にも収まらないなら viewport 上端に貼り付け
-            y = (above >= vpTop) ? above : vpTop + 4;
+    /** URL (テキストリンク or 画像サムネ) の右クリック時に C# にコンテキストメニュー表示を依頼。
+     *  「リンクをコピー」等のメニューは C# (ThreadDisplayPane) 側 UrlContextMenu リソースで定義。
+     *  data-url にはオリジナルのページ URL (= サムネ生成用に解決した data-src ではなく、ユーザが
+     *  共有したい元 URL) が入っているのでそれをそのまま渡す。 */
+    function postUrlContextMenu(url) {
+        if (!url) return;
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'urlContextMenu', url: url });
         }
-
-        menu.style.left = x + 'px';
-        menu.style.top  = y + 'px';
     }
 
-    // 外側クリック / ESC でメニュー閉じる
-    document.addEventListener('mousedown', function(e) {
-        if (!postNoMenuEl) return;
-        if (e.target.closest && e.target.closest('.post-no-menu')) return;
-        closePostNoMenu();
-    }, true);
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') closePostNoMenu();
-    });
-
-    document.addEventListener('click', function (e) {
-        // .post-no クリック → メニュー表示。anchor/URL ロジックより先に拾って早期 return。
+    // 右クリックは contextmenu イベントで拾い、ブラウザ既定メニューを抑制してから C# に送る。
+    // 優先順位: post-no が一番強い → URL リンク (テキスト or 画像) → それ以外は何もしない (= 既定挙動)。
+    document.addEventListener('contextmenu', function(e) {
+        // 1) post-no
         const postNo = e.target.closest && e.target.closest('.post-no');
         if (postNo && postNo.dataset && postNo.dataset.number) {
             e.preventDefault();
             e.stopPropagation();
             const n = parseInt(postNo.dataset.number, 10);
-            if (!isNaN(n)) showPostNoMenu(n, postNo);
+            if (!isNaN(n)) postPostNoContextMenu(n);
+            return;
+        }
+
+        // 2) URL: テキストリンク <a[data-url]> または画像サムネ .image-slot[data-url]
+        const urlEl = e.target.closest && e.target.closest('a[data-url], .image-slot[data-url]');
+        if (urlEl && urlEl.dataset && urlEl.dataset.url) {
+            e.preventDefault();
+            e.stopPropagation();
+            postUrlContextMenu(urlEl.dataset.url);
+            return;
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        // .post-no 左クリック → C# にコンテキストメニュー表示要求。anchor/URL ロジックより先に拾って早期 return。
+        // 右クリックは別 listener (contextmenu) で同じ要求を出している (= どちらでもメニューが出る)。
+        const postNo = e.target.closest && e.target.closest('.post-no');
+        if (postNo && postNo.dataset && postNo.dataset.number) {
+            e.preventDefault();
+            e.stopPropagation();
+            const n = parseInt(postNo.dataset.number, 10);
+            if (!isNaN(n)) postPostNoContextMenu(n);
             return;
         }
 
@@ -2274,8 +2228,13 @@
         //              Error 153 が出るため、サムネ表示のみに留める方針)
         const slot = e.target.closest && e.target.closest('.image-slot');
         if (slot) {
-            if (slot.classList.contains('expand-failed') || slot.classList.contains('playing')) {
-                return; // 失敗済み / 再生中は何もしない (再生中は内部要素が click を消費)
+            // 失敗スロット (展開失敗 / 画像読み込み失敗) は明示クリックで再試行。
+            if (slot.classList.contains('expand-failed') || slot.classList.contains('load-failed')) {
+                retrySlot(slot);
+                return;
+            }
+            if (slot.classList.contains('playing')) {
+                return; // 再生中は何もしない (内部要素が click を消費)
             }
             const mediaType = slot.dataset.mediaType || 'image';
             if (mediaType === 'video') {
@@ -2288,8 +2247,12 @@
             }
             // image
             if (slot.classList.contains('loaded')) {
-                // Phase 10: ロード済みなら外部ブラウザではなくビューアウィンドウに送る
-                if (slot.dataset.url) postOpenInViewer(slot.dataset.url);
+                // Phase 10: ロード済みなら外部ブラウザではなくビューアウィンドウに送る。
+                // ビューアにはサムネ生成に使った実画像 URL (= data-src) を送る。元のページ URL
+                // (= data-url; x.com のステータス URL や imgur の HTML ページ URL 等) ではビューアが
+                // 画像を取得できない。x.com → pbs.twimg、imgur (HTML) → 直 .jpg、のように
+                // applyMetaToSlot / buildMediaSlotForUrl が data-src を実画像 URL に解決済み。
+                if (slot.dataset.src) postOpenInViewer(slot.dataset.src);
             } else {
                 loadSlotImage(slot);
             }
@@ -2460,11 +2423,14 @@
         popups.push({ el: el, anchor: anchor, level: level });
     }
 
-    /** 返信件数バッジ (.post-reply-count[data-replies]) をホバーした時に開くポップアップ。
-     *  data-replies のカンマ区切りレス番号を順にレンダリングする。 */
-    function openReplyPopup(badge, level) {
+    /** post-no をホバーした時に開く「返信元レスをまとめて見せる」ポップアップ。
+     *  - anchor: ポップアップの位置基準 (= post-no 要素)。
+     *  - dataSource: data-replies (カンマ区切りレス番号) を持つ要素 (= 兄弟の .post-reply-count)。
+     *  返信数バッジ (.post-reply-count) は hover 反応しない plain テキストになっており、
+     *  クリックメニュー (= 返信 / NG 登録) は post-no の click ハンドラ側で別途処理される。 */
+    function openReplyPopup(anchor, dataSource, level) {
         closeFrom(level);
-        const list = (badge.dataset.replies || '')
+        const list = (dataSource.dataset.replies || '')
             .split(',')
             .map(function (s) { return parseInt(s, 10); })
             .filter(function (n) { return !isNaN(n); });
@@ -2473,11 +2439,11 @@
         el.className = 'anchor-popup';
         el.appendChild(buildPopupContentFromList(list));
         document.body.appendChild(el);
-        positionPopup(el, badge);
+        positionPopup(el, anchor);
         el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
         el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         attachAnchorHandlers(el, level + 1);
-        popups.push({ el: el, anchor: badge, level: level });
+        popups.push({ el: el, anchor: anchor, level: level });
     }
 
     function attachAnchorHandlers(root, level) {
@@ -2489,13 +2455,19 @@
             });
             a.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         });
-        // 返信件数バッジ → 返信元レスをポップアップ
-        root.querySelectorAll('.post-reply-count[data-replies]').forEach(function (el) {
-            el.addEventListener('mouseenter', function () {
+        // post-no ホバー → 返信元レスをポップアップ (data は兄弟 .post-reply-count[data-replies] から取る)。
+        // ポップアップ内クローンは clonePostForPopup が .post-reply-count を剥がすので、ポップアップ中の
+        // post-no をホバーしても兄弟バッジが見つからず再帰ポップアップは開かない (= 連鎖防止)。
+        root.querySelectorAll('.post-no').forEach(function (postNo) {
+            postNo.addEventListener('mouseenter', function () {
+                const header = postNo.parentElement;
+                if (!header) return;
+                const badge = header.querySelector(':scope > .post-reply-count');
+                if (!badge || !badge.dataset.replies) return;
                 cancelCloseAt(level);
-                openReplyPopup(el, level);
+                openReplyPopup(postNo, badge, level);
             });
-            el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+            postNo.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         });
     }
 
@@ -2543,8 +2515,10 @@
     }, { passive: true });
 
     /** 既存レス DOM の返信数バッジ + post-no の色クラスを差分更新する (flat モード appendPosts 用)。
-     *  テンプレで <span class="post-reply-count" data-replies=""> は常に出ている前提で、
-     *  textContent と data-replies を書き換えるだけ。位置が動かないのでテンプレで指定した位置を保てる。
+     *  テンプレで `<span class="post-reply-count" data-count="" data-replies="">返<span class="reply-num"></span> </span>`
+     *  が常に出ている前提で、data-count / data-replies / .reply-num の textContent だけ書き換える。
+     *  位置が動かないのでテンプレで指定した位置を保てる。バッジの可視テキスト「返」はテンプレ側 (post.html)
+     *  に置かれており、JS 側にはテキスト literal を持たない。
      *  ホバーリスナは初期描画時に attachAnchorHandlers が data-replies 属性ベースで取り付けているので
      *  この関数では触らない。 */
     function updateReplyCountBadge(num) {
@@ -2556,20 +2530,68 @@
         const replies = currentReverseIndex.get(num) || [];
         const count = replies.length;
 
-        // 1) post-no の色クラス (1-2 件 → ピンク、3+ 件 → 赤)
+        // 1) post-no の色クラス (しきい値は replyTierClass に集約)
         const postNo = header.querySelector(':scope > .post-no');
         if (postNo) {
             postNo.classList.remove('has-replies-few', 'has-replies-many');
-            if (count >= 3)      postNo.classList.add('has-replies-many');
-            else if (count >= 1) postNo.classList.add('has-replies-few');
+            const tier = replyTierClass(count);
+            if (tier) postNo.classList.add(tier);
         }
 
-        // 2) バッジの中身と data-replies を更新 (CSS の :empty で 0 件時は非表示になる)。
+        // 2) バッジの数値を data-count + .reply-num に書く。CSS の `[data-count="0"]` で 0 件時は非表示。
         //    テンプレが post-reply-count を出していないテーマでは何もしない (互換)。
         const badge = header.querySelector(':scope > .post-reply-count');
         if (!badge) return;
-        badge.textContent = count > 0 ? '返信 ' + count + ' 件' : '';
+        badge.dataset.count   = String(count);
         badge.dataset.replies = replies.join(',');
+        const numEl = badge.querySelector(':scope > .reply-num');
+        if (numEl) numEl.textContent = String(count);
+    }
+
+    /** 指定レス番号集合を「即時に DOM から消す + 内部状態を整合させる」(Phase 25)。
+     *  C# 側で NG ルールが追加された直後に呼ばれる経路。スレを閉じて開き直さなくても、
+     *  追加した瞬間に該当レスが画面から消える。
+     *
+     *  - DOM: primary レス (id="rN") と、ツリーモード等で他レス配下に出ている embedded copy
+     *    (= post-no の data-number で識別) を全て remove。
+     *  - 内部状態: allPosts / postsByNumber / currentReverseIndex を更新。
+     *  - 残レスの「返信 N 件」バッジは消したレスへの参照分だけ減算が必要なので
+     *    primary レス全件に対して updateReplyCountBadge を再実行 (= O(残全件) で軽い)。
+     *  - リッチスクロールバーのマーカーも再計算 (= 人気/メディア/URL/mark 全部)。
+     *
+     *  scroll 位置はブラウザの DOM 維持のままなので、消えた分だけ後ろのレスが上に詰まる挙動。
+     *  これは「スレを再描画した時の挙動」よりもユーザの視線位置が保たれて望ましい。 */
+    function hidePostsByNumber(numbers) {
+        if (!Array.isArray(numbers) || numbers.length === 0) return;
+        const set = new Set();
+        for (const n of numbers) {
+            const v = (typeof n === 'number') ? n : parseInt(n, 10);
+            if (!isNaN(v)) set.add(v);
+        }
+        if (set.size === 0) return;
+
+        // 1) DOM: primary + embedded copy をまとめて取り除く。post-header > .post-no の data-number で判別。
+        document.querySelectorAll('.post').forEach(function (p) {
+            const noEl = p.querySelector(':scope > .post-header > .post-no');
+            if (!noEl) return;
+            const n = parseInt(noEl.dataset.number, 10);
+            if (!isNaN(n) && set.has(n)) p.remove();
+        });
+
+        // 2) 内部状態を整合
+        allPosts      = allPosts.filter(function (p) { return !set.has(p.number); });
+        for (const n of set) postsByNumber.delete(n);
+        currentReverseIndex = buildReverseIndex();
+
+        // 3) 残 primary レスの返信バッジを総再計算 (消したレスへの ref が他のバッジから減るため)
+        document.querySelectorAll('#posts > .post[id^="r"]').forEach(function (el) {
+            const n = parseInt(el.id.slice(1), 10);
+            if (!isNaN(n)) updateReplyCountBadge(n);
+        });
+
+        // 4) スクロールバー / セクションマーク等の再計算
+        if (typeof updateRichScrollbar       === 'function') updateRichScrollbar();
+        if (typeof updateMarkScrollbarMarker === 'function') updateMarkScrollbarMarker();
     }
 
     // ---------- per-post 増分 DOM 挿入 (Phase 24) ----------
@@ -2980,6 +3002,21 @@
                     // hasData=false なら次回以降ポップアップを出さない (no-data でキャッシュ)。
                     onAiMetadataResponse(msg);
                     break;
+                case 'scrollToPost': {
+                    // ContextMenu 「このレスに飛ぶ」から呼ばれる。primary レス (id="rN") に scrollIntoView。
+                    // ポップアップは即時閉じる (= 飛んだ先が popup に隠れないようにする)。
+                    // 該当 primary レスが DOM に居ない (= フィルタで非表示 / NG / dedupTree で折り畳み等) 場合は no-op。
+                    const target = document.getElementById('r' + msg.number);
+                    closeFrom(0);
+                    if (target) target.scrollIntoView({ block: 'start' });
+                    break;
+                }
+                case 'setHiddenPosts': {
+                    // C# 側で NG ルールが追加された直後に呼ばれる。指定番号のレスを即時 DOM から取り除いて
+                    // 内部状態 (allPosts / postsByNumber / reverseIndex / バッジ / scrollbar) を最新化する。
+                    if (Array.isArray(msg.numbers)) hidePostsByNumber(msg.numbers);
+                    break;
+                }
             }
         });
     }

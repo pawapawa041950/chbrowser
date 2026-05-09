@@ -2,6 +2,9 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using ChBrowser.Models;
 using ChBrowser.Services.Image;
 using ChBrowser.Services.Storage;
@@ -226,5 +229,72 @@ public partial class MainWindow : Window
     {
         var dlg = new Views.AboutDialog { Owner = this };
         dlg.ShowDialog();
+    }
+
+    /// <summary>ステータスバーの「あぼーん N」クリック。
+    /// 現在の選択タブで「どのルールが何件あぼーんしたか」を ContextMenu で出し、
+    /// 各ルール項目をクリックすると NG 設定ウィンドウを該当ルール選択状態で開く。
+    /// 件数 0 や選択タブ無しなら何もしない。</summary>
+    private void AboneStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement el) return;
+        if (DataContext is not MainViewModel vm) return;
+
+        var items = vm.GetSelectedTabAboneBreakdown();
+        if (items.Count == 0) return;
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = el,
+            Placement       = PlacementMode.MousePoint,
+        };
+        foreach (var item in items)
+        {
+            var mi = new MenuItem();
+            if (item.IsChain)
+            {
+                mi.Header    = $"連鎖あぼーん — {item.Count} 件";
+                mi.IsEnabled = false; // 連鎖は特定ルールに紐付かないため、ジャンプ不可
+            }
+            else if (item.Rule is null)
+            {
+                mi.Header    = $"(削除済みルール) — {item.Count} 件";
+                mi.IsEnabled = false;
+            }
+            else
+            {
+                var rule    = item.Rule;
+                var ruleId  = item.RuleId;
+                mi.Header   = FormatRuleLabel(rule, item.Count);
+                mi.Click   += (_, _) =>
+                {
+                    if (Application.Current is App app && ruleId is { } id)
+                        app.ShowNgWindow(id);
+                };
+            }
+            menu.Items.Add(mi);
+        }
+        menu.IsOpen = true;
+    }
+
+    /// <summary>NG ルール 1 件をメニュー項目用ラベルに整形。「対象 / 検索方式 / 「パターン」 — N 件」</summary>
+    private static string FormatRuleLabel(Models.NgRule rule, int count)
+    {
+        var target = rule.Target switch
+        {
+            "name"    => "名前",
+            "id"      => "ID",
+            "watchoi" => "ワッチョイ",
+            "word"    => "本文",
+            _         => rule.Target,
+        };
+        var matchKind = rule.MatchKind switch
+        {
+            "literal" => "通常",
+            "regex"   => "正規表現",
+            _         => rule.MatchKind,
+        };
+        var pattern = rule.Pattern.Length > 40 ? rule.Pattern[..40] + "…" : rule.Pattern;
+        return $"{target} / {matchKind} / 「{pattern}」 — {count} 件";
     }
 }

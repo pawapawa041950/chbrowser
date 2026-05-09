@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -481,6 +482,30 @@ public sealed partial class MainViewModel : ObservableObject
         StatusMessage = "NG ルールを保存しました — 開いているスレタブは閉じて開き直すと反映されます";
     }
 
+    /// <summary>選択中のスレタブの「あぼーん N」内訳を、UI で表示しやすい形に組み立てて返す。
+    /// 内訳は HiddenByRule (ルール ID → 件数) を NgService の現在ルールと突き合わせて NgRule を解決し、
+    /// 件数の多い順に並べる。連鎖あぼーんが 1 件以上あれば末尾に追加。
+    /// ルールが既に削除済みの場合 (= NgService に Id が無い) は <see cref="AboneBreakdownItem.Rule"/> = null。
+    /// MainWindow の StatusBarItem クリックハンドラから呼ばれる。</summary>
+    public IReadOnlyList<AboneBreakdownItem> GetSelectedTabAboneBreakdown()
+    {
+        var tab = SelectedThreadTab;
+        if (tab is null) return Array.Empty<AboneBreakdownItem>();
+
+        var ruleById = _ng.All.Rules.ToDictionary(r => r.Id);
+        var items    = new List<AboneBreakdownItem>(tab.HiddenByRule.Count + 1);
+
+        foreach (var (ruleId, count) in tab.HiddenByRule.OrderByDescending(kv => kv.Value))
+        {
+            ruleById.TryGetValue(ruleId, out var rule);
+            items.Add(new AboneBreakdownItem(ruleId, rule, count, IsChain: false));
+        }
+        if (tab.HiddenByChain > 0)
+            items.Add(new AboneBreakdownItem(RuleId: null, Rule: null, Count: tab.HiddenByChain, IsChain: true));
+
+        return items;
+    }
+
     /// <summary>App.xaml.cs の初期化時に最初に 1 度呼ばれ、以降は設定画面の即時反映でも呼ばれる。
     /// HttpClient.Timeout や HiDPI 等「次回起動時に反映」の項目はここでは触らない。</summary>
     public void ApplyConfig(AppConfig config)
@@ -542,3 +567,10 @@ public sealed partial class MainViewModel : ObservableObject
         StatusMessage = "CSS を再読み込みしました (スレ表示タブは開き直し必要)";
     }
 }
+
+/// <summary>ステータスバーの「あぼーん N」クリック時に出す内訳メニューの 1 項目分。
+/// <see cref="MainViewModel.GetSelectedTabAboneBreakdown"/> が組み立てて返す。
+///
+/// <para><see cref="IsChain"/> = true は「連鎖あぼーん」項目 (= 特定ルールに帰属しない、無効化メニュー項目)。</para>
+/// <para><see cref="Rule"/> = null は対象ルールが既に削除された状態 (= ルールへ飛ぶ操作も無効、件数のみ表示)。</para></summary>
+public sealed record AboneBreakdownItem(System.Guid? RuleId, ChBrowser.Models.NgRule? Rule, int Count, bool IsChain);

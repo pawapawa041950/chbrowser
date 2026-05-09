@@ -24,7 +24,8 @@ public sealed partial class MainViewModel
         {
             if (p.ThreadTitle is { Length: > 0 } t) { tab.EnsureTitleFromDat(t); break; }
         }
-        var hidden = _ng.ComputeHidden(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName);
+        var breakdown = _ng.ComputeHiddenWithBreakdown(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName);
+        var hidden    = breakdown.HiddenNumbers;
         if (hidden.Count == 0)
         {
             tab.AppendPosts(batch, isIncremental);
@@ -36,6 +37,7 @@ public sealed partial class MainViewModel
                 if (!hidden.Contains(p.Number)) visible.Add(p);
             if (visible.Count > 0) tab.AppendPosts(visible, isIncremental);
             tab.HiddenCount += hidden.Count;
+            tab.AddHiddenBreakdown(breakdown);
         }
         if (ReferenceEquals(tab, SelectedThreadTab))
             AboneStatus = $"あぼーん {tab.HiddenCount}";
@@ -524,12 +526,45 @@ public sealed partial class MainViewModel
             var newRules = new System.Collections.Generic.List<ChBrowser.Models.NgRule>(_ng.All.Rules) { rule };
             _ng.Save(new ChBrowser.Models.NgRuleSet { Version = 1, Rules = newRules });
 
-            StatusMessage = $"NG ルールを追加しました ({rule.Target}: {rule.Pattern}) — 開いているスレタブは閉じて開き直すと反映されます";
+            // 開いている全スレタブに「新ルールで新たに hidden になるレス番号」を即時反映する。
+            // 各タブの現在可視レス (tab.Posts) に対して NgService で再計算 → 差分集合を JS に push。
+            // 連鎖あぼーんは「過去の hidden レス経由」までは追えない (= 過去 hidden は tab.Posts に居ない) が、
+            // 「現状可視レス内の連鎖」までは正しく扱える。完全な反映が要る場合はタブを開き直す運用。
+            ApplyNewlyHiddenToOpenTabs(rule);
+
+            StatusMessage = $"NG ルールを追加しました ({rule.Target}: {rule.Pattern})";
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[OpenNgQuickAdd] failed: {ex}");
             StatusMessage = $"NG 登録ダイアログでエラー: {ex.Message}";
+        }
+    }
+
+    /// <summary>NG ルール追加直後に、開いている全スレタブで「現状可視レスのうち新たに hidden になる番号」を
+    /// 計算し、JS に <c>setHiddenPosts</c> で push する。あわせてタブの内部状態 (Posts / HiddenCount /
+    /// HiddenByRule / HiddenByChain) も整合させる。
+    ///
+    /// 制約: tab.Posts は「現時点で可視」のレスのみ保持。過去に既に hidden になっていたレス経由の連鎖は
+    /// この経路では追えない。完全に正しい結果が必要なら従来通りスレを開き直す運用 (= 全レスから再計算)。</summary>
+    private void ApplyNewlyHiddenToOpenTabs(ChBrowser.Models.NgRule justAdded)
+    {
+        foreach (var tab in ThreadTabs)
+        {
+            if (tab.Posts.Count == 0) continue;
+            var breakdown = _ng.ComputeHiddenWithBreakdown(
+                tab.Posts.ToList(), tab.Board.Host, tab.Board.DirectoryName);
+            var newlyHidden = breakdown.HiddenNumbers;
+            if (newlyHidden.Count == 0) continue;
+
+            // 内部 Posts を「可視のみ」に更新 + カウンタ加算
+            var visible = new System.Collections.Generic.List<ChBrowser.Models.Post>(tab.Posts.Count - newlyHidden.Count);
+            foreach (var p in tab.Posts)
+                if (!newlyHidden.Contains(p.Number)) visible.Add(p);
+            tab.ReplaceVisiblePostsAfterNgAdd(visible, newlyHidden, breakdown);
+
+            if (ReferenceEquals(tab, SelectedThreadTab))
+                AboneStatus = $"あぼーん {tab.HiddenCount}";
         }
     }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
@@ -44,8 +45,18 @@ public sealed class ImageMetaService : IDisposable
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ChBrowser/0.1");
     }
 
-    /// <summary>同じ URL に対する HEAD 要求は in-flight Task を共有する。</summary>
-    public Task<ImageMeta> GetAsync(string url) => _cache.GetOrAdd(url, FetchAsync);
+    /// <summary>同じ URL に対する HEAD 要求は in-flight Task を共有する (= GetOrAdd)。
+    /// 失敗結果 (= <see cref="ImageMeta.Ok"/>=false) はキャッシュから外し、次回 (= ユーザがクリックで再試行した時)
+    /// に新しい HEAD を打てるようにする。
+    /// 同 URL を持つ別の Task に置き換わっていた場合に巻き込まないため、KeyValuePair オーバーロードを使う。</summary>
+    public async Task<ImageMeta> GetAsync(string url)
+    {
+        var task = _cache.GetOrAdd(url, FetchAsync);
+        var meta = await task.ConfigureAwait(false);
+        if (!meta.Ok)
+            _cache.TryRemove(new KeyValuePair<string, Task<ImageMeta>>(url, task));
+        return meta;
+    }
 
     private async Task<ImageMeta> FetchAsync(string url)
     {

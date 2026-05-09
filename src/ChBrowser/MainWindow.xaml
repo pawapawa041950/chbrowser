@@ -114,7 +114,12 @@
                 <TextBlock Text="{Binding GestureStatus}" Foreground="#1E88E5" FontWeight="SemiBold" />
             </StatusBarItem>
             <StatusBarItem DockPanel.Dock="Right"><TextBlock Text="{Binding DatSizeStatus}" /></StatusBarItem>
-            <StatusBarItem DockPanel.Dock="Right"><TextBlock Text="{Binding AboneStatus}" /></StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right">
+                <TextBlock Text="{Binding AboneStatus}"
+                           Cursor="Hand"
+                           ToolTip="クリックで NG ルール別の内訳を表示"
+                           MouseLeftButtonUp="AboneStatus_MouseLeftButtonUp" />
+            </StatusBarItem>
             <!-- 残りスペースを埋める StatusMessage (= LastChildFill=true なので最後に置く)。 -->
             <StatusBarItem><TextBlock Text="{Binding StatusMessage}" /></StatusBarItem>
         </StatusBar>

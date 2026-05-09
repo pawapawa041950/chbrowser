@@ -442,52 +442,5 @@ a.anchor.missing {
 .ai-meta-popup-prompt   { color: #1a4080; }
 .ai-meta-popup-negative { color: #803010; }
 
-/* ========== レス番号クリックメニュー (返信 / NG登録) ========== */
-.post-no-menu {
-    position: absolute;
-    z-index: 1000;
-    background: #fff;
-    border: 1px solid #888;
-    box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.18);
-    font-size: 13px;
-    min-width: 140px;
-    padding: 2px 0;
-    user-select: none;
-}
-.post-no-menu .menu-item {
-    padding: 4px 12px;
-    cursor: pointer;
-    white-space: nowrap;
-}
-.post-no-menu .menu-item.disabled {
-    color: #aaa;
-    cursor: default;
-}
-.post-no-menu .menu-item:not(.disabled):hover {
-    background: #1e88e5;
-    color: #fff;
-}
-/* 親項目 (NG) — 右端に展開矢印を出すため flex で左右配置。クリックで子をトグル。 */
-.post-no-menu .menu-parent {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-}
-.post-no-menu .menu-arrow {
-    font-size: 9px;
-    color: #888;
-}
-.post-no-menu .menu-parent:hover .menu-arrow {
-    color: #fff;
-}
-
-/* 子項目 (名前 / ID / ワッチョイ) — 親より少し内側にインデント + 背景を僅かに薄くして階層を示す。 */
-.post-no-menu .menu-children {
-    background: #fafafa;
-    border-top: 1px solid #eee;
-    border-bottom: 1px solid #eee;
-}
-.post-no-menu .menu-child {
-    padding-left: 24px;
-}
+/* レス番号クリックメニューは Phase 25 で WPF ネイティブ ContextMenu に移行
+ * (= ThreadDisplayPane.xaml の PostNoContextMenu リソース)。HTML 側のスタイルは不要なので削除。 */

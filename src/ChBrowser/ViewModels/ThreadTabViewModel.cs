@@ -61,6 +61,31 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private int _hiddenCount;
 
+    /// <summary>NG hidden 数のルール別内訳 (Guid = NgRule.Id、int = このタブで累積した直接マッチ件数)。
+    /// ステータスバー「あぼーん N」のクリックで内訳メニューを出す時に使う。</summary>
+    public Dictionary<Guid, int> HiddenByRule { get; } = new();
+
+    /// <summary>連鎖あぼーんで hidden になったレス数の累積 (= どのルールにも直接マッチせず、
+    /// 別 hidden レスへのアンカー経由でのみ非表示になっているもの)。</summary>
+    [ObservableProperty]
+    private int _hiddenByChain;
+
+    /// <summary>1 batch 分の <see cref="ChBrowser.Services.Ng.NgHiddenBreakdown"/> を内訳カウンタに加算する。
+    /// MainViewModel.AppendPostsWithNg から呼ばれる。</summary>
+    public void AddHiddenBreakdown(ChBrowser.Services.Ng.NgHiddenBreakdown breakdown)
+    {
+        foreach (var (ruleId, count) in breakdown.ByRuleDirect)
+            HiddenByRule[ruleId] = HiddenByRule.TryGetValue(ruleId, out var c) ? c + count : count;
+        HiddenByChain += breakdown.ChainOnly;
+    }
+
+    /// <summary>JS に「これらのレス番号を即時 DOM から消して」と push するためのトリガ。
+    /// 値が変わると WebView2Helper.HidePostsPush (= setHiddenPosts) で送られる。
+    /// 同じ集合を 2 回送る (= ユーザが立て続けに NG 追加する) ケースに備え、IReadOnlyList を新インスタンス
+    /// で setter する (= 参照同一だと PropertyChanged が飛ばない可能性がある)。 </summary>
+    [ObservableProperty]
+    private IReadOnlyList<int>? _pendingHidePostNumbers;
+
     [ObservableProperty]
     private ThreadViewMode _viewMode = ThreadViewMode.Flat;
 
@@ -243,6 +268,25 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         merged.AddRange(batch);
         Posts = merged;
         LatestAppendBatch = new AppendBatchData(batch, isIncremental);
+    }
+
+    /// <summary>NG ルール追加直後に、可視 Posts を絞り込み + JS 側に「これらを DOM から消して」と push する。
+    /// MainViewModel.ApplyNewlyHiddenToOpenTabs から呼ばれる。
+    ///
+    /// 引数:
+    ///  - <paramref name="newVisible"/>: 新ルール適用後に可視として残すレス
+    ///  - <paramref name="newlyHiddenNumbers"/>: 新たに hidden になるレス番号集合 (JS に送る対象)
+    ///  - <paramref name="breakdown"/>: 内訳 (per-rule + 連鎖) — HiddenByRule / HiddenByChain に加算する</summary>
+    public void ReplaceVisiblePostsAfterNgAdd(
+        IReadOnlyList<Post> newVisible,
+        ICollection<int> newlyHiddenNumbers,
+        ChBrowser.Services.Ng.NgHiddenBreakdown breakdown)
+    {
+        Posts = newVisible;
+        HiddenCount += newlyHiddenNumbers.Count;
+        AddHiddenBreakdown(breakdown);
+        // 同じ集合を立て続けに送る場合に PropertyChanged が飛ぶよう、毎回新インスタンスを setter する。
+        PendingHidePostNumbers = new List<int>(newlyHiddenNumbers);
     }
 
     partial void OnViewModeChanged(ThreadViewMode value)

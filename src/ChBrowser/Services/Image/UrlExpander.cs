@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
@@ -67,12 +68,25 @@ public sealed class UrlExpander : IDisposable
 
     /// <summary>
     /// URL を実体画像 URL に展開。失敗 (媒体無し / API エラー / login 要) は null。
-    /// 同じ URL の同時呼び出しは Task を共有する。
+    /// 同じ URL の同時呼び出しは Task を共有する (= GetOrAdd)。
+    /// 失敗結果はキャッシュから外して次回呼び出しで再試行可能にする
+    /// (= 一度のネットワーク失敗・API 障害でその URL が永続的に null 化するのを避ける)。
     /// </summary>
-    public Task<string?> ExpandAsync(string url)
+    public async Task<string?> ExpandAsync(string url)
     {
-        if (string.IsNullOrEmpty(url)) return Task.FromResult<string?>(null);
-        return _cache.GetOrAdd(url, ExpandInternalAsync);
+        if (string.IsNullOrEmpty(url)) return null;
+
+        var task   = _cache.GetOrAdd(url, ExpandInternalAsync);
+        var result = await task.ConfigureAwait(false);
+
+        if (result is null)
+        {
+            // 自分の task と一致するキャッシュ entry だけ削除する (= 別呼び出しが再 GetOrAdd で
+            // 差し替えていた場合に巻き込まないため、KeyValuePair オーバーロードを使う)。
+            _cache.TryRemove(new KeyValuePair<string, Task<string?>>(url, task));
+        }
+
+        return result;
     }
 
     private async Task<string?> ExpandInternalAsync(string url)
@@ -89,15 +103,29 @@ public sealed class UrlExpander : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[UrlExpand] {url}: {ex.Message}");
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] {url}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
 
     // ---------------------------------------------------------------
-    // x.com (Twitter) — fxtwitter API
+    // x.com (Twitter) — fxtwitter API (動画/GIF はサムネイル URL を返す)
     // ---------------------------------------------------------------
 
+    /// <summary>
+    /// fxtwitter API でツイートを取得し、表示用画像 URL を返す。
+    /// 失敗理由 (HTTP / JSON / メディア無し) は LogService に書き出す (= ログウィンドウで確認可)。
+    ///
+    /// <para>fxtwitter のレスポンス構造:</para>
+    /// <list type="bullet">
+    ///   <item><description><c>tweet.media.photos[]</c> — 写真。<c>url</c> が画像 URL。</description></item>
+    ///   <item><description><c>tweet.media.videos[]</c> — 動画 / GIF。<c>thumbnail_url</c> がサムネイル画像 URL、<c>url</c> は .mp4。</description></item>
+    ///   <item><description><c>tweet.media.all[]</c> — 上記を表示順で混ぜたもの。<c>type</c> で識別。</description></item>
+    ///   <item><description><c>tweet.quote</c> — 引用元ツイート。引用 RT ではメディアが quote 側にある。</description></item>
+    /// </list>
+    /// メイン tweet にメディアがあればそれを、無ければ quote 内のメディアを探す
+    /// (= 引用 RT で本文側に写真が無く quote 側に写真があるパターンに対応)。
+    /// </summary>
     private async Task<string?> ExpandTwitterAsync(string statusId)
     {
         // ユーザ名はパスに必要だが fxtwitter は値を検証しないので "i" を入れておく。
@@ -106,22 +134,80 @@ public sealed class UrlExpander : IDisposable
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-        if (!res.IsSuccessStatusCode) return null;
+        if (!res.IsSuccessStatusCode)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[UrlExpand] fxtwitter status={statusId} → HTTP {(int)res.StatusCode}");
+            return null;
+        }
 
         await using var stream = await res.Content.ReadAsStreamAsync().ConfigureAwait(false);
         using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
 
-        if (!doc.RootElement.TryGetProperty("tweet", out var tweet)) return null;
-        if (tweet.ValueKind != JsonValueKind.Object) return null;
-        if (!tweet.TryGetProperty("media", out var media)) return null;
-        if (media.ValueKind != JsonValueKind.Object) return null;
-        if (!media.TryGetProperty("photos", out var photos)) return null;
-        if (photos.ValueKind != JsonValueKind.Array || photos.GetArrayLength() == 0) return null;
+        if (!doc.RootElement.TryGetProperty("tweet", out var tweet) || tweet.ValueKind != JsonValueKind.Object)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[UrlExpand] fxtwitter status={statusId}: tweet object missing");
+            return null;
+        }
 
-        var first = photos[0];
-        if (first.ValueKind != JsonValueKind.Object) return null;
-        if (!first.TryGetProperty("url", out var u)) return null;
-        return u.GetString();
+        // 1) メイン tweet のメディアを試す
+        var fromMain = TryExtractMediaUrl(tweet);
+        if (fromMain is not null) return fromMain;
+
+        // 2) 引用ツイート (= quote tweet) のメディアを試す。引用 RT で本文側に画像が無く、
+        //    quote 側に画像があるパターン (5ch でよく見る) に対応。
+        if (tweet.TryGetProperty("quote", out var quote) && quote.ValueKind == JsonValueKind.Object)
+        {
+            var fromQuote = TryExtractMediaUrl(quote);
+            if (fromQuote is not null) return fromQuote;
+        }
+
+        // 媒体がそもそも無いツイート (テキストのみ) はここに来る。静かに null。
+        return null;
+    }
+
+    /// <summary>fxtwitter の tweet object (メインまたは quote) から表示用画像 URL を抽出。
+    /// 優先順位: photos[0].url → videos[0].thumbnail_url → all[0].thumbnail_url/url。
+    /// メディアが無い / 取り出せない場合は null。</summary>
+    private static string? TryExtractMediaUrl(JsonElement tweet)
+    {
+        if (!tweet.TryGetProperty("media", out var media) || media.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // 1) 写真 — photos[0].url
+        if (media.TryGetProperty("photos", out var photos)
+            && photos.ValueKind == JsonValueKind.Array && photos.GetArrayLength() > 0
+            && photos[0].ValueKind == JsonValueKind.Object
+            && photos[0].TryGetProperty("url", out var pu)
+            && pu.ValueKind == JsonValueKind.String)
+        {
+            return pu.GetString();
+        }
+
+        // 2) 動画 / GIF — videos[0].thumbnail_url (サムネイル画像)
+        //    .mp4 そのものではなく thumbnail_url を返すのは、JS 側がここに <img> を作る前提のため。
+        if (media.TryGetProperty("videos", out var videos)
+            && videos.ValueKind == JsonValueKind.Array && videos.GetArrayLength() > 0
+            && videos[0].ValueKind == JsonValueKind.Object
+            && videos[0].TryGetProperty("thumbnail_url", out var vt)
+            && vt.ValueKind == JsonValueKind.String)
+        {
+            return vt.GetString();
+        }
+
+        // 3) フォールバック: all[0] から (将来 photos/videos 配列が削られた場合の保険)
+        if (media.TryGetProperty("all", out var all)
+            && all.ValueKind == JsonValueKind.Array && all.GetArrayLength() > 0
+            && all[0].ValueKind == JsonValueKind.Object)
+        {
+            if (all[0].TryGetProperty("thumbnail_url", out var at) && at.ValueKind == JsonValueKind.String)
+                return at.GetString();
+            if (all[0].TryGetProperty("url",           out var au) && au.ValueKind == JsonValueKind.String)
+                return au.GetString();
+        }
+
+        return null;
     }
 
     // ---------------------------------------------------------------

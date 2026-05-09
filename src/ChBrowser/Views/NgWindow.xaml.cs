@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using ChBrowser.ViewModels;
@@ -18,6 +20,18 @@ public partial class NgWindow : Window
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>指定 ID のルール行を DataGrid で選択 + スクロールイントゥビュー + フォーカス。
+    /// ステータスバーの「あぼーん」内訳メニューから「このルールを開く」操作で呼ばれる。
+    /// 該当 ID が <see cref="NgWindowViewModel.Rules"/> に居ない (= 削除済み等) なら何もしない。</summary>
+    public void SelectRuleById(Guid id)
+    {
+        var match = _vm.Rules.FirstOrDefault(r => r.Id == id);
+        if (match is null) return;
+        RulesGrid.SelectedItem = match;
+        RulesGrid.ScrollIntoView(match);
+        RulesGrid.Focus();
+    }
 
     /// <summary>有効化トグルのクリックで呼ばれる。トグルが ON になった直後に正規表現を検証し、
     /// 不正なら警告 + 強制 OFF。CheckBox の Click は IsChecked が既に切り替わった状態で発火する。</summary>

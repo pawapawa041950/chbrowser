@@ -57,7 +57,147 @@ public partial class ThreadDisplayPane : UserControl
             case "replyToPost":        HandleReplyToPost(sender, payload); break;
             case "ngAdd":              HandleNgAdd(sender, payload); break;
             case "toggleOwnPost":      HandleToggleOwnPost(sender, payload); break;
+            case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
+            case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
         }
+    }
+
+    // ---- URL (テキストリンク / 画像サムネ) 右クリックメニュー (Phase 25) ----
+
+    /// <summary>JS から「URL リンクが右クリックされた」通知を受け、UrlContextMenu を開く。
+    /// 対象 URL は ContextMenu.Tag に積んで <see cref="UrlCopy_Click"/> などから読み出す。</summary>
+    private void HandleUrlContextMenu(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (TryFindResource("UrlContextMenu") is not ContextMenu menu) return;
+        menu.PlacementTarget = wv;
+        menu.Placement       = PlacementMode.MousePoint;
+        menu.Tag             = url;
+        menu.IsOpen          = true;
+    }
+
+    private void UrlCopy_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi) return;
+        var owner = ItemsControl.ItemsControlFromItemContainer(mi) as ContextMenu
+                  ?? mi.Parent as ContextMenu;
+        if (owner?.Tag is string url && !string.IsNullOrEmpty(url))
+        {
+            try { Clipboard.SetText(url); }
+            catch (Exception ex) { Debug.WriteLine($"[UrlCopy] Clipboard.SetText failed: {ex.Message}"); }
+        }
+    }
+
+    // ---- レス番号 (post-no) コンテキストメニュー (Phase 25 で HTML から WPF ネイティブに移行) ----
+
+    /// <summary>レス番号メニューに乗せる対象レスの情報。
+    /// JS の postNoContextMenu ペイロードから組み立て、ContextMenu.DataContext に積んで
+    /// 各 MenuItem の Click ハンドラから読み取る (= ネスト MenuItem でも DataContext 継承で届く)。</summary>
+    private sealed record PostNoMenuContext(
+        WebView2 Wv, int Number, string Name, string Id, string Watchoi, bool IsOwn);
+
+    /// <summary>JS から「post-no がクリック / 右クリックされた」通知を受け、PostNoContextMenu を開く。
+    /// PlacementMode.MousePoint でカーソル位置に出す (= 既存タブ右クリックメニューと同じ流儀)。</summary>
+    private void HandlePostNoContextMenu(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        var name    = payload.TryGetProperty("name",    out var npp) ? (npp.GetString() ?? "") : "";
+        var id      = payload.TryGetProperty("id",      out var ipp) ? (ipp.GetString() ?? "") : "";
+        var watchoi = payload.TryGetProperty("watchoi", out var wpp) ? (wpp.GetString() ?? "") : "";
+        var isOwn   = payload.TryGetProperty("isOwn",   out var opp) && opp.ValueKind == JsonValueKind.True;
+
+        if (TryFindResource("PostNoContextMenu") is not ContextMenu menu) return;
+        menu.PlacementTarget = wv;
+        menu.Placement       = PlacementMode.MousePoint;
+        menu.DataContext     = new PostNoMenuContext(wv, num, name, id, watchoi, isOwn);
+        menu.IsOpen          = true;
+    }
+
+    /// <summary>メニューが開く瞬間に、対象レスの状態に合わせて項目の Header / IsEnabled を書き換える。
+    /// - 「自分の書き込みにする / 解除」label をトグル
+    /// - NG サブ項目に値を埋め (例: "名前 — 〜")、値が空のときは IsEnabled=false でグレーアウト</summary>
+    private void PostNoContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        if (cm.DataContext is not PostNoMenuContext ctx) return;
+
+        foreach (var mi in TabClickHelper.EnumerateAllMenuItems(cm))
+        {
+            switch (mi.Tag as string)
+            {
+                case "own":
+                    mi.Header = ctx.IsOwn ? "自分の書き込み解除" : "自分の書き込みにする";
+                    break;
+                case "ngName":
+                    mi.Header    = "名前 — "       + (string.IsNullOrEmpty(ctx.Name)    ? "(空)"   : ctx.Name);
+                    mi.IsEnabled = !string.IsNullOrEmpty(ctx.Name);
+                    break;
+                case "ngId":
+                    mi.Header    = "ID — "         + (string.IsNullOrEmpty(ctx.Id)      ? "(空)"   : ctx.Id);
+                    mi.IsEnabled = !string.IsNullOrEmpty(ctx.Id);
+                    break;
+                case "ngWatchoi":
+                    mi.Header    = "ワッチョイ — " + (string.IsNullOrEmpty(ctx.Watchoi) ? "(なし)" : ctx.Watchoi);
+                    mi.IsEnabled = !string.IsNullOrEmpty(ctx.Watchoi);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>クリックされた MenuItem (= sender) から PostNoMenuContext を取り出すヘルパ。
+    /// ContextMenu.DataContext がネスト MenuItem にも継承されるため、サブメニュー項目からも参照できる。</summary>
+    private static PostNoMenuContext? PostNoCtxOf(object sender)
+        => (sender as MenuItem)?.DataContext as PostNoMenuContext;
+
+    /// <summary>「このレスに飛ぶ」: JS 側に scrollToPost を投げ、本文側 (= primary レス id="rN") に
+    /// スクロールしてもらう。あわせて全ポップアップを即時閉じる (= 飛んだ先が popup に隠れないようにする)。
+    /// 主用途: アンカーポップアップ内のレスから本文側の該当レスへ移動する。</summary>
+    private void PostNoJump_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (ctx.Wv.CoreWebView2 is null) return;
+        var json = JsonSerializer.Serialize(new { type = "scrollToPost", number = ctx.Number });
+        ctx.Wv.CoreWebView2.PostWebMessageAsJson(json);
+    }
+
+    private void PostNoReply_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (DataContext is not MainViewModel main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        main.OpenReplyDialog(tab, ctx.Number);
+    }
+
+    private void PostNoToggleOwn_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (DataContext is not MainViewModel main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        main.ToggleOwnPost(tab, ctx.Number, !ctx.IsOwn);
+    }
+
+    private void PostNoNgName_Click(object sender, RoutedEventArgs e)
+        => OpenNgQuickFromMenu(sender, "name",    c => c.Name);
+
+    private void PostNoNgId_Click(object sender, RoutedEventArgs e)
+        => OpenNgQuickFromMenu(sender, "id",      c => c.Id);
+
+    private void PostNoNgWatchoi_Click(object sender, RoutedEventArgs e)
+        => OpenNgQuickFromMenu(sender, "watchoi", c => c.Watchoi);
+
+    private void OpenNgQuickFromMenu(object sender, string target, Func<PostNoMenuContext, string> getValue)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (DataContext is not MainViewModel main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        var value = getValue(ctx);
+        if (string.IsNullOrEmpty(value)) return;
+        main.OpenNgQuickAdd(tab, target, value);
     }
 
     /// <summary>JS の post-no クリックメニュー → 「自分の書き込み」トグルで呼ばれる。

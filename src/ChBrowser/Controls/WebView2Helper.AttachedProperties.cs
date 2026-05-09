@@ -269,6 +269,35 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // HidePostsPush (スレ表示: 指定レス番号集合を即時 DOM から取り除く)
+    //
+    // NG ルールが追加された直後に「現状開いているスレで新たに hidden になる番号」を
+    // C# 側で計算し、JS に setHiddenPosts メッセージで push する。
+    // 値の型は IReadOnlyList<int> (or any IEnumerable<int>)。null と空配列は早期 return。
+    // 同じ集合を 2 回流しても DOM 操作は冪等 (= 既に消えているレスは何もしないので再 push は安全)。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty HidePostsPushProperty =
+        DependencyProperty.RegisterAttached(
+            "HidePostsPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnHidePostsPushChanged));
+
+    public static object? GetHidePostsPush(DependencyObject d) => d.GetValue(HidePostsPushProperty);
+    public static void    SetHidePostsPush(DependencyObject d, object? value) => d.SetValue(HidePostsPushProperty, value);
+
+    private static void OnHidePostsPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not System.Collections.Generic.IEnumerable<int> nums) return;
+        var arr = System.Linq.Enumerable.ToArray(nums);
+        if (arr.Length == 0) return;
+        var json = JsonSerializer.Serialize(new { type = "setHiddenPosts", numbers = arr }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
     // ViewMode (スレ表示: flat / tree / dedupTree の表示モードを JS に通知)
     // ------------------------------------------------------------
 

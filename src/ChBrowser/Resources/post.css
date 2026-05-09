@@ -23,6 +23,7 @@
     cursor: pointer;
     text-decoration: underline;
     text-underline-offset: 2px;
+    padding: 0px;
 }
 .post-no:hover {
     color: #003300;
@@ -84,22 +85,17 @@
     display: none;
 }
 
-/* 返信数バッジ。テンプレで span は常に DOM に出すようになっており、0 件のときは中身が空。
- * :empty で非表示にすることで「件数があるときだけ見える」挙動を実現する。
- * data-replies にカンマ区切りのレス番号が入り、ホバーすると返信元レスをポップアップする。 */
+/* 返信数バッジ。テンプレで span は常に DOM に出し、0 件のときは data-count="0"。
+ * `[data-count="0"]` セレクタで非表示にすることで「件数があるときだけ見える」挙動を実現する。
+ * 内側 <span class="reply-num"> に件数のみが入り、テキスト「返」は post.html 側に直書きしている
+ * (= 文章=HTML、デザイン=CSS、データ=JS の役割分離)。
+ * data-replies はカンマ区切りのレス番号で、post-no をホバーした時にこの値からポップアップを組み立てる
+ * (= バッジ自体は plain text。リンク装飾は持たない)。 */
 .post-reply-count {
-    color: #006400;
     font-size: 11px;
-    margin-left: 8px;
-    cursor: help;
-    text-decoration: underline dotted;
-    text-underline-offset: 2px;
 }
-.post-reply-count:empty {
+.post-reply-count[data-count="0"] {
     display: none;
-}
-.post-reply-count:hover {
-    color: #003300;
 }
 
 /* ツリー表示で他レス直下に埋め込まれた時の枠線 + 余白 */

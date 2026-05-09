@@ -46,7 +46,8 @@
                                Text="板名を「なし (全板)」にすると全板で適用されます。" />
                 </StackPanel>
             </Border>
-            <DataGrid ItemsSource="{Binding Rules}"
+            <DataGrid x:Name="RulesGrid"
+                      ItemsSource="{Binding Rules}"
                       AutoGenerateColumns="False"
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"

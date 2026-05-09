@@ -8,9 +8,9 @@
              d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
     <StackPanel>
 
-        <TextBlock Text="CSS ファイルをエディタで開く" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="CSS / HTML ファイルをエディタで開く" FontWeight="SemiBold" Margin="0,0,0,4" />
         <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,8"
-                   Text="関連付けられているアプリで CSS ファイルを開きます。ディスクに未配置のファイルは「既定 CSS を生成」で出してから編集してください。" />
+                   Text="関連付けられているアプリで CSS / HTML ファイルを開きます。ファイルがディスクに無いときは内蔵の既定設定で動作しており、編集するには先に「既定 CSS / HTML を生成」を押す必要があります。" />
 
         <StackPanel Orientation="Vertical" Margin="0,0,0,16">
             <Button Content="お気に入りペイン (favorites.css)"
@@ -53,6 +53,14 @@
                     HorizontalContentAlignment="Left"
                     Command="{Binding OpenCssFileCommand}"
                     CommandParameter="post.css" />
+            <Button Content="レス 1 件分の HTML 構造 (post.html)"
+                    HorizontalAlignment="Left"
+                    Padding="10,4"
+                    Margin="0,2"
+                    Width="320"
+                    HorizontalContentAlignment="Left"
+                    Command="{Binding OpenCssFileCommand}"
+                    CommandParameter="post.html" />
         </StackPanel>
 
         <TextBlock Text="操作" FontWeight="SemiBold" Margin="0,0,0,4" />
@@ -65,7 +73,7 @@
                     Padding="10,4"
                     Margin="0,0,8,0"
                     Command="{Binding OpenThemeFolderCommand}" />
-            <Button Content="既定 CSS を生成"
+            <Button Content="既定 CSS / HTML を生成"
                     Padding="10,4"
                     Command="{Binding ExtractDefaultCssCommand}" />
         </StackPanel>

@@ -15,11 +15,15 @@ namespace ChBrowser.Services.Theme;
 /// 設計書 §5.7 / §5.3.1 参照。</para>
 ///
 /// <para>
-/// 動作:
-/// <list type="bullet">
-/// <item><description>RELEASE: <c>data/themes/&lt;ActiveThemeName&gt;/&lt;name&gt;.css</c> が存在すればそれを、無ければ埋め込み既定を読む</description></item>
-/// <item><description>DEBUG: 常に埋め込みリソースを読む (= ソース変更を即反映、ディスクキャッシュに邪魔されない)</description></item>
-/// </list>
+/// 配置ポリシー: 起動時は何もディスクに置かない。設定 → 「既定 CSS / HTML を生成」を
+/// ユーザが明示的に押した時だけ <see cref="ExtractDefaultThemeFiles"/> 経由で 5 CSS + post.html
+/// が <c>data/themes/&lt;ActiveThemeName&gt;/</c> に書き出される。これにより「ファイルが無い =
+/// 内蔵既定で動作中」が一目で分かる状態を保つ。
+/// </para>
+///
+/// <para>
+/// 読み出し動作 (<see cref="LoadCss"/> / <see cref="LoadActiveTheme"/>):
+/// ディスクに該当ファイルがあればそれを、無ければ埋め込み既定を返す (Debug/Release 共通)。
 /// </para>
 ///
 /// <para>

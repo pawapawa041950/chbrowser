@@ -549,8 +549,9 @@ public partial class App : Application
         }
     }
 
-    /// <summary>指定 CSS ファイルを関連付けエディタで開く。
-    /// ディスクに無ければ埋め込み既定を書き出してから開く (= ユーザは「開く」 1 操作で編集できる)。</summary>
+    /// <summary>指定 CSS / HTML ファイルを関連付けエディタで開く。
+    /// ファイルが無い場合は自動展開せず、「既定 CSS / HTML を生成」を押すよう案内する
+    /// (= 「ボタンを押さない限りディスクに置かない」方針)。</summary>
     private void OpenCssFile(string fileName)
     {
         if (_themeService is null) return;
@@ -559,13 +560,10 @@ public partial class App : Application
         {
             if (!System.IO.File.Exists(path))
             {
-                // 1 ファイルだけ生成したいが現状の API は全展開しか無いので、まず全展開してからこのファイルを開く
-                _themeService.ExtractDefaultThemeFiles();
-            }
-            if (!System.IO.File.Exists(path))
-            {
-                MessageBox.Show(MainWindow ?? Current.MainWindow, $"ファイルを生成できませんでした: {path}",
-                    "ChBrowser", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(MainWindow ?? Current.MainWindow,
+                    $"{fileName} はディスクに存在しません (= 内蔵の既定設定で動作中)。\n\n" +
+                    "編集するには先に「既定 CSS / HTML を生成」ボタンを押してください。",
+                    "ChBrowser", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             Process.Start(new ProcessStartInfo
@@ -577,11 +575,18 @@ public partial class App : Application
         catch (Exception ex) { Debug.WriteLine($"[App] OpenCssFile failed: {ex.Message}"); }
     }
 
-    /// <summary>NG 設定ウィンドウをモードレス + シングルトンで開く (Phase 13)。</summary>
-    public void ShowNgWindow()
+    /// <summary>NG 設定ウィンドウをモードレス + シングルトンで開く (Phase 13)。
+    /// <paramref name="selectRuleId"/> が指定されたら、ウィンドウ表示後に該当ルール行を選択 + スクロール。
+    /// 既に開いているウィンドウに対しては、Activate した上で同じく選択を移す。</summary>
+    public void ShowNgWindow(System.Guid? selectRuleId = null)
     {
         if (_mainVm is null || _ngService is null) return;
-        if (_ngWindow is { IsVisible: true }) { _ngWindow.Activate(); return; }
+        if (_ngWindow is { IsVisible: true })
+        {
+            _ngWindow.Activate();
+            if (selectRuleId is { } id) _ngWindow.SelectRuleById(id);
+            return;
+        }
 
         // 板選択用の一覧を MainViewModel から構築。
         // 表示名は「英名 (日本語名)」形式 (= 検索は英名で行うため英名を先頭にする)。
@@ -603,6 +608,17 @@ public partial class App : Application
 
         _ngWindow = new ChBrowser.Views.NgWindow(vm) { Owner = MainWindow };
         _ngWindow.Closed += (_, _) => _ngWindow = null;
+        if (selectRuleId is { } selId)
+        {
+            // Loaded 後でないと DataGrid 内のコンテナがまだ生成されておらず ScrollIntoView が効かないため、
+            // ContentRendered (= 初回レンダ完了後) を 1 回だけ待ってから選択を入れる。
+            _ngWindow.ContentRendered += SelectOnce;
+            void SelectOnce(object? s, EventArgs e)
+            {
+                _ngWindow!.ContentRendered -= SelectOnce;
+                _ngWindow.SelectRuleById(selId);
+            }
+        }
         _ngWindow.Show();
     }
 
@@ -632,7 +648,7 @@ public partial class App : Application
         {
             _themeService.ExtractDefaultThemeFiles();
             MessageBox.Show(MainWindow ?? Current.MainWindow,
-                $"既定 CSS を {_themeService.ThemeFolderPath} に生成しました (既存ファイルは上書きしません)。",
+                $"既定 CSS / HTML を {_themeService.ThemeFolderPath} に生成しました (既存ファイルは上書きしません)。",
                 "ChBrowser", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) { Debug.WriteLine($"[App] ExtractDefaultThemeFiles failed: {ex.Message}"); }

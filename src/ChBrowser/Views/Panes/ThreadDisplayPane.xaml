@@ -31,6 +31,30 @@
             <MenuItem Header="次スレ候補検索" Click="ThreadTabFindNext_Click" />
             <MenuItem Header="ログ削除"       Click="ThreadTabDeleteLog_Click" />
         </ContextMenu>
+
+        <!-- レス番号クリック / 右クリックで開くコンテキストメニュー (Phase 25 で HTML 版から WPF ネイティブに移行)。
+             JS の postNoContextMenu メッセージを受けて HandlePostNoContextMenu が IsOpen=true で開く。
+             Opened イベントで「自分の書き込み」label と NG サブ項目の値表示 + 有効/無効を動的に書き換える。 -->
+        <ContextMenu x:Key="PostNoContextMenu" x:Shared="False"
+                     Opened="PostNoContextMenu_Opened">
+            <MenuItem Tag="jump"  Header="このレスに飛ぶ"        Click="PostNoJump_Click" />
+            <Separator />
+            <MenuItem Tag="reply" Header="返信"                  Click="PostNoReply_Click" />
+            <MenuItem Tag="own"   Header="自分の書き込みにする"  Click="PostNoToggleOwn_Click" />
+            <Separator />
+            <MenuItem Header="NG 登録">
+                <MenuItem Tag="ngName"    Click="PostNoNgName_Click" />
+                <MenuItem Tag="ngId"      Click="PostNoNgId_Click" />
+                <MenuItem Tag="ngWatchoi" Click="PostNoNgWatchoi_Click" />
+            </MenuItem>
+        </ContextMenu>
+
+        <!-- URL (本文中のテキストリンク / 画像サムネ) 右クリック用コンテキストメニュー。
+             JS の urlContextMenu メッセージを受けて HandleUrlContextMenu が IsOpen=true で開く。
+             対象 URL は ContextMenu.Tag に積んでクリックハンドラから読み出す。 -->
+        <ContextMenu x:Key="UrlContextMenu" x:Shared="False">
+            <MenuItem Header="リンクをコピー" Click="UrlCopy_Click" />
+        </ContextMenu>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">
@@ -291,6 +315,7 @@
                                   ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
+                                  ctrl:WebView2Helper.HidePostsPush="{Binding PendingHidePostNumbers}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"
