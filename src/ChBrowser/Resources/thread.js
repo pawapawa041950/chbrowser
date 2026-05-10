@@ -571,9 +571,8 @@
     }
 
     // ---------- post HTML builders ----------
-    // body 直下にインライン展開する数 / 子の最大数。
+    // body 直下にインライン展開する範囲アンカー (>>N-M) の最大幅。例: 5 だと >>1-5 までは展開、>>1-100 はしない。
     const INLINE_EXPAND_RANGE_LIMIT = 5;
-    const REVERSE_EXPAND_LIMIT = 10;
 
     // ---- テンプレートエンジン (post.html を読んで {{var}} / {{#if}}{{/if}} を解釈) ----
 
@@ -795,19 +794,6 @@
         return result;
     }
     function countValidForwardAnchors(p) { return getValidForwardAnchors(p).length; }
-
-    /** parentNum を直接 anchor している「単独 anchor の子レス」の件数。
-     *  ツリー描画の親→子展開は『単独 anchor の子だけ』を対象とする (= 多 anchor は親 embed を持たず単独で末尾配置)
-     *  ため、reverse-expansion の overflow 指標 (…他 N 件) も同じ母集団で数える必要がある。 */
-    function countSingleAnchorReverseChildren(parentNum) {
-        const all = currentReverseIndex.get(parentNum) || [];
-        let count = 0;
-        for (const cn of all) {
-            const c = postsByNumber.get(cn);
-            if (c && countValidForwardAnchors(c) === 1) count++;
-        }
-        return count;
-    }
 
     // ---- Phase 20: incremental セクションの chain forest 構築 ----
     /** num の祖先を anchor で 1 段ずつ遡って [oldest, ..., num] の配列にする。
@@ -1922,11 +1908,14 @@
      *  例: ツリーモードで DOM 順 1,2,3,10,12,4,5,13,6,7,8,9 のスレで「13 まで見えて 6 が下端切れ」だと、
      *  rendered = {1,2,3,10,12,4,5,13} (6 は下端切れで除外)、1 から連番は {1,2,3,4,5} → N=5。 */
     function findReadProgressMaxNumber() {
-        const vh = document.documentElement.clientHeight;
+        if (!allPosts || allPosts.length === 0) return null;
+        const vh   = document.documentElement.clientHeight;
+        const maxN = allPosts[allPosts.length - 1].number;
         let lastValid = 0;
-        for (let n = 1; ; n++) {
+        for (let n = 1; n <= maxN; n++) {
             const el = document.getElementById('r' + n);
-            if (!el) break; // 番号が DOM に居ない (= 通常はない) 時点で打ち切り
+            // DOM に居ない番号は防御的に飛ばす (= 何らかの理由で primary id が無いケースの保険)。
+            if (!el) continue;
             if (el.getBoundingClientRect().bottom > vh) break; // 連番が途切れた → 確定
             lastValid = n;
         }
@@ -2643,30 +2632,13 @@
     }
 
     /** parent (= reverseIndex の親レス) の reverse-expansion 配下に p を embed として追加する。
-     *  REVERSE_EXPAND_LIMIT を超える場合は「…他 N 件」インジケータに集約する。
+     *  全件展開する (= 旧実装の「上限超過 → "…他 N 件" に集約」抑制は撤去)。
      *   mode = 'tree'      : id 無しの duplicate コピー (primary は別途末尾にも出る前提)。
      *   mode = 'dedupTree' : id 付きの canonical 配置 (primary はここだけ)。
      *  既存 DOM に親 primary が無い (= まれ) 場合は false を返し caller 側 fallback に任せる。 */
     function embedUnderParentReverse(parentNum, p, mode) {
         const parentEl = document.getElementById('r' + parentNum);
         if (!parentEl) return false;
-
-        const existingRevs = parentEl.querySelectorAll(':scope > .inline-expansion.reverse').length;
-        let moreEl       = parentEl.querySelector(':scope > .inline-expansion.reverse-more');
-
-        if (existingRevs >= REVERSE_EXPAND_LIMIT) {
-            // limit 超過: 実 embed はせず indicator のカウントを更新。
-            // 母数は「単独 anchor の子レス」の総件数 (= renderCurrentViewMode と同じ式)。
-            const total = countSingleAnchorReverseChildren(parentNum);
-            const overflow = Math.max(1, total - REVERSE_EXPAND_LIMIT);
-            if (!moreEl) {
-                moreEl = document.createElement('div');
-                moreEl.className = 'inline-expansion reverse-more';
-                parentEl.appendChild(moreEl);
-            }
-            moreEl.textContent = '…他 ' + overflow + ' 件';
-            return true;
-        }
 
         let embedHtml;
         if (mode === 'tree') {
@@ -2686,8 +2658,7 @@
         });
         attachAnchorHandlers(wrapper, 0);
 
-        if (moreEl) parentEl.insertBefore(wrapper, moreEl);
-        else        parentEl.appendChild(wrapper);
+        parentEl.appendChild(wrapper);
         return true;
     }
 

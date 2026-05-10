@@ -239,11 +239,6 @@ a.anchor.missing {
 .inline-expansion {
     margin: 2px 0 2px 8px;
 }
-.inline-expansion.reverse-more {
-    color: #888;
-    font-size: 11px;
-    padding: 2px 8px;
-}
 
 /* anchor popup */
 .anchor-popup {

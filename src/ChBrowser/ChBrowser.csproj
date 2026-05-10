@@ -20,6 +20,13 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
+  <!-- Release ビルドでは PDB を一切出さない (= 配布バイナリにビルド機の作業パスが
+       PDB 参照として埋め込まれるのを防ぐ)。Debug ビルドは従来通り PDB あり。 -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- バージョン情報ダイアログがアイコンを表示するため、WPF Resource としても埋め込む
          (= ApplicationIcon は EXE 自体のアイコンであり、別経路)。 -->
