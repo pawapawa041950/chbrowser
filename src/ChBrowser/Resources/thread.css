@@ -289,6 +289,24 @@ a.anchor.missing {
     background: transparent;
 }
 
+/* ポップアップ系 (.anchor-popup = レス引用 / .ai-meta-popup = AI メタ) では普通の縦スクロールバーを
+   表示する (= ポップアップは外からスクロールしようがないので、デフォルト非表示にすると中身が
+   見切れた時に手段が無くなる)。リッチではなく見慣れた灰色の細いバーで十分。 */
+.anchor-popup::-webkit-scrollbar,
+.ai-meta-popup::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+    background: #f0f0f0;
+}
+.anchor-popup::-webkit-scrollbar-thumb,
+.ai-meta-popup::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+}
+.anchor-popup::-webkit-scrollbar-thumb:hover,
+.ai-meta-popup::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
+
 /* ---- リッチスクロールバー (本格スクロールバーとして機能) ---- */
 #richScrollbar {
     position: fixed;
