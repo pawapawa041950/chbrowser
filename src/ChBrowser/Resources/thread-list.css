@@ -17,7 +17,9 @@ thead th {
     border-bottom: 1px solid #ccc;
     position: sticky;
     top: 0;
-    z-index: 1;
+    /* tbody 側の .log-mark / お気に入り ★ も z-index を持つので、それより明確に上に積む。
+     * 同値だと document 順で tbody が後にあって貫通する。 */
+    z-index: 10;
     font-weight: 600;
 }
 thead th.sortable { cursor: pointer; user-select: none; }

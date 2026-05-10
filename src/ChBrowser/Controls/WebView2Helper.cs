@@ -237,20 +237,13 @@ public static partial class WebView2Helper
             if (cache is null) return;
             if (!cache.TryGet(url, out var hit)) return;
 
-            try
-            {
-                // Stream は WebView2 が消費・dispose する。同じファイルを 2 回キャッシュヒットさせる場合に備え、
-                // ファイル → メモリへ全読みしてから渡す (FileStream のままだと読み中の競合が起きうる)。
-                var bytes  = File.ReadAllBytes(hit.FilePath);
-                var ms     = new MemoryStream(bytes, writable: false);
-                var headers = $"Content-Type: {hit.ContentType}";
-                e.Response  = core.Environment.CreateWebResourceResponse(ms, 200, "OK", headers);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[ImageCache] hit serve failed for {url}: {ex.Message}");
-                // Response 未設定 → 通常通りネットワークへ流れる
-            }
+            // GetDeferral で応答を deferred 化 → ハンドラはここで即時 return し WebView2 dispatcher を解放。
+            // FileStream を別スレッドで開き (= ファイル全読みはせず lazy 読み)、
+            // CreateWebResourceResponse + Response 設定 + Complete を完了通知に集約する。
+            // 旧実装の File.ReadAllBytes (= 巨大画像で数十 ms 同期ブロック + 全画像分のメモリ確保)
+            // が解消される。FileShare.Read で同じファイルを 2 経路から並列読みされても安全。
+            var deferral = e.GetDeferral();
+            _ = ServeFromCacheAsync(core, e, hit, url, deferral);
         };
 
         core.WebResourceResponseReceived += async (s, e) =>
@@ -282,6 +275,38 @@ public static partial class WebView2Helper
                 Debug.WriteLine($"[ImageCache] capture failed: {ex.Message}");
             }
         };
+    }
+
+    /// <summary>キャッシュヒットしたローカルファイルを <see cref="FileStream"/> で開いて
+    /// WebView2 に応答として渡す。Worker thread で実行することで dispatcher を即時解放する。
+    /// FileStream は WebView2 が必要分だけ lazy に読み、応答完了後に dispose する。</summary>
+    private static async Task ServeFromCacheAsync(
+        CoreWebView2 core,
+        CoreWebView2WebResourceRequestedEventArgs e,
+        Services.Image.ImageCacheHit hit,
+        string url,
+        CoreWebView2Deferral deferral)
+    {
+        try
+        {
+            await Task.Yield(); // 即座に worker thread (= ThreadPool) に処理を逃がす
+            var fs = new FileStream(
+                hit.FilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+            var headers  = $"Content-Type: {hit.ContentType}";
+            e.Response   = core.Environment.CreateWebResourceResponse(fs, 200, "OK", headers);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ImageCache] hit serve failed for {url}: {ex.Message}");
+            // Response 未設定 → WebView2 が通常通りネットワーク fetch にフォールバック
+        }
+        finally
+        {
+            deferral.Complete();
+        }
     }
 
     // ------------------------------------------------------------

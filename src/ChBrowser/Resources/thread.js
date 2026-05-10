@@ -2319,11 +2319,16 @@
      *  - 「返信N件」バッジを除去 → そこからさらに返信ポップアップが連鎖しない
      *  - ツリー / 重複なしツリー表示で対象レスに inline 埋め込まれている子レス (= .post.embedded) を除去
      *    → popup は対象レス本体だけを見せ、それへの返信は出さない
+     *  - ワッチョイリンク (.watchoi-link) は wrapper を外してテキスト化 → ポップアップ内ではリンク装飾なし &
+     *    hover ポップアップが連鎖しない (ワッチョイ字列が長くマウス通過で誤発火しやすいため)
      *  バッジや子レスは元レス側にはそのまま残るので、通常スレ表示でのホバー / ツリー表示は引き続き機能する。 */
     function clonePostForPopup(src) {
         const clone = src.cloneNode(true);
         clone.querySelectorAll('.post-reply-count').forEach(function (el) { el.remove(); });
         clone.querySelectorAll('.post.embedded').forEach(function (el) { el.remove(); });
+        clone.querySelectorAll('.watchoi-link').forEach(function (el) {
+            if (el.parentNode) el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
+        });
         return clone;
     }
 
