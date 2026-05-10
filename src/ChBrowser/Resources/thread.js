@@ -123,8 +123,8 @@
         }
         for (const n of popularNums) set.add(n);
 
-        // tree 系では配下 (= 返信チェイン) を BFS で展開
-        if (viewMode !== 'flat') {
+        // tree 系では配下 (= 返信チェイン) を BFS で展開 (戦略の expandsPopularChain で切替)
+        if (vm().expandsPopularChain()) {
             const queue = popularNums.slice();
             while (queue.length > 0) {
                 const cur = queue.shift();
@@ -533,10 +533,23 @@
         }
         // 4) 非同期で展開する URL (x.com / pixiv 等)
         if (isExpandableAsync(href)) {
+            // 既に「画像なし」と確定している URL (= 過去の imageMetaRequest で noMedia 返却済) はスロットを作らない。
+            // モード切替や再描画でこの関数が同じ URL に対して何度も呼ばれるが、サムネ枠を毎回作って毎回消すのは無駄。
+            const cached = imageMetaCache.get(href);
+            if (cached && cached.noMedia) return '';
             return '<span class="image-slot deferred async" data-src="' + escapeHtml(href) +
                    '" data-url="' + escapeHtml(href) + '" data-async-expand="1"></span>';
         }
         return '';
+    }
+
+    /** 指定 URL を data-url に持つ全 .image-slot を DOM から取り除く (= ツイートに画像なし等で
+     *  サムネ枠を出す価値が無いと確定したときに使う)。 */
+    function removeMediaSlotsForUrl(url) {
+        if (!url) return;
+        document.querySelectorAll('.image-slot').forEach(function (slot) {
+            if (slot.dataset.url === url) slot.remove();
+        });
     }
 
     /** 本文処理中にメディアスロットを集める buffer。null のときは収集しない (post-name など)。 */
@@ -915,10 +928,10 @@
         currentReverseIndex = new Map();
 
         const markIdx           = computeMarkIndex();
-        const isDedupWithMark   = (viewMode === 'dedupTree'
+        const isSplitBySection  = (vm().splitBySectionMark()
                                    && markIdx != null && markIdx < allPosts.length);
 
-        if (isDedupWithMark) {
+        if (isSplitBySection) {
             const sectionA = allPosts.slice(0, markIdx);
             // section A の per-post 挿入。reverseIndex は p ごとに親側に p を加算して成長させる
             // (= streaming 経路と同じ)。section B のレスは加算しないので reverseIndex は section A 内に閉じる。
@@ -2614,43 +2627,26 @@
         }
     }
 
-    /** p の primary をモード別 HTML で root 末尾に append。
-     *   flat      : buildPostHtml
-     *   tree      : buildTreePostHtml(p, false) — forward 親を inline で添える。
-     *   dedupTree : leaf 形式 (forward/reverse 展開なし)。dedup 設計上 forward は別所で primary 既出のため leaf で十分。 */
+    /** p の primary を、現モード戦略の HTML 生成関数で作って root 末尾に append。
+     *  モード固有の HTML 形は ViewModeStrategy.buildPrimaryHtml に委譲。 */
     function appendPrimaryAtEnd(p, root) {
-        let html;
-        if (viewMode === 'flat') {
-            html = buildPostHtml(p);
-        } else if (viewMode === 'tree') {
-            html = buildTreePostHtml(p, /*isEmbedded*/ false);
-        } else {
-            // dedupTree leaf: forward は dedup により別所で既出、reverse は到着時点では未来分でまだ無い。
-            html = renderPost(postDataFor(p, /*isEmbedded*/ false, /*omitId*/ false, ''));
-        }
-        insertHtmlIntoContainer(root, html, /*before*/ null);
+        insertHtmlIntoContainer(root, vm().buildPrimaryHtml(p), /*before*/ null);
     }
 
     /** parent (= reverseIndex の親レス) の reverse-expansion 配下に p を embed として追加する。
      *  全件展開する (= 旧実装の「上限超過 → "…他 N 件" に集約」抑制は撤去)。
-     *   mode = 'tree'      : id 無しの duplicate コピー (primary は別途末尾にも出る前提)。
-     *   mode = 'dedupTree' : id 付きの canonical 配置 (primary はここだけ)。
+     *
+     *  embed HTML の作り方は呼び出し側 (= ViewModeStrategy.buildEmbedHtml) が決める。これにより
+     *  「tree=id 無しの duplicate / dedupTree=id 付きの canonical」のような mode 固有の差を
+     *  ここに条件分岐で持たずに済み、新モード追加で本関数を触る必要がなくなる。
      *  既存 DOM に親 primary が無い (= まれ) 場合は false を返し caller 側 fallback に任せる。 */
-    function embedUnderParentReverse(parentNum, p, mode) {
+    function embedUnderParentReverse(parentNum, p, buildEmbedHtml) {
         const parentEl = document.getElementById('r' + parentNum);
         if (!parentEl) return false;
 
-        let embedHtml;
-        if (mode === 'tree') {
-            embedHtml = buildTreePostHtml(p, /*isEmbedded*/ true);
-        } else {
-            // dedupTree embed: ここが p の canonical 配置 → omitId=false で id を残す。
-            embedHtml = renderPost(postDataFor(p, /*isEmbedded*/ true, /*omitId*/ false, ''));
-        }
-
         const wrapper = document.createElement('div');
         wrapper.className = 'inline-expansion reverse';
-        wrapper.innerHTML = embedHtml;
+        wrapper.innerHTML = buildEmbedHtml(p);
 
         wrapper.querySelectorAll('a.anchor').forEach(function (a) {
             const from = parseInt(a.dataset.from, 10);
@@ -2662,38 +2658,92 @@
         return true;
     }
 
-    /** レス 1 件の DOM 挿入 (= 仕様表に従いモード/状況/アンカー数で分岐)。
+    /** レス 1 件の DOM 挿入 — モード戦略の <c>insertOnArrival</c> に dispatch するだけ。
      *  dedupTree-delta は本関数経由ではなく rebuildSectionB() で一括描画 (caller 側で振り分け)。 */
     function insertPostIncremental(p) {
         const root = document.getElementById('posts');
         if (!root) return;
-
-        if (viewMode === 'flat') {
-            appendPrimaryAtEnd(p, root);
-            return;
-        }
-
-        const anchors = getValidForwardAnchors(p);
-
-        if (viewMode === 'tree') {
-            // tree: 末尾 primary は常に置く。anchor=1 のときだけ親の reverse 配下にも duplicate を置く。
-            appendPrimaryAtEnd(p, root);
-            if (anchors.length === 1) {
-                embedUnderParentReverse(anchors[0], p, 'tree');
-            }
-            return;
-        }
-
-        // dedupTree (非 delta = ストリーミング初回 / 全表示):
-        //   anchor=1 → 親の reverse 配下に canonical embed (primary は出さない)
-        //   anchor=0 / 多 → 末尾に primary leaf
-        if (anchors.length === 1) {
-            const ok = embedUnderParentReverse(anchors[0], p, 'dedupTree');
-            if (!ok) appendPrimaryAtEnd(p, root);
-        } else {
-            appendPrimaryAtEnd(p, root);
-        }
+        vm().insertOnArrival(p, root);
     }
+
+    // ============================================================
+    // ViewMode 戦略テーブル — 表示モードごとに変動するロジックを 1 オブジェクトに集約。
+    //
+    // 新モード追加手順:
+    //   1) 下記テーブルに 1 エントリを追加 (= 6 メソッドを実装)
+    //   2) 必要なら mode 固有の HTML ビルダ関数 (buildXxxPostHtml 等) を別途追加
+    //   3) C# 側の <c>ThreadViewMode</c> enum と XAML の DataTrigger に対応値を追加
+    // 既存ロジック側 (insertPostIncremental / appendPrimaryAtEnd / rebuildPopularIncludeSet /
+    // renderCurrentViewMode / appendPosts) は分岐を持たず、すべて <c>vm()</c> 経由で戦略を呼ぶ。
+    //
+    // メソッド契約:
+    //   insertOnArrival(p, root)    1 レス到着時の DOM 配置 (primary / 親 embed のどちらにするかを決める)
+    //   buildPrimaryHtml(p)         primary instance の HTML 生成 (forward 展開などのモード固有の整形)
+    //   expandsPopularChain()       popularOnly フィルタで「人気レスとその子孫」を展開するか (tree 系のみ true)
+    //   splitBySectionMark()        フル再描画で「以降新レス」ラベルで section A/B 分割するか (dedupTree のみ true)
+    //   usesBulkDeltaRebuild()      isDelta バッチで section B を末尾に bulk rebuild するか (dedupTree のみ true)
+    //   promoteOnNewRefresh(root)   新リフレッシュ境界で旧 delta を section A に「昇格」する処理。
+    //                               flat / tree は nop。共通の sessionNewPostNumbers.clear と is-new 解除は呼び側で行う。
+    // ============================================================
+    const VIEW_MODE_STRATEGIES = {
+        flat: {
+            insertOnArrival(p, root)  { appendPrimaryAtEnd(p, root); },
+            buildPrimaryHtml(p)       { return buildPostHtml(p); },
+            expandsPopularChain()     { return false; },
+            splitBySectionMark()      { return false; },
+            usesBulkDeltaRebuild()    { return false; },
+            promoteOnNewRefresh(_root) { /* nop */ },
+        },
+        tree: {
+            insertOnArrival(p, root) {
+                // tree: 末尾 primary は常に置く。anchor=1 のときだけ親の reverse 配下にも duplicate を置く。
+                appendPrimaryAtEnd(p, root);
+                const anchors = getValidForwardAnchors(p);
+                if (anchors.length === 1) {
+                    embedUnderParentReverse(anchors[0], p,
+                        function (q) { return buildTreePostHtml(q, /*isEmbedded*/ true); });
+                }
+            },
+            buildPrimaryHtml(p)       { return buildTreePostHtml(p, /*isEmbedded*/ false); },
+            expandsPopularChain()     { return true; },
+            splitBySectionMark()      { return false; },
+            usesBulkDeltaRebuild()    { return false; },
+            promoteOnNewRefresh(_root) { /* nop */ },
+        },
+        dedupTree: {
+            insertOnArrival(p, root) {
+                // dedupTree (非 delta = ストリーミング初回 / 全表示):
+                //   anchor=1 → 親の reverse 配下に canonical embed (primary は出さない、id はここに残す)
+                //   anchor=0 / 多 → 末尾に primary leaf
+                const anchors = getValidForwardAnchors(p);
+                if (anchors.length === 1) {
+                    const ok = embedUnderParentReverse(anchors[0], p,
+                        function (q) { return renderPost(postDataFor(q, /*isEmbedded*/ true, /*omitId*/ false, '')); });
+                    if (!ok) appendPrimaryAtEnd(p, root);
+                } else {
+                    appendPrimaryAtEnd(p, root);
+                }
+            },
+            // dedupTree primary は forward 親展開を持たない leaf 形式 (= forward は dedup により別所で primary として
+            // 既出のため不要)。結果として flat と同じ buildPostHtml(p) で生成できる。
+            buildPrimaryHtml(p)       { return buildPostHtml(p); },
+            expandsPopularChain()     { return true; },
+            splitBySectionMark()      { return true; },
+            usesBulkDeltaRebuild()    { return true; },
+            promoteOnNewRefresh(root) {
+                // 旧 section B (= .incremental-section) を撤去 → sessionNewPostNumbers の各レスを通常の per-post
+                // 配置で再挿入することで section A に「昇格」させる。sessionNewPostNumbers の clear は呼び側で実施。
+                const existingSection = root.querySelector(':scope > .incremental-section');
+                if (existingSection) existingSection.remove();
+                const promoteList = [...sessionNewPostNumbers].sort(function (a, b) { return a - b; });
+                for (const n of promoteList) {
+                    const p = postsByNumber.get(n);
+                    if (p) insertPostIncremental(p);
+                }
+            },
+        },
+    };
+    function vm() { return VIEW_MODE_STRATEGIES[viewMode] || VIEW_MODE_STRATEGIES.flat; }
 
     /** dedupTree 差分 (= incremental=true) batch 終了後、section B (= 「以降新レス」ラベル以降) を
      *  sessionNewPostNumbers から再構築する。section A (= ラベル以前) の DOM はいじらない (= 仕様)。
@@ -2763,30 +2813,16 @@
         const isNewRefresh = isDelta && newMark != null && newMark !== lastDeltaMark;
 
         // 新 refresh 境界処理:
-        //   1. 前 refresh で太字 (= is-new) になっていたレスを細字に戻す。
-        //   2. dedupTree のみ: 旧 section B (= .incremental-section) を撤去して、前 refresh の delta レスを
-        //      section A に「昇格」(= 通常の primary 配置で再挿入) する。これによりラベル位置は今 refresh の
-        //      mark に追従し、section B には今 refresh 分のレスだけが残る。
+        //   1. 前 refresh で太字 (= is-new) になっていたレスを細字に戻す (全モード共通)。
+        //   2. モード戦略の promoteOnNewRefresh に dispatch (dedupTree は section B 撤去 + 昇格、他は nop)。
         //   3. sessionNewPostNumbers をリセット (= 後続の per-post loop で current batch が積まれる)。
-        // tree / flat モードには section A/B 概念がないので、太字解除と Set リセットだけで済む。
         if (isNewRefresh) {
             for (const n of sessionNewPostNumbers) {
                 const el = document.getElementById('r' + n);
                 if (el) el.classList.remove('is-new');
             }
-            if (viewMode === 'dedupTree') {
-                const existingSection = root.querySelector(':scope > .incremental-section');
-                if (existingSection) existingSection.remove();
-                const promoteList = [...sessionNewPostNumbers].sort(function (a, b) { return a - b; });
-                sessionNewPostNumbers.clear();
-                // 昇格: 番号の昇順で per-post 挿入。親→子の順なので embed 先 (= 親の primary) が先に DOM に出る。
-                for (const n of promoteList) {
-                    const p = postsByNumber.get(n);
-                    if (p) insertPostIncremental(p);
-                }
-            } else {
-                sessionNewPostNumbers.clear();
-            }
+            vm().promoteOnNewRefresh(root);
+            sessionNewPostNumbers.clear();
         }
         if (isDelta && newMark != null) lastDeltaMark = newMark;
 
@@ -2794,9 +2830,9 @@
         // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
         markPostNumber = newMark;
 
-        // dedupTree の差分取得は per-post 経路ではなく batch 末に section B を一括再構築する経路を取る
-        // (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を素直に表現するため)。
-        const useDedupBulkRebuild = (viewMode === 'dedupTree' && isDelta);
+        // 差分取得 (= isDelta) batch を、per-post 経路 ではなく末尾の section B 一括再構築経路にするか。
+        // dedupTree のみ true (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を表現するため)。
+        const useDedupBulkRebuild = (vm().usesBulkDeltaRebuild() && isDelta);
 
         // 1 レスずつ: 内部状態を更新して replayPostIntoDom で「reverseIndex → DOM 挿入 → 親バッジ更新」を実施。
         // dedupTree-delta だけは DOM 挿入を rebuildSectionB に任せるので、ここでは reverseIndex とバッジだけ更新する。
@@ -2856,6 +2892,8 @@
 
     window.setViewMode = function (mode) {
         const next = mode || 'flat';
+        // 未知のモード文字列は無視 (= C# 側 enum と JS 側 strategy table の値が同期している前提)。
+        if (!Object.prototype.hasOwnProperty.call(VIEW_MODE_STRATEGIES, next)) return;
         if (next === viewMode) return;
         viewMode = next;
         if (allPosts.length > 0) renderCurrentViewMode();
@@ -2956,16 +2994,24 @@
                 // setShortcutBindings は shortcut-bridge.js 内で直接受信するためここでは扱わない。
                 case 'imageMeta':
                     // C# が HEAD で取った Content-Length / キャッシュ参照 / 非同期 URL 展開の結果を返してきた。
-                    //   resolvedUrl → 非同期展開 (x.com/pixiv) で求まった実体画像 URL (slot の data-src を上書き)
-                    //   ok=false    → HEAD 失敗 (size 不明、applyMetaToSlot で「不明 → 読み込む」)
-                    //   cached      → ローカルキャッシュにあるので帯域コスト 0、しきい値無視で即ロード
+                    //   noMedia=true → ソース (= ツイート等) に画像/動画が付いていないと確定。スロットを DOM ごと削除。
+                    //   resolvedUrl  → 非同期展開 (x.com/pixiv) で求まった実体画像 URL (slot の data-src を上書き)
+                    //   ok=false     → HEAD 失敗 (size 不明、applyMetaToSlot で「不明 → 読み込む」)
+                    //   cached       → ローカルキャッシュにあるので帯域コスト 0、しきい値無視で即ロード
                     if (typeof msg.url === 'string') {
-                        applyImageMeta(msg.url, {
-                            ok:          !!msg.ok,
-                            size:        (typeof msg.size === 'number' ? msg.size : null),
-                            cached:      !!msg.cached,
-                            resolvedUrl: (typeof msg.resolvedUrl === 'string' ? msg.resolvedUrl : null),
-                        });
+                        if (msg.noMedia === true) {
+                            // 確定: 画像なし → スロット削除 + 「以後この URL のスロットは作らない」フラグをキャッシュ
+                            // (= モード切替などで再描画されたときに毎回作って毎回消す無駄を避ける)。
+                            imageMetaCache.set(msg.url, { noMedia: true });
+                            removeMediaSlotsForUrl(msg.url);
+                        } else {
+                            applyImageMeta(msg.url, {
+                                ok:          !!msg.ok,
+                                size:        (typeof msg.size === 'number' ? msg.size : null),
+                                cached:      !!msg.cached,
+                                resolvedUrl: (typeof msg.resolvedUrl === 'string' ? msg.resolvedUrl : null),
+                            });
+                        }
                     }
                     break;
                 case 'aiMetadata':

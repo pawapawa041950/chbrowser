@@ -370,8 +370,27 @@ public partial class ThreadDisplayPane : UserControl
         {
             string? resolvedUrl = null;
             var isAsync = ChBrowser.Services.Image.UrlExpander.IsAsyncExpandable(url);
+
             if (isAsync && mainWindow.UrlExpander is not null)
-                resolvedUrl = await mainWindow.UrlExpander.ExpandAsync(url).ConfigureAwait(true);
+            {
+                var expand = await mainWindow.UrlExpander.ExpandAsync(url).ConfigureAwait(true);
+                if (expand.IsNoMedia)
+                {
+                    // 確定: ソース (= ツイート等) は存在するが画像/動画メディアが付いていない。
+                    // JS 側にスロット削除を指示 (= "画像取得失敗" プレースホルダを出さず、サムネ枠ごと消す)。
+                    if (wv.CoreWebView2 is null) return;
+                    var noMediaJson = JsonSerializer.Serialize(new
+                    {
+                        type    = "imageMeta",
+                        url,
+                        noMedia = true,
+                    });
+                    wv.CoreWebView2.PostWebMessageAsJson(noMediaJson);
+                    return;
+                }
+                if (expand.IsResolved) resolvedUrl = expand.Url;
+                // expand.IsUnavailable はそのまま落として下の "ok=false" 経路 (= JS で「クリックで再試行」) に出す。
+            }
 
             var actualUrl = resolvedUrl ?? url;
 

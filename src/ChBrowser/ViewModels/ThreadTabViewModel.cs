@@ -206,10 +206,6 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
 
     IReadOnlyCollection<int> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;
 
-    public bool IsViewModeFlat       => ViewMode == ThreadViewMode.Flat;
-    public bool IsViewModeTree       => ViewMode == ThreadViewMode.Tree;
-    public bool IsViewModeDedupTree  => ViewMode == ThreadViewMode.DedupTree;
-
     /// <summary>このスレを開いた時の元タイトル (お気に入り登録時 / kakikomi.txt 用)。
     /// アドレスバーから直接スレを開いた経路では初期値が空文字で、dat の 1 レス目を取得した
     /// タイミングで <see cref="EnsureTitleFromDat"/> が埋める。一度埋まったら以降は変更しない。</summary>
@@ -243,15 +239,13 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         RefreshCommand         = new RelayCommand(() => refreshCallback?.Invoke(this));
         AddToFavoritesCommand  = new RelayCommand(() => addToFavoritesCallback?.Invoke(this));
         WriteCommand           = new RelayCommand(() => writeCallback?.Invoke(this));
+        // enum 順で次のモードに進む (一周したら先頭に戻る)。新モードを <see cref="ThreadViewMode"/> に
+        // 追加すると、ここを触らずにそのままサイクルに含まれる。
         CycleViewModeCommand   = new RelayCommand(() =>
         {
-            ViewMode = ViewMode switch
-            {
-                ThreadViewMode.Flat      => ThreadViewMode.Tree,
-                ThreadViewMode.Tree      => ThreadViewMode.DedupTree,
-                ThreadViewMode.DedupTree => ThreadViewMode.Flat,
-                _                         => ThreadViewMode.Flat,
-            };
+            var values = (ThreadViewMode[])Enum.GetValues(typeof(ThreadViewMode));
+            var idx    = Array.IndexOf(values, ViewMode);
+            ViewMode   = values[(idx + 1) % values.Length];
         });
     }
 
@@ -289,13 +283,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         PendingHidePostNumbers = new List<int>(newlyHiddenNumbers);
     }
 
-    partial void OnViewModeChanged(ThreadViewMode value)
-    {
-        OnPropertyChanged(nameof(IsViewModeFlat));
-        OnPropertyChanged(nameof(IsViewModeTree));
-        OnPropertyChanged(nameof(IsViewModeDedupTree));
-        // Tree/DedupTree は JS 側に未実装。現状は ViewMode 切替で再描画は起きない。
-    }
+    // ViewMode 変更時の追加通知は不要 (= XAML は <c>{Binding ViewMode, Value={x:Static ThreadViewMode.Xxx}}</c> で
+    // 直接比較しており、IsViewModeFlat 等の bool 派生プロパティは持たない)。
 
     private static string TruncateForTab(string title)
     {
