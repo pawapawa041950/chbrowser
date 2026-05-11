@@ -59,6 +59,58 @@ public partial class ThreadDisplayPane : UserControl
             case "toggleOwnPost":      HandleToggleOwnPost(sender, payload); break;
             case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
             case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
+            case "threadPreviewRequest": HandleThreadPreviewRequest(sender, payload); break;
+        }
+    }
+
+    // ---- 5ch.io スレ URL ホバー時のプレビューポップアップ (Phase 25) ----
+
+    private void HandleThreadPreviewRequest(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (DataContext is not MainViewModel main) return;
+        if (!payload.TryGetProperty("host", out var hostProp)) return;
+        if (!payload.TryGetProperty("dir",  out var dirProp))  return;
+        if (!payload.TryGetProperty("key",  out var keyProp))  return;
+        var host = hostProp.GetString();
+        var dir  = dirProp.GetString();
+        var key  = keyProp.GetString();
+        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(key)) return;
+        var postNo = payload.TryGetProperty("postNumber", out var nProp) && nProp.ValueKind == JsonValueKind.Number
+                   ? nProp.GetInt32() : 0;
+        var requestId = payload.TryGetProperty("requestId", out var rProp) ? rProp.GetString() ?? "" : "";
+
+        _ = ReplyThreadPreviewAsync(main, wv, host, dir, key, postNo, requestId);
+    }
+
+    private static async Task ReplyThreadPreviewAsync(
+        MainViewModel main, WebView2 wv,
+        string host, string dir, string key, int postNo, string requestId)
+    {
+        try
+        {
+            var preview = await main.LoadThreadPreviewAsync(host, dir, key, postNo).ConfigureAwait(true);
+            if (wv.CoreWebView2 is null) return;
+            var json = JsonSerializer.Serialize(new
+            {
+                type        = "threadPreview",
+                requestId,
+                host,
+                dir,
+                key,
+                postNumber  = preview.PostNumber,
+                ok          = preview.Ok,
+                title       = preview.Title,
+                body        = preview.Body,
+                name        = preview.Name,
+                dateText    = preview.DateText,
+                error       = preview.Error,
+            });
+            wv.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ThreadPreview] reply failed: {ex.Message}");
         }
     }
 
@@ -316,9 +368,11 @@ public partial class ThreadDisplayPane : UserControl
         if (parsed.Kind == ChBrowser.Services.Url.AddressBarTargetKind.Thread
             && DataContext is MainViewModel main)
         {
+            // URL に「/<dir>/<key>/<N>」のレス番号が含まれていれば AddressBarParser が
+            // parsed.PostNumber に拾ってくれる (= アドレスバー入力経路と JS クリック経路で同じ抽出)。
             ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[openUrl] → OpenThreadByUrlAsync(host='{parsed.Host}', dir='{parsed.Directory}', key='{parsed.ThreadKey}')");
-            _ = main.OpenThreadByUrlAsync(parsed.Host, parsed.Directory, parsed.ThreadKey);
+                $"[openUrl] → OpenThreadByUrlAsync(host='{parsed.Host}', dir='{parsed.Directory}', key='{parsed.ThreadKey}', scrollToPost={parsed.PostNumber})");
+            _ = main.OpenThreadByUrlAsync(parsed.Host, parsed.Directory, parsed.ThreadKey, parsed.PostNumber);
             return;
         }
 

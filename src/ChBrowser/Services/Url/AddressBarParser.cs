@@ -11,8 +11,10 @@ public static class AddressBarParser
         @"^/(?<dir>[A-Za-z0-9]+)/?$",
         RegexOptions.Compiled);
 
+    /// <summary>スレ URL のパス。レス番号 (= /key/ の直後の連続数字) を任意マッチ。
+    /// 「/100」「/100/」「/100-150」「/100n」のいずれも先頭の数字だけ post グループに入る。</summary>
     private static readonly Regex ThreadPathRegex = new(
-        @"^/test/read\.cgi/(?<dir>[A-Za-z0-9]+)/(?<key>[0-9]+)(/.*)?$",
+        @"^/test/read\.cgi/(?<dir>[A-Za-z0-9]+)/(?<key>[0-9]+)(?:/(?<post>[0-9]+))?.*$",
         RegexOptions.Compiled);
 
     /// <summary>入力テキストを解釈し、対応する <see cref="AddressBarTarget"/> を返す。
@@ -46,11 +48,14 @@ public static class AddressBarParser
         var threadMatch = ThreadPathRegex.Match(path);
         if (threadMatch.Success)
         {
+            var postGroup = threadMatch.Groups["post"];
+            var postNo    = postGroup.Success && int.TryParse(postGroup.Value, out var n) ? n : 0;
             return new AddressBarTarget(
                 AddressBarTargetKind.Thread,
                 host,
                 threadMatch.Groups["dir"].Value,
-                threadMatch.Groups["key"].Value);
+                threadMatch.Groups["key"].Value,
+                postNo);
         }
 
         var boardMatch = BoardPathRegex.Match(path);
@@ -80,14 +85,17 @@ public enum AddressBarTargetKind
     Thread,
 }
 
-/// <summary>パース結果。Kind=Invalid のときは他フィールドは空。</summary>
+/// <summary>パース結果。Kind=Invalid のときは他フィールドは空。
+/// <see cref="PostNumber"/> は Kind=Thread のときに URL 末尾のレス番号 (例: /1234567890/100) を入れる。
+/// レス番号指定なし、または Kind!=Thread のときは 0。</summary>
 public sealed record AddressBarTarget(
     AddressBarTargetKind Kind,
     string               Host,
     string               Directory,
-    string               ThreadKey)
+    string               ThreadKey,
+    int                  PostNumber = 0)
 {
-    public static AddressBarTarget Invalid { get; } = new(AddressBarTargetKind.Invalid, "", "", "");
+    public static AddressBarTarget Invalid { get; } = new(AddressBarTargetKind.Invalid, "", "", "", 0);
 
     /// <summary>Board の正規 URL (= "https://&lt;host&gt;/&lt;dir&gt;/")。Kind!=Board のときは空。</summary>
     public string BoardUrl => Kind == AddressBarTargetKind.Board ? $"https://{Host}/{Directory}/" : "";

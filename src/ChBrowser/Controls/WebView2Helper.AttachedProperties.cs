@@ -298,6 +298,33 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ScrollToPostPush (スレ表示: 指定レス番号までスクロールせよ JS に push)
+    //
+    // 5ch.io スレ URL クリック (= postNo 付き) で本タブにスクロール要求が来た時に
+    // ThreadTabViewModel.PendingScrollToPost が新インスタンスにセットされ、本 callback が走る。
+    // 値は <see cref="ChBrowser.ViewModels.ScrollToPostRequest"/> (= 同一 number でも new で再 push できる)。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ScrollToPostPushProperty =
+        DependencyProperty.RegisterAttached(
+            "ScrollToPostPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnScrollToPostPushChanged));
+
+    public static object? GetScrollToPostPush(DependencyObject d) => d.GetValue(ScrollToPostPushProperty);
+    public static void    SetScrollToPostPush(DependencyObject d, object? value) => d.SetValue(ScrollToPostPushProperty, value);
+
+    private static void OnScrollToPostPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not ChBrowser.ViewModels.ScrollToPostRequest req) return;
+        if (req.Number <= 0) return;
+        var json = JsonSerializer.Serialize(new { type = "scrollToPost", number = req.Number }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
     // ViewMode (スレ表示: flat / tree / dedupTree の表示モードを JS に通知)
     // ------------------------------------------------------------
 

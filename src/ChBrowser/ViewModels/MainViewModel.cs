@@ -287,7 +287,7 @@ public sealed partial class MainViewModel : ObservableObject
                 break;
             case AddressBarTargetKind.Thread:
                 AddressBarHasError = false;
-                await OpenThreadByUrlAsync(target.Host, target.Directory, target.ThreadKey).ConfigureAwait(true);
+                await OpenThreadByUrlAsync(target.Host, target.Directory, target.ThreadKey, target.PostNumber).ConfigureAwait(true);
                 break;
             default:
                 AddressBarHasError = true;
@@ -314,8 +314,10 @@ public sealed partial class MainViewModel : ObservableObject
         await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
     }
 
-    /// <summary>スレ URL を開く: 既存 ThreadTab があればアクティブ化、無ければ新規。</summary>
-    public async Task OpenThreadByUrlAsync(string host, string dir, string key)
+    /// <summary>スレ URL を開く: 既存 ThreadTab があればアクティブ化、無ければ新規。
+    /// <paramref name="scrollToPostNumber"/> > 0 のとき、開いた直後に JS へ scrollToPost を push する
+    /// (= 5ch.io URL に「/&lt;dir&gt;/&lt;key&gt;/&lt;N&gt;」のレス番号が含まれているクリック経路用)。</summary>
+    public async Task OpenThreadByUrlAsync(string host, string dir, string key, int scrollToPostNumber = 0)
     {
         var rootIn = DataPaths.ExtractRootDomain(host);
         foreach (var tab in ThreadTabs)
@@ -325,10 +327,26 @@ public sealed partial class MainViewModel : ObservableObject
                 string.Equals(tab.ThreadKey,           key, StringComparison.Ordinal))
             {
                 SelectedThreadTab = tab;
+                if (scrollToPostNumber > 0)
+                    tab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
                 return;
             }
         }
         await OpenThreadFromListAsync(host, dir, key, "").ConfigureAwait(true);
+        if (scrollToPostNumber > 0)
+        {
+            // 新タブ生成パス: 上の OpenThreadFromListAsync が OpenThreadAsync を await しているので、
+            // ここに来た時点で dat 取得 (= JS への appendPosts 全 batch 投入) は終わっている。
+            // SelectedThreadTab が今作ったタブを指しているはずなので、それに対して push する。
+            var newTab = SelectedThreadTab;
+            if (newTab is not null
+                && string.Equals(DataPaths.ExtractRootDomain(newTab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(newTab.Board.DirectoryName, dir, StringComparison.Ordinal)
+                && string.Equals(newTab.ThreadKey,           key, StringComparison.Ordinal))
+            {
+                newTab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
+            }
+        }
     }
 
     // -----------------------------------------------------------------

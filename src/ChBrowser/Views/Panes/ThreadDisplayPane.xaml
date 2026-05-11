@@ -316,6 +316,7 @@
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
                                   ctrl:WebView2Helper.HidePostsPush="{Binding PendingHidePostNumbers}"
+                                  ctrl:WebView2Helper.ScrollToPostPush="{Binding PendingScrollToPost}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"

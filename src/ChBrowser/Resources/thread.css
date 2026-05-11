@@ -275,6 +275,35 @@ a.anchor.missing {
     color: #999;
 }
 
+/* スレ URL (a.thread-link) ホバー時の thread preview popup。
+   ・1 行目: スレタイトル (太字)
+   ・2 行目以降: 対象レス本文 (>>N ヘッダ + テキスト)
+   .anchor-popup の枠/位置は流用、内側だけ thread-preview-* で識別する。 */
+.anchor-popup.thread-preview {
+    padding: 6px 8px;
+}
+.thread-preview-title {
+    font-weight: bold;
+    margin-bottom: 4px;
+    word-break: break-all;
+}
+.thread-preview-postno {
+    color: #666;
+    font-size: 11px;
+    margin-bottom: 2px;
+}
+.thread-preview-text {
+    word-break: break-word;
+}
+.thread-preview-loading {
+    color: #888;
+    font-style: italic;
+    word-break: break-all;
+}
+.thread-preview-error {
+    color: #c33;
+}
+
 /* loading state */
 .loading {
     padding: 12px;

@@ -341,6 +341,26 @@
     const STRIP_TAGS_RE    = /<[^>]+>/g;
     const URL_OR_ANCHOR_RE = /(https?:\/\/[^\s<>"'、。()\[\]{}]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
 
+    // 5ch.io / 5ch.net / bbspink.com の <c>/test/read.cgi/&lt;dir&gt;/&lt;key&gt;(/&lt;postSpec&gt;)?</c> URL を検出。
+    // postSpec は \d+ または \d+-\d+ (範囲)。指定が無いときは postNo=0 を返す (= 「1 レス目を見せる」の合図)。
+    const FIVECH_THREAD_RE = /^https?:\/\/([A-Za-z0-9.-]+)\/test\/read\.cgi\/([A-Za-z0-9]+)\/(\d+)(?:\/([^/?#]*))?/i;
+    function parseFiveChThreadUrl(href) {
+        if (!href) return null;
+        const m = FIVECH_THREAD_RE.exec(href);
+        if (!m) return null;
+        const host = m[1].toLowerCase();
+        const ok = host === '5ch.io'      || host.endsWith('.5ch.io')
+                || host === '5ch.net'     || host.endsWith('.5ch.net')
+                || host === 'bbspink.com' || host.endsWith('.bbspink.com');
+        if (!ok) return null;
+        let postNo = 0;
+        if (m[4]) {
+            const pm = /^(\d+)/.exec(m[4]);
+            if (pm) postNo = parseInt(pm[1], 10);
+        }
+        return { host: host, dir: m[2], key: m[3], postNo: postNo };
+    }
+
     function buildBodyHtml(rawText) {
         if (!rawText) return '';
         // Defensive <br> → \n
@@ -410,6 +430,13 @@
         }
         const hrefM = HREF_RE.exec(attrs);
         const href = hrefM ? hrefM[1] : '';
+        // 5ch.io / bbspink.com スレ URL は同スレ内アンカー (= 旧 HREF_ANCHOR_RE 経路) ではなく、
+        // ホバーでスレタイトル + 対象レス本文を出す thread-link として扱う。
+        // (URL に board / key が含まれており、現スレと違う可能性がある以上、postNo だけ取って同スレ扱いするのは不正確)
+        const fiveCh = parseFiveChThreadUrl(href);
+        if (fiveCh) {
+            return renderThreadLink(href, inner, fiveCh);
+        }
         const hrefA = HREF_ANCHOR_RE.exec(href);
         if (hrefA) {
             const f = parseInt(hrefA[1], 10);
@@ -555,10 +582,29 @@
     /** 本文処理中にメディアスロットを集める buffer。null のときは収集しない (post-name など)。 */
     let _currentBodyMediaSlots = null;
 
+    /** 5ch.io / bbspink.com スレ URL を、ホバーでタイトル + 対象レス本文をプレビューする
+     *  リンクに置換する HTML を返す。click は本アプリの新タブで開く既存 openUrl 経路を再利用。 */
+    function renderThreadLink(href, visible, fiveCh) {
+        return '<a class="thread-link"'
+             + ' data-url="'         + escapeHtml(href)              + '"'
+             + ' data-thread-host="' + escapeHtml(fiveCh.host)       + '"'
+             + ' data-thread-dir="'  + escapeHtml(fiveCh.dir)        + '"'
+             + ' data-thread-key="'  + escapeHtml(fiveCh.key)        + '"'
+             + ' data-thread-post="' + fiveCh.postNo                 + '">'
+             + escapeHtml(visible) + '</a>';
+    }
+
     function renderExternalLink(href, visible) {
         const lower = (href || '').toLowerCase();
         if (lower.indexOf('http://') !== 0 && lower.indexOf('https://') !== 0) {
             return '<span class="link-disabled">' + escapeHtml(visible) + '</span>';
+        }
+        // 5ch.io / bbspink.com のスレ URL はホバーでタイトル + レス本文をポップアップする専用リンクにする。
+        // クリック動作 (= 本アプリ新タブで開く) は openUrl で従来通り処理されるので click 側は変更不要。
+        const fiveCh = parseFiveChThreadUrl(href);
+        if (fiveCh) {
+            // スレ URL はサムネ枠 (= media slot) を作らない (= 画像 URL ではないため)。
+            return renderThreadLink(href, visible, fiveCh);
         }
         // href は意図的に付けない (focus 由来 auto-scroll を防ぐため)。click は data-url で識別。
         const linkHtml = '<a data-url="' + escapeHtml(href) + '">' + escapeHtml(visible) + '</a>';
@@ -2453,6 +2499,131 @@
         popups.push({ el: el, anchor: anchor, level: level });
     }
 
+    // ---- スレ URL ホバーポップアップ (= a.thread-link) ----
+    // 同一スレッド (host+dir+key+postNo) は 1 度 fetch すれば再ホバーで即時表示できるよう cache。
+    // 値: { ok, title, body, name, dateText, postNumber, error }
+    const threadPreviewCache = new Map();
+    function threadPreviewCacheKey(host, dir, key, postNo) {
+        return host + '|' + dir + '|' + key + '|' + (postNo > 0 ? postNo : 0);
+    }
+    // requestId → 当該ポップアップを構成する DOM への参照 ({ el, title, body, host, dir, key, postNo })。
+    // C# からの threadPreview レスポンスが返ったときに、ユーザがマウスを離して popup が消えていても
+    // 静かに drop できるよう、popup が close された時点で entry も削除する。
+    const pendingThreadPreviews = new Map();
+    let nextThreadPreviewReqId = 1;
+
+    function buildThreadPreviewLoadingNode(href) {
+        const wrap = document.createElement('div');
+        wrap.className = 'thread-preview-loading';
+        wrap.textContent = '読み込み中… ' + href;
+        return wrap;
+    }
+
+    function buildThreadPreviewContentNode(data, fallbackUrl) {
+        const frag = document.createDocumentFragment();
+        const titleEl = document.createElement('div');
+        titleEl.className = 'thread-preview-title';
+        titleEl.textContent = data.title && data.title.length > 0 ? data.title : (fallbackUrl || '(タイトル不明)');
+        frag.appendChild(titleEl);
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'thread-preview-body';
+        if (data.ok) {
+            const meta = document.createElement('div');
+            meta.className = 'thread-preview-postno';
+            meta.textContent = '>>' + (data.postNumber || 1);
+            bodyEl.appendChild(meta);
+            const txt = document.createElement('div');
+            txt.className = 'thread-preview-text';
+            // body は dat デコード済み + 改行は \n。buildBodyHtml で URL/アンカー auto-link しつつ HTML 化。
+            txt.innerHTML = buildBodyHtml(data.body || '');
+            bodyEl.appendChild(txt);
+        } else {
+            const err = document.createElement('div');
+            err.className = 'thread-preview-error';
+            err.textContent = data.error ? ('取得失敗: ' + data.error) : '取得失敗';
+            bodyEl.appendChild(err);
+        }
+        frag.appendChild(bodyEl);
+        return frag;
+    }
+
+    function openThreadPreviewPopup(anchor, level) {
+        closeFrom(level);
+        const host   = anchor.dataset.threadHost || '';
+        const dir    = anchor.dataset.threadDir  || '';
+        const key    = anchor.dataset.threadKey  || '';
+        const postNo = parseInt(anchor.dataset.threadPost || '0', 10) || 0;
+        if (!host || !dir || !key) return;
+
+        const el = document.createElement('div');
+        el.className = 'anchor-popup thread-preview';
+        document.body.appendChild(el);
+
+        const cacheKey = threadPreviewCacheKey(host, dir, key, postNo);
+        const cached = threadPreviewCache.get(cacheKey);
+        if (cached) {
+            el.appendChild(buildThreadPreviewContentNode(cached, anchor.dataset.url));
+        } else {
+            el.appendChild(buildThreadPreviewLoadingNode(anchor.dataset.url || ''));
+            const reqId = 'tp' + (nextThreadPreviewReqId++);
+            pendingThreadPreviews.set(reqId, { el: el, anchor: anchor, host: host, dir: dir, key: key, postNo: postNo });
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({
+                    type:       'threadPreviewRequest',
+                    requestId:  reqId,
+                    host:       host,
+                    dir:        dir,
+                    key:        key,
+                    postNumber: postNo,
+                });
+            }
+        }
+
+        positionPopup(el, anchor);
+        el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
+        el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+        attachAnchorHandlers(el, level + 1);
+        popups.push({ el: el, anchor: anchor, level: level });
+    }
+
+    /** C# からの threadPreview レスポンス処理。pending entry を見つけて popup 中身を差し替え、cache に積む。 */
+    function onThreadPreviewResponse(msg) {
+        if (!msg || typeof msg.requestId !== 'string') return;
+        const data = {
+            ok:         !!msg.ok,
+            title:      typeof msg.title === 'string'    ? msg.title    : '',
+            body:       typeof msg.body  === 'string'    ? msg.body     : '',
+            name:       typeof msg.name  === 'string'    ? msg.name     : '',
+            dateText:   typeof msg.dateText === 'string' ? msg.dateText : '',
+            postNumber: typeof msg.postNumber === 'number' ? msg.postNumber : 0,
+            error:      typeof msg.error === 'string'    ? msg.error    : null,
+        };
+        const host = typeof msg.host === 'string' ? msg.host : '';
+        const dir  = typeof msg.dir  === 'string' ? msg.dir  : '';
+        const key  = typeof msg.key  === 'string' ? msg.key  : '';
+        // 投げた時点の postNo はレスポンスにも含まれている (= C# が即値で返すため)。
+        // cache キーは投げた postNo (= リクエストの payload.postNumber) を使うべきだが、
+        // 0 (= 「指定なし → 1 を表示」) は意味的に同じなので postNumber>0 のとき key も同じになる。
+        // ここでは pending entry から元の postNo を取り出して使う。
+        const pending = pendingThreadPreviews.get(msg.requestId);
+        if (pending) {
+            const cacheKey = threadPreviewCacheKey(pending.host, pending.dir, pending.key, pending.postNo);
+            threadPreviewCache.set(cacheKey, data);
+            // popup がまだ生きているなら DOM 差し替え (= 消えていれば何もしない = ユーザがマウス離している)。
+            if (pending.el && pending.el.isConnected) {
+                pending.el.innerHTML = '';
+                pending.el.appendChild(buildThreadPreviewContentNode(data, pending.anchor.dataset.url));
+                positionPopup(pending.el, pending.anchor);
+            }
+            pendingThreadPreviews.delete(msg.requestId);
+        } else if (host && dir && key) {
+            // 元 pending entry が close で消されていてもキャッシュには積む (= 次回ホバーで即時表示)。
+            const cacheKey = threadPreviewCacheKey(host, dir, key, data.postNumber > 0 ? data.postNumber : 0);
+            threadPreviewCache.set(cacheKey, data);
+        }
+    }
+
     function attachAnchorHandlers(root, level) {
         root.querySelectorAll('a.anchor').forEach(function (a) {
             if (a.classList.contains('missing')) return;
@@ -2475,6 +2646,14 @@
                 openReplyPopup(postNo, badge, level);
             });
             postNo.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+        });
+        // 5ch.io / bbspink.com スレ URL: ホバーでスレタイトル + 対象レス (or 1) をポップアップ。
+        root.querySelectorAll('a.thread-link').forEach(function (a) {
+            a.addEventListener('mouseenter', function () {
+                cancelCloseAt(level);
+                openThreadPreviewPopup(a, level);
+            });
+            a.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         });
     }
 
@@ -3023,6 +3202,10 @@
                     // 画像ホバー時に C# が PNG/JPEG/WebP のメタを抽出して返してきた。
                     // hasData=false なら次回以降ポップアップを出さない (no-data でキャッシュ)。
                     onAiMetadataResponse(msg);
+                    break;
+                case 'threadPreview':
+                    // 5ch.io スレ URL ホバーで投げた threadPreviewRequest の応答 (タイトル + 対象レス本文)。
+                    onThreadPreviewResponse(msg);
                     break;
                 case 'scrollToPost': {
                     // ContextMenu 「このレスに飛ぶ」から呼ばれる。primary レス (id="rN") に scrollIntoView。

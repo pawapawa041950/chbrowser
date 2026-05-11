@@ -26,6 +26,12 @@ public sealed record OwnPostsUpdateData(IReadOnlyList<OwnPostChange> Changes);
 /// <summary>1 件分の自分マークトグル結果。</summary>
 public sealed record OwnPostChange(int Number, bool IsOwn);
 
+/// <summary>「指定レス番号までスクロール」要求のラッパー record。
+/// <see cref="ThreadTabViewModel.PendingScrollToPost"/> に新インスタンスを setter することで、
+/// 同 number を立て続けに 2 回投げても (= 同じスレ URL を 2 回連続でクリック等) PropertyChanged が発火し、
+/// AttachedProperty 側で JS への push が必ず走るようにする (= int? だと値同一で setter が短絡する)。</summary>
+public sealed record ScrollToPostRequest(int Number);
+
 /// <summary>
 /// 1 スレッド = 1 タブ。WebView2 へは Posts (Post 列) を Bind し、HTML 構築は JS 側で行う。
 /// 表示モード (Flat / Tree / DedupTree) はすべて JS 側で実装済 (thread.js)、
@@ -85,6 +91,13 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// で setter する (= 参照同一だと PropertyChanged が飛ばない可能性がある)。 </summary>
     [ObservableProperty]
     private IReadOnlyList<int>? _pendingHidePostNumbers;
+
+    /// <summary>JS に「このレスまでスクロールしてくれ」と push するためのトリガ (Phase 25)。
+    /// 5ch.io スレ URL のクリック (= postNo 付き) で本タブにスクロール要求が来た時に、新しい
+    /// <see cref="ScrollToPostRequest"/> インスタンスを setter することで AttachedProperty 経由で
+    /// JS に scrollToPost メッセージが飛ぶ。値が変わると WebView2Helper.ScrollToPostPush から JS に届く。</summary>
+    [ObservableProperty]
+    private ScrollToPostRequest? _pendingScrollToPost;
 
     [ObservableProperty]
     private ThreadViewMode _viewMode = ThreadViewMode.Flat;
