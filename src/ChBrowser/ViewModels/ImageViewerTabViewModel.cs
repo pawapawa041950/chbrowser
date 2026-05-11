@@ -5,6 +5,19 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ChBrowser.ViewModels;
 
+/// <summary>ビューアにズーム/フィット要求を送るためのラッパー。
+/// <see cref="ImageViewerTabViewModel.PendingZoomMode"/> に新インスタンスを setter するたび
+/// AttachedProperty 経由で JS に setZoom メッセージが飛ぶ。
+/// <para>Mode は "actual" (= 1:1 ピクセル表示) または "fit" (= ウィンドウに収める) の 2 種類。</para>
+/// <para>注意: <b>record にしないこと</b>。record は構造的等価性で setter が短絡し、同じ Mode を 2 回連続で
+/// 投げると 2 回目が PropertyChanged を発火させない (= 「初回しか効かない」現象になる)。class で参照同一性にして
+/// 毎回必ず発火させる。</para></summary>
+public sealed class ZoomModeRequest
+{
+    public string Mode { get; }
+    public ZoomModeRequest(string mode) => Mode = mode;
+}
+
 /// <summary>ビューアウィンドウの 1 タブ。1 画像 = 1 タブ (Phase 10)。</summary>
 public sealed partial class ImageViewerTabViewModel : ObservableObject
 {
@@ -26,6 +39,11 @@ public sealed partial class ImageViewerTabViewModel : ObservableObject
     /// 特殊ヘッダ要求 (pixiv の Referer 等) を回避できるようにする。</summary>
     [ObservableProperty]
     private string _thumbnailPath;
+
+    /// <summary>JS にズーム/フィット指示を push するトリガ。値が変わると WebView2Helper.ZoomModePush で送信される。
+    /// 右クリックメニュー「画像を原寸表示」「ウィンドウに合わせる」から setter される。</summary>
+    [ObservableProperty]
+    private ZoomModeRequest? _pendingZoomMode;
 
     public IRelayCommand CloseCommand { get; }
 

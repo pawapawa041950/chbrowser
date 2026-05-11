@@ -352,12 +352,18 @@ public partial class App : Application
             ["viewer.prev_image"] = _ => { var v = getViewerVm(); if (v?.PrevTabCommand        .CanExecute(null) == true) v.PrevTabCommand        .Execute(null); },
             ["viewer.zoom_in"]      = _ => { },
             ["viewer.zoom_out"]     = _ => { },
+            ["viewer.zoom_actual"]  = _ => { },
+            ["viewer.zoom_fit"]     = _ => { },
             ["viewer.rotate_right"] = _ => { },
             ["viewer.rotate_left"]  = _ => { },
             // 画像詳細ペインの toggle は ImageViewerWindow にメソッドを生やしてそちらで処理。
             ["viewer.toggle_details"] = _ =>
             {
                 if (Current is App app && app._imageViewerWindow is { } vw) vw.ToggleDetailsPane();
+            },
+            ["viewer.fullscreen"] = _ =>
+            {
+                if (Current is App app && app._imageViewerWindow is { } vw) vw.ToggleFullscreen();
             },
         };
 

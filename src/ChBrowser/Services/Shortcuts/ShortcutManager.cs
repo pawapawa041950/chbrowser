@@ -258,9 +258,13 @@ public sealed class ShortcutManager
             // 未割当ならフォールスルー (= 通常の中クリック処理を試す)
         }
 
+        // 左ボタン: ダブルクリックは "ダブルクリック"、修飾キー付き単発は "<Mod>+左クリック"。
+        // 修飾なし単発左クリックは通常 UI 操作と衝突するので bind 対象外 (= null で抜ける)。
+        var hasMod = Keyboard.Modifiers != ModifierKeys.None;
         string? name = btn switch
         {
-            MouseButton.Left   => e.ClickCount == 2 ? "ダブルクリック" : null, // 単発 / トリプル+ は binding 不可
+            MouseButton.Left   => e.ClickCount == 2 ? "ダブルクリック"
+                                : (e.ClickCount == 1 && hasMod ? "左クリック" : null),
             MouseButton.Middle => "中クリック",
             _                  => null,
         };

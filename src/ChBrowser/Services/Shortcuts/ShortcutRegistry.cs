@@ -79,11 +79,14 @@ public static class ShortcutRegistry
         new ShortcutAction("viewer.next_image",     "ビューアウィンドウ", "次の画像",     "Right",    "ホイールダウン",        ""),
         new ShortcutAction("viewer.prev_image",     "ビューアウィンドウ", "前の画像",     "Left",     "ホイールアップ",        ""),
         new ShortcutAction("viewer.save",           "ビューアウィンドウ", "保存",         "Ctrl+S",   "",                       ""),
-        new ShortcutAction("viewer.close",          "ビューアウィンドウ", "閉じる",       "Escape",   "ダブルクリック",        "→←"),
+        new ShortcutAction("viewer.close",          "ビューアウィンドウ", "閉じる",       "Escape",   "Shift+左クリック",      "→←"),
         new ShortcutAction("viewer.zoom_in",        "ビューアウィンドウ", "拡大",         "",         "Ctrl+ホイールアップ",   ""),
         new ShortcutAction("viewer.zoom_out",       "ビューアウィンドウ", "縮小",         "",         "Ctrl+ホイールダウン",   ""),
+        new ShortcutAction("viewer.zoom_actual",    "ビューアウィンドウ", "原寸表示",     "",         "",                       ""),
+        new ShortcutAction("viewer.zoom_fit",       "ビューアウィンドウ", "ウィンドウに合わせる", "", "Ctrl+中クリック",      ""),
         new ShortcutAction("viewer.rotate_right",   "ビューアウィンドウ", "右に90度回転", "",         "Shift+ホイールダウン",  ""),
         new ShortcutAction("viewer.rotate_left",    "ビューアウィンドウ", "左に90度回転", "",         "Shift+ホイールアップ",  ""),
-        new ShortcutAction("viewer.toggle_details", "ビューアウィンドウ", "画像詳細ペインを表示/非表示", "Tab", "",              ""),
+        new ShortcutAction("viewer.toggle_details", "ビューアウィンドウ", "画像詳細ペインを表示/非表示", "Tab", "Ctrl+左クリック",   ""),
+        new ShortcutAction("viewer.fullscreen",     "ビューアウィンドウ", "全画面表示の切替", "F11",      "ダブルクリック",        ""),
     };
 }

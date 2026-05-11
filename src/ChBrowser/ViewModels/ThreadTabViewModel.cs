@@ -26,11 +26,17 @@ public sealed record OwnPostsUpdateData(IReadOnlyList<OwnPostChange> Changes);
 /// <summary>1 件分の自分マークトグル結果。</summary>
 public sealed record OwnPostChange(int Number, bool IsOwn);
 
-/// <summary>「指定レス番号までスクロール」要求のラッパー record。
+/// <summary>「指定レス番号までスクロール」要求のラッパー。
 /// <see cref="ThreadTabViewModel.PendingScrollToPost"/> に新インスタンスを setter することで、
 /// 同 number を立て続けに 2 回投げても (= 同じスレ URL を 2 回連続でクリック等) PropertyChanged が発火し、
-/// AttachedProperty 側で JS への push が必ず走るようにする (= int? だと値同一で setter が短絡する)。</summary>
-public sealed record ScrollToPostRequest(int Number);
+/// AttachedProperty 側で JS への push が必ず走るようにする。
+/// <para>注意: <b>record にしないこと</b>。record は構造的等価性なので、同じ Number で new した 2 個目は
+/// SetProperty 内の比較で「変化なし」と判定され PropertyChanged が出ない。class にして参照同一性で毎回発火させる。</para></summary>
+public sealed class ScrollToPostRequest
+{
+    public int Number { get; }
+    public ScrollToPostRequest(int number) => Number = number;
+}
 
 /// <summary>
 /// 1 スレッド = 1 タブ。WebView2 へは Posts (Post 列) を Bind し、HTML 構築は JS 側で行う。

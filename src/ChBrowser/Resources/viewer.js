@@ -92,6 +92,9 @@
             },
             'viewer.rotate_right': function() { rotateBy( 90); },
             'viewer.rotate_left':  function() { rotateBy(-90); },
+            // 右クリックメニューと同じ動作。fit はユーザ明示操作なのでキャップなし。
+            'viewer.zoom_actual':  function() { showActualSize(); },
+            'viewer.zoom_fit':     function() { fitToStage(false); },
         },
     });
 
@@ -117,8 +120,8 @@
         }
         resetView();
         img.onload = function () {
-            // 初期表示: window に収まるよう自動でフィットさせる
-            fitToStage();
+            // 初期表示: window に収まるよう自動フィット (= 小さい画像は原寸キープ、大きい画像は縮小)
+            fitToStage(/*capAtNatural*/ true);
             post({ type: 'imageReady' });
         };
         img.onerror = function () {
@@ -127,17 +130,31 @@
         img.src = url;
     }
 
-    function fitToStage() {
+    /** ウィンドウに合わせる。
+     *  capAtNatural = true (初期表示 / リサイズ時): 画像が小さくても原寸 (1.0) より大きくしない。
+     *  capAtNatural = false (右クリックメニューからの明示要求): キャップなしで stage いっぱいに広げる。
+     *  メニュー経由時にキャップをかけると「100% から動かない」現象 (= 既に zoom=1.0 のとき何も変わらない) が出るため切り替える。 */
+    function fitToStage(capAtNatural) {
         var sw = stage.clientWidth;
         var sh = stage.clientHeight;
         var iw = img.naturalWidth;
         var ih = img.naturalHeight;
         if (!sw || !sh || !iw || !ih) return;
         var fit = Math.min(sw / iw, sh / ih);
-        zoom = Math.min(1, fit);  // 元サイズより大きく拡大はしない (ユーザがズームして拡大する)
+        zoom = capAtNatural ? Math.min(1, fit) : fit;
         panX = 0;
         panY = 0;
         applyTransform();
+        flashStatus(Math.round(zoom * 100) + ' %');
+    }
+
+    /** 原寸 (1:1 ピクセル) 表示。pan もリセットして画像を中央に置く。 */
+    function showActualSize() {
+        zoom = 1.0;
+        panX = 0;
+        panY = 0;
+        applyTransform();
+        flashStatus('100 %');
     }
 
     // ---- ホイール: 通常はタブ切替、Ctrl 押下中はズーム ----
@@ -196,9 +213,9 @@
     });
 
     // ---- ダブルクリックでフィットにリセット ----
+    // (= ユーザ明示要求なので、キャップなしで stage いっぱいに広げる)
     stage.addEventListener('dblclick', function () {
-        fitToStage();
-        flashStatus('fit');
+        fitToStage(/*capAtNatural*/ false);
     });
 
     // ---- 右クリックでブラウザ既定メニューを抑制 → C# 側で WPF ContextMenu を popup ----
@@ -208,8 +225,9 @@
     });
 
     // ---- ウィンドウサイズ変更でフィット再計算 (画像未ロードなら何もしない) ----
+    // (= 初期表示と同じく、小さい画像は原寸キープで拡大しない)
     window.addEventListener('resize', function () {
-        if (img.complete && img.naturalWidth > 0) fitToStage();
+        if (img.complete && img.naturalWidth > 0) fitToStage(/*capAtNatural*/ true);
     });
 
     // ---- C# からのメッセージ受信 ----
@@ -219,6 +237,11 @@
             if (!msg || typeof msg !== 'object' || !msg.type) return;
             if (msg.type === 'setImage') {
                 setImage(msg.url || '');
+            } else if (msg.type === 'setZoom') {
+                // 右クリックメニュー「画像を原寸表示 / ウィンドウに合わせる」からの指示。
+                // メニュー経由はユーザ明示要求なので fit はキャップなし (= 小さい画像も stage いっぱいに広げる)。
+                if (msg.mode === 'actual')   showActualSize();
+                else if (msg.mode === 'fit') fitToStage(/*capAtNatural*/ false);
             }
         });
     }

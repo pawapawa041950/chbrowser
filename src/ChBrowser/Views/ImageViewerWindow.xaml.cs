@@ -33,6 +33,17 @@ public partial class ImageViewerWindow : Window
     /// XAML 側でも DetailsColumn.Width=320 を初期値にしているので両方を揃えること。</summary>
     private bool _detailsVisible = true;
 
+    /// <summary>全画面表示中か。<see cref="ToggleFullscreen"/> で切り替え、F11 / 右クリックメニュー両方から呼ばれる。</summary>
+    private bool _isFullscreen;
+
+    /// <summary>全画面に入る直前のウィンドウ状態 (= 通常表示に戻すときに復元する)。</summary>
+    private WindowStyle?      _savedWindowStyle;
+    private WindowState?      _savedWindowState;
+    private ResizeMode?       _savedResizeMode;
+    private GridLength?       _savedDetailsColumnWidth;
+    private Visibility?       _savedTabStripVisibility;
+    private Visibility?       _savedAccordionBarVisibility;
+
     /// <summary>DetailsWebView の shell HTML へのナビゲーションが完了したか。
     /// 完了前に push しようとした JSON は <see cref="_pendingDetailsJson"/> に置く。</summary>
     private bool _detailsShellReady;
@@ -369,6 +380,77 @@ public partial class ImageViewerWindow : Window
         var url = UrlFromMenu(sender);
         if (string.IsNullOrEmpty(url)) return;
         OpenInBrowser(url);
+    }
+
+    private void ZoomActual_Click(object sender, RoutedEventArgs e) => RequestZoomOnSelectedTab("actual");
+    private void ZoomFit_Click(object sender, RoutedEventArgs e)    => RequestZoomOnSelectedTab("fit");
+
+    private void Fullscreen_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
+
+    /// <summary>ContextMenu を開いた瞬間に「全画面表示」MenuItem のチェック状態を現在値に同期する
+    /// (= F11 ショートカット経由で切り替えた場合でも、メニュー再表示時に正しいチェック状態になる)。</summary>
+    private void ImageContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        foreach (var item in cm.Items)
+        {
+            if (item is MenuItem mi && (mi.Tag as string) == "fullscreen")
+            {
+                mi.IsChecked = _isFullscreen;
+                break;
+            }
+        }
+    }
+
+    /// <summary>全画面表示と通常表示を切り替える。右クリック「全画面表示」/ F11 の両方から呼ばれる。
+    /// 全画面時はタブストリップ / アコーディオン帯 / 詳細ペインを隠して画像エリアを画面いっぱいにする。</summary>
+    public void ToggleFullscreen()
+    {
+        if (!_isFullscreen)
+        {
+            _savedWindowStyle            = WindowStyle;
+            _savedWindowState            = WindowState;
+            _savedResizeMode             = ResizeMode;
+            _savedDetailsColumnWidth     = DetailsColumn.Width;
+            _savedTabStripVisibility     = TabStrip.Visibility;
+            _savedAccordionBarVisibility = AccordionBar.Visibility;
+
+            // WindowStyle=None + Maximized は順序が重要 (= 既に Maximized だと borderless 化が反映されない)。
+            // 一度 Normal に戻してからスタイルを変える。
+            WindowState  = WindowState.Normal;
+            WindowStyle  = WindowStyle.None;
+            ResizeMode   = ResizeMode.NoResize;
+            WindowState  = WindowState.Maximized;
+
+            // タブストリップ / アコーディオン帯 / 詳細ペインを隠す → 画像のみ表示
+            TabStrip.Visibility       = Visibility.Collapsed;
+            AccordionBar.Visibility   = Visibility.Collapsed;
+            DetailsColumn.Width       = new GridLength(0);
+
+            _isFullscreen = true;
+        }
+        else
+        {
+            if (_savedWindowState is { } ws)    WindowState = ws;
+            if (_savedWindowStyle is { } wst)   WindowStyle = wst;
+            if (_savedResizeMode  is { } rm)    ResizeMode  = rm;
+
+            if (_savedTabStripVisibility     is { } tv) TabStrip.Visibility     = tv;
+            if (_savedAccordionBarVisibility is { } av) AccordionBar.Visibility = av;
+            // 詳細ペインは「閉じてた時は閉じたまま戻す」が自然なので _detailsVisible を尊重して復元。
+            DetailsColumn.Width = _detailsVisible
+                ? new GridLength(DetailsPaneDefaultWidth, GridUnitType.Pixel)
+                : new GridLength(0);
+
+            _isFullscreen = false;
+        }
+    }
+
+    private void RequestZoomOnSelectedTab(string mode)
+    {
+        if (DataContext is not ImageViewerViewModel vm) return;
+        if (vm.SelectedTab is not { } tab) return;
+        tab.PendingZoomMode = new ZoomModeRequest(mode);
     }
 
     /// <summary>ContextMenu / Ctrl+S の両方から呼ばれる。SaveFileDialog を出して保存する。</summary>

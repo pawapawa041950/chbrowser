@@ -457,4 +457,30 @@ public static partial class WebView2Helper
         var json = JsonSerializer.Serialize(new { type = "setImage", url }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ViewerShell);
     }
+
+    // ------------------------------------------------------------
+    // ZoomModePush (Phase 25: ビューア右クリック「原寸表示 / ウィンドウに合わせる」)
+    //
+    // ImageViewerTabViewModel.PendingZoomMode に新しい ZoomModeRequest がセットされると本 callback が走り、
+    // {type:setZoom, mode:"actual"|"fit"} を JS に push する。JS 側 (viewer.js) で transform を組み立て直す。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ZoomModePushProperty =
+        DependencyProperty.RegisterAttached(
+            "ZoomModePush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnZoomModePushChanged));
+
+    public static object? GetZoomModePush(DependencyObject d) => d.GetValue(ZoomModePushProperty);
+    public static void    SetZoomModePush(DependencyObject d, object? value) => d.SetValue(ZoomModePushProperty, value);
+
+    private static void OnZoomModePushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not ChBrowser.ViewModels.ZoomModeRequest req) return;
+        if (string.IsNullOrEmpty(req.Mode)) return;
+        var json = JsonSerializer.Serialize(new { type = "setZoom", mode = req.Mode }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ViewerShell);
+    }
 }

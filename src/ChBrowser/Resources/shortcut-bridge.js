@@ -189,21 +189,29 @@
 
             let name = null;
             if (e.button === 0) {
-                // 自前のクリックカウンタで連続クリックを判定。
-                // - 前回クリックから CLICK_INTERVAL_MS 内 + CLICK_RADIUS_PX 内なら count++
-                // - そうでなければ count=1 (= 別の click sequence の開始)
-                const now  = Date.now();
-                const dt   = now - lastClickAt;
-                const dx   = e.clientX - lastClickX;
-                const dy   = e.clientY - lastClickY;
-                const near = (dx * dx + dy * dy) <= (CLICK_RADIUS_PX * CLICK_RADIUS_PX);
-                clickCount   = (dt < CLICK_INTERVAL_MS && near) ? (clickCount + 1) : 1;
-                lastClickAt  = now;
-                lastClickX   = e.clientX;
-                lastClickY   = e.clientY;
+                const hasMod = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
+                if (hasMod) {
+                    // 修飾キー付き単発左クリックは通常 UI 操作と衝突しないので即 dispatch する。
+                    // (修飾なし単発左クリックは UI 衝突するため意図的に bind 不可のまま)
+                    // ダブルクリックカウンタは触らない (= modified click と unmodified click を独立に扱う)。
+                    name = '左クリック';
+                } else {
+                    // 自前のクリックカウンタで連続クリックを判定。
+                    // - 前回クリックから CLICK_INTERVAL_MS 内 + CLICK_RADIUS_PX 内なら count++
+                    // - そうでなければ count=1 (= 別の click sequence の開始)
+                    const now  = Date.now();
+                    const dt   = now - lastClickAt;
+                    const dx   = e.clientX - lastClickX;
+                    const dy   = e.clientY - lastClickY;
+                    const near = (dx * dx + dy * dy) <= (CLICK_RADIUS_PX * CLICK_RADIUS_PX);
+                    clickCount   = (dt < CLICK_INTERVAL_MS && near) ? (clickCount + 1) : 1;
+                    lastClickAt  = now;
+                    lastClickX   = e.clientX;
+                    lastClickY   = e.clientY;
 
-                if (clickCount !== 2) return;
-                name = 'ダブルクリック';
+                    if (clickCount !== 2) return;
+                    name = 'ダブルクリック';
+                }
             } else if (e.button === 1) {
                 name = '中クリック';
             } else {
