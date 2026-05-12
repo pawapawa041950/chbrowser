@@ -32,6 +32,12 @@ public partial class App : Application
     /// スレッド側 / ビューワ側からの「DL 要求」を URL 単位でコアレスし、完了/失敗イベントを発火する。
     /// OnStartup 完了前は null。</summary>
     public ChBrowser.Services.Media.VideoDownloadManager? VideoDownloadManagerInstance => _videoDownloadManager;
+
+    private ChBrowser.Services.Media.MediaAcquisitionTracker? _mediaAcquisitionTracker;
+    /// <summary>サムネ取得失敗 URL のセッション中追跡 (画像 / 動画 DL / 動画サムネ / SNS 展開を統合管理)。
+    /// 一度失敗した URL は明示クリックがあるまで自動再試行をスキップ。
+    /// OnStartup 完了前は null。</summary>
+    public ChBrowser.Services.Media.MediaAcquisitionTracker? MediaAcquisitionTrackerInstance => _mediaAcquisitionTracker;
     private AiImageMetadataService? _aiImageMeta;
     private UrlExpander?       _urlExpander;
     private ConfigStorage?     _configStorage;
@@ -162,9 +168,12 @@ public partial class App : Application
         // Phase 3: CORS proxy 用に HttpClient を登録 (動画サムネ抽出時の crossOrigin リクエストを横取り)。
         // MonazillaClient.Http を流用 (= 既存設定 Timeout / UA がそのまま効く)。
         WebView2Helper.RegisterHttpClient(_monazilla.Http);
+        // サムネ取得失敗 URL の統合追跡 (= 一度失敗したら次のクリックまで自動再試行抑制)
+        _mediaAcquisitionTracker = new ChBrowser.Services.Media.MediaAcquisitionTracker();
+
         // Phase 4: 動画本体の並列 DL マネージャ。
         // 内部で動画 DL 専用のブラウザ UA HttpClient を生成する (= 外部 CDN が UA で挙動を変える対策)。
-        _videoDownloadManager = new ChBrowser.Services.Media.VideoDownloadManager(_imageCache);
+        _videoDownloadManager = new ChBrowser.Services.Media.VideoDownloadManager(_imageCache, _mediaAcquisitionTracker);
 
         // ウィンドウ/ペインサイズの永続化
         var layoutStorage = new LayoutStorage(paths);

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -23,8 +22,8 @@ namespace ChBrowser.Services.Media;
 /// <para>ダウンロードした bytes は <see cref="ImageCacheService.SaveAsync"/> 経由で
 /// Kind=Video として永続化される (= .tmp に書いて atomic rename、size 上限チェック等は既存 SaveAsync 任せ)。</para>
 ///
-/// <para>Phase 4 範囲では VideoDownloadManager クラス自体の提供のみ。
-/// JS 側 (Phase 5+) からの「DL 要求」メッセージ受信や、状態問い合わせ応答は別フェーズで配線。</para></summary>
+/// <para>失敗追跡 (DL 失敗 / サムネ抽出失敗) は <see cref="MediaAcquisitionTracker"/> に委譲する (Step B 統合)。
+/// 公開 API <see cref="IsFailed"/> / <see cref="MarkThumbFailed"/> 等はそのまま維持して呼び出し側を壊さない。</para></summary>
 public sealed class VideoDownloadManager
 {
     /// <summary>動画 DL 専用 HttpClient (ブラウザ UA)。
@@ -32,25 +31,13 @@ public sealed class VideoDownloadManager
     /// 外部 CDN (tadaup.jp 等) が UA で挙動を変えて Chrome とは異なるエンコード/ビットレートの
     /// ファイルを返す事例があるため (= 黒画面再生 / コーデック非対応の見かけ症状)、
     /// 通常のブラウザ UA を使う独自インスタンスを持つ。</summary>
-    private readonly HttpClient        _http;
-    private readonly ImageCacheService _cache;
+    private readonly HttpClient                _http;
+    private readonly ImageCacheService         _cache;
+    private readonly MediaAcquisitionTracker   _tracker;
 
     /// <summary>進行中ダウンロード: URL → 完了 Task (= TrySetResult されるまで Pending)。
     /// 同じ URL の Request() は同じ Task を共有するためコアレスが成立する。</summary>
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _inFlight = new(StringComparer.Ordinal);
-
-    /// <summary>過去のセッションで DL に失敗した URL (HTTP 4xx/5xx / ネットワークエラー / SaveAsync 失敗)。
-    /// 同 URL を再 Request した時にも即 Failed 状態として扱う (= UI の「取得失敗」バッジを維持)。
-    /// アプリ再起動でクリアされる。</summary>
-    private readonly HashSet<string> _failed = new(StringComparer.Ordinal);
-    private readonly object _failedLock = new();
-
-    /// <summary>過去にサムネ抽出 (extractAndCacheVideoThumbnail / viewer.js 側 capture) で失敗した URL。
-    /// 新たに同 URL のスロットが描画されたときに自動再試行をスキップするためのマーカ。
-    /// ユーザ明示クリック (videoDownloadStart) でクリアされる。
-    /// アプリ再起動でクリアされる。</summary>
-    private readonly HashSet<string> _thumbFailed = new(StringComparer.Ordinal);
-    private readonly object _thumbFailedLock = new();
 
     /// <summary>ダウンロードが正常完了したとき発火 (URL のみペイロード)。
     /// 引数は <see cref="ImageCacheService"/> にコミット済の状態で渡される (= 直後の Contains/TryGet で即取得可)。
@@ -61,9 +48,10 @@ public sealed class VideoDownloadManager
     /// HTTP エラー / ストリームエラー / SaveAsync 失敗のすべてで発火する。</summary>
     public event EventHandler<VideoDownloadEventArgs>? DownloadFailed;
 
-    public VideoDownloadManager(ImageCacheService cache)
+    public VideoDownloadManager(ImageCacheService cache, MediaAcquisitionTracker tracker)
     {
-        _cache = cache;
+        _cache   = cache;
+        _tracker = tracker;
         // 動画は数 MB 〜数十 MB あり得るので 5 分タイムアウト (= MonazillaClient の 30 秒では切れる)。
         // AutomaticDecompression は動画 (.mp4) 用途では不要だが、サーバが万一 Transfer-Encoding で
         // 圧縮を入れてくる場合に備えて有効化。
@@ -101,13 +89,10 @@ public sealed class VideoDownloadManager
         }
 
         // 過去のセッションで失敗済 → 再 DL は試みず、Failed イベントだけ再発火 (UI バッジ維持用)。
-        lock (_failedLock)
+        if (_tracker.IsFailed(url, MediaAcquisitionKind.VideoDownload))
         {
-            if (_failed.Contains(url))
-            {
-                _ = Task.Run(() => DownloadFailed?.Invoke(this, new VideoDownloadEventArgs(url)));
-                return false;
-            }
+            _ = Task.Run(() => DownloadFailed?.Invoke(this, new VideoDownloadEventArgs(url)));
+            return false;
         }
 
         // TryAdd でアトミックに in-flight 登録。失敗 = 既に DL 中なので no-op (= 既存タスクに乗っかる)。
@@ -135,7 +120,7 @@ public sealed class VideoDownloadManager
                 }
                 else
                 {
-                    lock (_failedLock) { _failed.Add(url); }
+                    _tracker.MarkFailed(url, MediaAcquisitionKind.VideoDownload);
                     DownloadFailed?.Invoke(this, new VideoDownloadEventArgs(url));
                 }
             }
@@ -149,43 +134,23 @@ public sealed class VideoDownloadManager
 
     /// <summary>指定 URL が過去 (= このセッション中) に DL 失敗済か (404 / 5xx / ネットワークエラー等)。
     /// UI バッジ「取得失敗」表示の判定に使う。アプリ再起動でクリアされる。</summary>
-    public bool IsFailed(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return false;
-        lock (_failedLock) { return _failed.Contains(url); }
-    }
+    public bool IsFailed(string url) => _tracker.IsFailed(url, MediaAcquisitionKind.VideoDownload);
 
     /// <summary>指定 URL の失敗状態をクリアする (= キャッシュ削除メニュー等から呼ばれる)。
     /// 次回 Request() で再 DL が試みられる。</summary>
-    public void ResetFailedState(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return;
-        lock (_failedLock) { _failed.Remove(url); }
-    }
+    public void ResetFailedState(string url) => _tracker.Reset(url, MediaAcquisitionKind.VideoDownload);
 
     /// <summary>サムネ抽出失敗状態を記憶する。
     /// thread.js / viewer.js の抽出失敗メッセージ受信時に呼ばれる。
     /// 次回スレッド表示時にこの URL の自動抽出をスキップさせる用途。</summary>
-    public void MarkThumbFailed(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return;
-        lock (_thumbFailedLock) { _thumbFailed.Add(url); }
-    }
+    public void MarkThumbFailed(string url) => _tracker.MarkFailed(url, MediaAcquisitionKind.VideoThumb);
 
     /// <summary>指定 URL がサムネ抽出失敗済か。状態 push の <c>thumbExtractFailed</c> フィールドに乗る。</summary>
-    public bool IsThumbFailed(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return false;
-        lock (_thumbFailedLock) { return _thumbFailed.Contains(url); }
-    }
+    public bool IsThumbFailed(string url) => _tracker.IsFailed(url, MediaAcquisitionKind.VideoThumb);
 
     /// <summary>サムネ抽出失敗状態をクリアする。
     /// ユーザの明示クリック (= videoDownloadStart) で「再試行したい」意思があるとみなして呼ばれる。</summary>
-    public void ResetThumbFailedState(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return;
-        lock (_thumbFailedLock) { _thumbFailed.Remove(url); }
-    }
+    public void ResetThumbFailedState(string url) => _tracker.Reset(url, MediaAcquisitionKind.VideoThumb);
 
     private async Task<bool> DownloadAsync(string url)
     {

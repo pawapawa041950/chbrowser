@@ -1515,6 +1515,18 @@
         // resolvedUrl が来ていれば実際のロード対象を更新。
         if (meta.resolvedUrl) slot.dataset.src = meta.resolvedUrl;
 
+        // 過去のセッションで GET 失敗済みの URL は自動ロードしない (= MediaAcquisitionTracker.Image kind)。
+        // ユーザクリック (retrySlot) で再試行可。cached=true ならローカルファイルがあるので無視。
+        if (meta.imageLoadFailed) {
+            slot.classList.remove('deferred');
+            slot.classList.add('load-failed');
+            const text = document.createElement('span');
+            text.className = 'image-placeholder-text';
+            text.textContent = '画像取得失敗 — クリックで再試行';
+            slot.appendChild(text);
+            return;
+        }
+
         // ローカルキャッシュ済みの URL は帯域消費がないので、しきい値を無視して即ロード。
         if (meta.cached) { loadSlotImage(slot); return; }
 
@@ -1553,6 +1565,12 @@
         // C# まで届かない)。
         imageMetaCache.delete(url);
 
+        // C# 側 MediaAcquisitionTracker の全 Kind 失敗状態をクリア (= 統一 mediaSlotRetry、Step F)。
+        // imageMetaRequest の応答が imageLoadFailed/expand-failed=true で返ってきて自動再試行がスキップされ続けるのを防ぐ。
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'mediaSlotRetry', url: url });
+        }
+
         // 状態を初期 deferred に戻し、プレースホルダを除去。
         slot.classList.remove('expand-failed', 'load-failed', 'loaded', 'over-threshold');
         slot.classList.add('deferred');
@@ -1590,6 +1608,10 @@
             text.className = 'image-placeholder-text';
             text.textContent = '画像読み込み失敗 — クリックで再試行';
             slot.appendChild(text);
+            // C# 側 MediaAcquisitionTracker に Image kind 失敗を記録 (= 次回スレッド表示で自動 GET 抑止)。
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'imageLoadFailed', url: url });
+            }
         }, { once: true });
         slot.appendChild(img);
 
@@ -1943,9 +1965,10 @@
             slot.classList.add('playing');
 
             // 未キャッシュなら並列 DL を kick (完了時に C# が videoCacheState を broadcast)。
-            // ユーザの明示クリックなので、サムネ抽出失敗状態もリセットして再試行を強制する
-            // (C# 側でも HandleVideoDownloadStart で ResetThumbFailedState を呼んでいる)。
+            // ユーザの明示クリックなので、先に mediaSlotRetry で全 Kind 失敗状態をリセット
+            // → 後続の videoDownloadStart / extract で再試行が走る (Step F 統一)。
             if (!cached && window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'mediaSlotRetry', url: originalUrl });
                 window.chrome.webview.postMessage({ type: 'videoDownloadStart', url: originalUrl });
                 slot.dataset.extractKicked = '0';
                 extractAndCacheVideoThumbnail(originalUrl);

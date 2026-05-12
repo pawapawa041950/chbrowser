@@ -81,6 +81,41 @@ public partial class ThreadDisplayPane : UserControl
             }
             case "videoCacheQuery":    HandleVideoCacheQuery(sender, payload); break;
             case "videoDownloadStart": HandleVideoDownloadStart(sender, payload); break;
+            case "imageLoadFailed":    HandleImageLoadFailed(payload); break;
+            // 全 Kind 失敗状態リセット用の統一メッセージ (Step F)。
+            // 旧 imageRetry / videoDownloadStart 内の ResetThumbFailedState 等はこれに集約。
+            case "mediaSlotRetry":     HandleMediaSlotRetry(payload); break;
+        }
+    }
+
+    // ---- 画像 GET 失敗の tracker 記録 / リセット (Step D) ----
+
+    /// <summary>JS の <c>&lt;img&gt;.onerror</c> で画像取得に失敗した URL を tracker に記憶。
+    /// 次回スレッド表示時、<see cref="HandleImageMetaRequest"/> の応答で imageLoadFailed=true となり
+    /// JS 側は自動 loadSlotImage をスキップして「クリックで再試行」表示にする。</summary>
+    private static void HandleImageLoadFailed(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+        if (Application.Current is App app && app.MediaAcquisitionTrackerInstance is { } tracker)
+        {
+            tracker.MarkFailed(url, ChBrowser.Services.Media.MediaAcquisitionKind.Image);
+        }
+    }
+
+    /// <summary>JS の <c>retrySlot</c> / <c>playMedia</c> 経由 (= ユーザクリック) で全 Kind の失敗状態をクリア (Step F)。
+    /// retrySlot は画像 GET 失敗 / SNS 展開失敗の両方で呼ばれ、playMedia は動画再生開始で呼ばれる。
+    /// それぞれ別のメッセージにしていたものを統一: 「クリックされた = 全部リセットして再試行したい」と解釈する。
+    /// 続く本来の動作メッセージ (imageMetaRequest / videoDownloadStart) では失敗フラグ false になり再試行が走る。</summary>
+    private static void HandleMediaSlotRetry(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+        if (Application.Current is App app && app.MediaAcquisitionTrackerInstance is { } tracker)
+        {
+            tracker.ResetAll(url);
         }
     }
 
@@ -150,9 +185,8 @@ public partial class ThreadDisplayPane : UserControl
         var mgr = app.VideoDownloadManagerInstance;
         if (mgr is null) return;
 
-        // ユーザの明示クリック → サムネ抽出失敗状態もクリア (= 「再試行したい」意思とみなす)。
-        // 抽出の実際の再キックは JS 側 (playMedia) で行う。
-        mgr.ResetThumbFailedState(url);
+        // 失敗状態のリセットは JS 側が先に mediaSlotRetry メッセージを送る前提 (Step F で統一)。
+        // ここではダウンロード kick だけに専念。
 
         // 完了通知を sender に届けるため、URL ごとに待機 sender を覚えておく。
         // 既に DL 中なら Request() は no-op で false を返すが、最後の待機 sender に上書きすればよい
@@ -650,26 +684,42 @@ public partial class ThreadDisplayPane : UserControl
         {
             string? resolvedUrl = null;
             var isAsync = ChBrowser.Services.Image.UrlExpander.IsAsyncExpandable(url);
+            var tracker = (Application.Current as App)?.MediaAcquisitionTrackerInstance;
 
             if (isAsync && mainWindow.UrlExpander is not null)
             {
-                var expand = await mainWindow.UrlExpander.ExpandAsync(url).ConfigureAwait(true);
-                if (expand.IsNoMedia)
+                // 過去に SNS 展開失敗済の URL は ExpandAsync をスキップして即「クリックで再試行」経路へ。
+                // (= 再起動 / 別タブで同 URL のスロットが描画されても自動再試行しない、ユーザ明示クリックで Reset)
+                var preFailed = tracker?.IsFailed(url, ChBrowser.Services.Media.MediaAcquisitionKind.SnsExpand) == true;
+                if (preFailed)
                 {
-                    // 確定: ソース (= ツイート等) は存在するが画像/動画メディアが付いていない。
-                    // JS 側にスロット削除を指示 (= "画像取得失敗" プレースホルダを出さず、サムネ枠ごと消す)。
-                    if (wv.CoreWebView2 is null) return;
-                    var noMediaJson = JsonSerializer.Serialize(new
-                    {
-                        type    = "imageMeta",
-                        url,
-                        noMedia = true,
-                    });
-                    wv.CoreWebView2.PostWebMessageAsJson(noMediaJson);
-                    return;
+                    // 下の "ok=false, resolvedUrl=null" 経路に流す = JS で expand-failed バッジ表示
                 }
-                if (expand.IsResolved) resolvedUrl = expand.Url;
-                // expand.IsUnavailable はそのまま落として下の "ok=false" 経路 (= JS で「クリックで再試行」) に出す。
+                else
+                {
+                    var expand = await mainWindow.UrlExpander.ExpandAsync(url).ConfigureAwait(true);
+                    if (expand.IsNoMedia)
+                    {
+                        // 確定: ソース (= ツイート等) は存在するが画像/動画メディアが付いていない。
+                        // JS 側にスロット削除を指示 (= "画像取得失敗" プレースホルダを出さず、サムネ枠ごと消す)。
+                        if (wv.CoreWebView2 is null) return;
+                        var noMediaJson = JsonSerializer.Serialize(new
+                        {
+                            type    = "imageMeta",
+                            url,
+                            noMedia = true,
+                        });
+                        wv.CoreWebView2.PostWebMessageAsJson(noMediaJson);
+                        return;
+                    }
+                    if (expand.IsResolved) resolvedUrl = expand.Url;
+                    // Unavailable: tracker に記録 (= 次回以降の同 URL 描画で自動再試行しない)。
+                    else if (expand.IsUnavailable)
+                    {
+                        tracker?.MarkFailed(url, ChBrowser.Services.Media.MediaAcquisitionKind.SnsExpand);
+                    }
+                    // expand.IsUnavailable はそのまま落として下の "ok=false" 経路 (= JS で「クリックで再試行」) に出す。
+                }
             }
 
             var actualUrl = resolvedUrl ?? url;
@@ -702,6 +752,13 @@ public partial class ThreadDisplayPane : UserControl
             }
 
             if (wv.CoreWebView2 is null) return;
+
+            // 過去にこの URL の画像 GET が失敗していたら imageLoadFailed=true で通知
+            // (= JS 側は自動 loadSlotImage をスキップして「クリックで再試行」表示)。
+            // cached=true (= ローカルファイル存在) のときは fetcher 経路を通らないので失敗フラグは無視。
+            var imageLoadFailed = !cached && tracker is not null
+                && tracker.IsFailed(actualUrl, ChBrowser.Services.Media.MediaAcquisitionKind.Image);
+
             var json = JsonSerializer.Serialize(new
             {
                 type        = "imageMeta",
@@ -710,6 +767,7 @@ public partial class ThreadDisplayPane : UserControl
                 ok,
                 size,
                 cached,
+                imageLoadFailed,
             });
             wv.CoreWebView2.PostWebMessageAsJson(json);
         }
