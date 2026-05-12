@@ -383,6 +383,10 @@
                 html += '<b>' + escapeHtml(stripTags(m[3] || '')) + '</b>';
             } else if (tag === 'small') {
                 html += '<small>' + escapeHtml(stripTags(m[3] || '')) + '</small>';
+            } else if (/^<hr\b[^>]*\/?>$/i.test(m[0])) {
+                // <hr> は本文区切り (= >>1 の "VIPQ2_EXTDAT:..." メタ情報の手前など) に出るので、
+                // そのまま <hr> 要素として残す。属性は受け付けず単純な <hr> に正規化。
+                html += '<hr>';
             }
             // 不明タグはタグだけ落として中身を捨てる (中身は次イテレーションで処理されない点は既知の挙動)
             pos = m.index + m[0].length;
