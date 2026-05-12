@@ -339,7 +339,11 @@
     const INNER_ANCHOR_RE  = /^\s*>>\s*(\d+)(?:\s*-\s*(\d+))?\s*$/;
     const HREF_ANCHOR_RE   = /read\.cgi\/[^/]+\/[^/]+\/(\d+)(?:-(\d+))?\/?$/i;
     const STRIP_TAGS_RE    = /<[^>]+>/g;
-    const URL_OR_ANCHOR_RE = /(https?:\/\/[^\s<>"'、。()\[\]{}]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+    // URL 部分は RFC 3986 の ASCII URL-safe 文字に限定 (非 ASCII = 日本語等、および () のような
+    // 本来 percent-encode されるべき文字の手前でリンクを止める)。
+    //   許容: A-Z a-z 0-9 と unreserved (-._~) / gen-delims の :/?#@ / sub-delims の !$&*+,;= / pct の %
+    //   除外: 空白 / "<>' / () / [] / {} / |\^`  /  非 ASCII (Japanese 等)
+    const URL_OR_ANCHOR_RE = /(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
 
     // 5ch.io / 5ch.net / bbspink.com の <c>/test/read.cgi/&lt;dir&gt;/&lt;key&gt;(/&lt;postSpec&gt;)?</c> URL を検出。
     // postSpec は \d+ または \d+-\d+ (範囲)。指定が無いときは postNo=0 を返す (= 「1 レス目を見せる」の合図)。
@@ -1243,7 +1247,8 @@
 
     // ---------- リッチスクロールバー ----------
     /** 本文中に「インライン画像化される URL」(直リンク / 同期展開 / 非同期展開 すべて含む) が 1 つでもあるか。 */
-    const BODY_URL_RE = /https?:\/\/[^\s<>"'、。()\[\]{}]+/gi;
+    // URL_OR_ANCHOR_RE と同じ char-class (linkify と media 検出を一致させるため)。
+    const BODY_URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+/gi;
     function bodyContainsImage(body) {
         if (!body) return false;
         BODY_URL_RE.lastIndex = 0;
