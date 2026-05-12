@@ -8,8 +8,10 @@
 </style>
 </head>
 <body>
+<!-- stage 内のメディア要素は viewer.js が URL から img / video を判別して動的に差し替える。
+     初期は <img> を置いておき、video URL を受け取った時に <video> に置換する (逆も同様)。 -->
 <div id="stage">
-    <img id="image" alt="" />
+    <img id="media" alt="" />
 </div>
 <div id="status"></div>
 <script>

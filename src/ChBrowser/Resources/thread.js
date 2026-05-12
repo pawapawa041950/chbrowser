@@ -549,11 +549,18 @@
                    '" data-media-type="youtube"></span>';
         }
         // 2) 直リンク動画 (.mp4 .webm .mov)
+        // Phase 5: スロットは「キャッシュ問い合わせ待ち」の初期状態で出す。
+        //   - data-cache-state="unknown" → IntersectionObserver で材化時に C# に状態問い合わせ
+        //   - C# 応答後、JS が data-cache-state を "thumb-only" / "cached" に更新し、
+        //     thumb 画像 <img> を埋め込み、必要なら「未DL」バッジを表示する
+        //   - クリック時の挙動は cache-state に応じて分岐 (= キャッシュ済みなら仮想ホスト URL で即時再生、
+        //     未DLなら原URLストリーミング + 並列 DL kick)
         if (isVideoUrl(href)) {
-            return '<span class="image-slot video" data-src="' + escapeHtml(href) +
-                   '" data-url="' + escapeHtml(href) + '" data-media-type="video">' +
+            return '<span class="image-slot video deferred" data-src="' + escapeHtml(href) +
+                   '" data-url="' + escapeHtml(href) + '" data-media-type="video" data-cache-state="unknown">' +
                    '<span class="media-play-icon"></span>' +
                    '<span class="image-placeholder-text">動画 - クリックで再生</span>' +
+                   '<span class="video-dl-badge" style="display:none">未DL</span>' +
                    '</span>';
         }
         // 3) 同期で決まる画像 URL (直リンク / imgur 単純展開)
@@ -1632,37 +1639,255 @@
     }
 
     /**
-     * 直リンク動画スロットに <video preload=metadata muted> を埋め込み、first frame を
-     * サムネ代わりに表示する。クリック前なので controls は付けず、再生アイコン (▶) を上に重ねる。
-     * IntersectionObserver の viewport 近接時に呼ぶ。playMedia からも (クリック先行ケースで) 呼ばれる。
+     * Phase 5 新仕様: 動画スロットの「状態問い合わせ + 反映」フロー。
+     * IntersectionObserver で viewport に近づいたら C# に状態を問い合わせる。
+     * 旧仕様の「<video preload=metadata> をネイティブ first frame でサムネ化」は廃止し、
+     * キャッシュからの <img> 表示 or canvas 抽出済みのキャッシュ画像 表示に統一。
+     *
      * 何度呼んでも安全 (idempotent)。
      */
     function materializeVideoSlot(slot) {
-        if (slot.classList.contains('materialized')) return;
+        if (slot.dataset.materialized === '1') return;
         const url = slot.dataset.src;
         if (!url) return;
-        slot.classList.add('materialized');
-        slot.innerHTML = '';
+        slot.dataset.materialized = '1';
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'videoCacheQuery', url: url });
+        }
+    }
+
+    /** C# からの <c>videoCacheState</c> 受信時、URL が一致する全動画スロットに状態を反映する (Phase 5)。
+     *
+     *   hasThumb     → スロット内に <img class="video-thumb" src=thumbUrl> を埋める (or 既存差し替え)
+     *   !hasThumb    → サムネ抽出 (extractAndCacheVideoThumbnail) を kick (1 回だけ)
+     *   hasVideo     → data-cache-state="cached"、「未DL」バッジ非表示、data-video-cache-url=videoUrl をセット
+     *   !hasVideo    → data-cache-state="thumb-only"、「未DL」バッジ表示
+     *   downloading  → data-cache-state="downloading"、「未DL」バッジを「DL中」に
+     */
+    function applyVideoCacheState(state) {
+        const url = state.url;
+        if (!url) return;
+        const slots = document.querySelectorAll('.image-slot.video[data-media-type="video"][data-src="' + cssEscape(url) + '"]');
+        slots.forEach(function (slot) {
+            // downloadFailed の場合は再生中スロットでもエラーバッジを overlay 表示する。
+            // (playMedia でバッジ要素が削除されている可能性があるので、無ければ新規生成)
+            if (state.downloadFailed) {
+                let badge = slot.querySelector('.video-dl-badge');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'video-dl-badge';
+                    slot.appendChild(badge);
+                }
+                badge.textContent = '取得失敗';
+                badge.style.display = '';
+                slot.dataset.cacheState = 'failed';
+                return;
+            }
+            // 再生中スロット (playing class) は触らない (= サムネ表示や未DLバッジ更新は不要)
+            if (slot.classList.contains('playing')) return;
+
+            // 1) サムネ画像更新
+            if (state.hasThumb && state.thumbUrl) {
+                let img = slot.querySelector('img.video-thumb');
+                const isNew = !img;
+                if (!img) {
+                    img = document.createElement('img');
+                    img.className = 'video-thumb';
+                    img.onerror = function () { debugLog('[VideoSlot] thumb LOAD-ERROR src=' + this.src); };
+                    // 一番下に差し込む (= overlay/icon/badge より下のレイヤー)
+                    slot.insertBefore(img, slot.firstChild);
+                }
+                if (img.src !== state.thumbUrl) img.src = state.thumbUrl;
+                // placeholder text は thumb 表示後は不要
+                const ph = slot.querySelector('.image-placeholder-text');
+                if (ph) ph.style.display = 'none';
+            } else if (!state.hasThumb && !state.thumbExtractFailed && slot.dataset.extractKicked !== '1') {
+                // 初回のみサムネ抽出を kick (= 完了後 C# が videoCacheState を broadcast)。
+                // thumbExtractFailed=true の URL は過去に抽出失敗済みなので自動再試行はスキップ
+                // (= ユーザがクリックすると playMedia 側で extractKicked リセット + 再キック)。
+                slot.dataset.extractKicked = '1';
+                debugLog('[VideoSlot] extract KICK url=' + url);
+                extractAndCacheVideoThumbnail(url);
+            }
+
+            // 2a) ファイルサイズラベル (キャッシュ済動画のみ、スロット左下に "12.3 MB" 等)
+            let sizeLabel = slot.querySelector('.video-size-label');
+            if (state.hasVideo && state.videoSize > 0) {
+                if (!sizeLabel) {
+                    sizeLabel = document.createElement('span');
+                    sizeLabel.className = 'video-size-label';
+                    slot.appendChild(sizeLabel);
+                }
+                sizeLabel.textContent = formatFileSize(state.videoSize);
+            } else if (sizeLabel) {
+                sizeLabel.remove();
+            }
+
+            // 2b) DL 状態 + バッジ
+            const badge = slot.querySelector('.video-dl-badge');
+            if (state.hasVideo) {
+                slot.dataset.cacheState = 'cached';
+                if (state.videoUrl) slot.dataset.videoCacheUrl = state.videoUrl;
+                if (badge) badge.style.display = 'none';
+            } else if (state.downloadFailed) {
+                // 404 / 5xx / ネットワークエラーで DL 失敗した URL → 「取得失敗」バッジ。
+                // ユーザはサムネ自体は (もし抽出済みなら) 引き続き見える。
+                slot.dataset.cacheState = 'failed';
+                if (badge) { badge.textContent = '取得失敗'; badge.style.display = ''; }
+            } else if (state.downloading) {
+                slot.dataset.cacheState = 'downloading';
+                if (badge) { badge.textContent = 'DL中'; badge.style.display = ''; }
+            } else {
+                slot.dataset.cacheState = 'thumb-only';
+                if (badge) { badge.textContent = '未DL'; badge.style.display = ''; }
+            }
+        });
+    }
+
+    /** bytes を人間可読のサイズ表記 (B / KB / MB / GB) に整形。
+     *  動画スロットの左下ラベル表示用。 */
+    function formatFileSize(bytes) {
+        if (!bytes || bytes <= 0) return '';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    /** コーデック非対応動画 (= H.265/HEVC など Chromium が標準でデコードできない物) の
+     *  検出時に slot 上に「再生不可 (コーデック)」バッジを overlay 表示する。
+     *  playMedia 後の playing 状態でも視認できるよう、既存バッジを再利用 or 新規生成する。
+     *  既に「取得失敗」状態のスロットは上書きしない (= 404 と codec エラーの race condition 対策)。 */
+    function showCodecErrorBadge(slot) {
+        if (slot.dataset.cacheState === 'failed') return;
+        let badge = slot.querySelector('.video-dl-badge');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'video-dl-badge';
+            slot.appendChild(badge);
+        }
+        badge.textContent = '再生不可 (コーデック)';
+        badge.style.display = '';
+        slot.dataset.cacheState = 'codec-error';
+    }
+
+    /** CSS attribute selector で安全に使えるよう URL の特殊文字をエスケープ。
+     *  CSS.escape が利用可能ならそれを使う。 */
+    function cssEscape(s) {
+        if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(s);
+        // 簡易フォールバック (CSS.escape 非対応な極稀な環境向け)
+        return String(s).replace(/[^\w-]/g, function (c) { return '\\' + c; });
+    }
+
+    /** 動画 URL から最初のフレーム JPEG を抽出し、C# にキャッシュ保存を依頼する (Phase 3)。
+     *
+     *  画面外の hidden <video crossOrigin=anonymous preload=metadata> でロード →
+     *  loadeddata で canvas に描画 → toDataURL('image/jpeg') → C# にメッセージ送信。
+     *
+     *  crossOrigin='anonymous' のため C# の CORS proxy (WebView2Helper.ProxyCorsMediaAsync) 経由で
+     *  Access-Control-Allow-Origin: * 付きのレスポンスが返り、canvas tainted を回避できる。
+     *
+     *  Phase 5+ では「キャッシュサムネ無し」状態の image-slot で自動起動する想定。
+     *  Phase 3 単独では呼び出し元無し (= Phase 5 で配線)。
+     *
+     *  重複抑止: extractInFlight Set で同 URL の同時抽出を 1 つに絞る。 */
+    const extractInFlight = new Set();
+    function extractAndCacheVideoThumbnail(url) {
+        if (!url) return;
+        if (extractInFlight.has(url)) return;
+        extractInFlight.add(url);
 
         const video = document.createElement('video');
-        video.src     = url;
+        video.crossOrigin = 'anonymous';
         video.preload = 'metadata';
-        video.muted   = true;       // クリック前は無音 (auto play policy 対策、ユーザーは見るだけ)
+        video.muted = true;
         video.playsInline = true;
-        // preload=metadata だけでは first frame が出ない実装が多いので、メタデータが
-        // 揃ったら 0.1s seek して 1 フレーム強制描画させる (key frame まで取りに行く)。
+        // 画面外配置 (= display:none ではなく off-screen にする方が <video> の load が確実に走る実装が多い)
+        video.style.position = 'fixed';
+        video.style.left = '-99999px';
+        video.style.top  = '-99999px';
+        video.style.width  = '1px';
+        video.style.height = '1px';
+        document.body.appendChild(video);
+
+        let done = false;
+        let captured = false;
+        function cleanup() {
+            if (done) return;
+            done = true;
+            extractInFlight.delete(url);
+            try { video.src = ''; video.load(); } catch (_) {}
+            try { video.remove(); } catch (_) {}
+        }
+
+        function captureFrame(reason) {
+            if (captured || done) return;
+            captured = true;
+            try {
+                const w = video.videoWidth;
+                const h = video.videoHeight;
+                debugLog('[VideoSlot] extract capture(' + reason + ') url=' + url + ' size=' + w + 'x' + h + ' t=' + video.currentTime);
+                if (!w || !h) { cleanup(); return; }
+                // 長辺 240px まで縮小 (品質と通信量のバランス)
+                const max = 240;
+                const scale = Math.min(1, max / Math.max(w, h));
+                const canvas = document.createElement('canvas');
+                canvas.width  = Math.max(1, Math.round(w * scale));
+                canvas.height = Math.max(1, Math.round(h * scale));
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUri = canvas.toDataURL('image/jpeg', 0.85);
+                debugLog('[VideoSlot] extract OK url=' + url + ' dataUriLen=' + dataUri.length);
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({ type: 'videoThumbnailCache', url: url, dataUri: dataUri });
+                }
+            } catch (e) {
+                // CORS taint (proxy 失敗) や drawImage 失敗 → サムネ無しで諦め
+                if (window.chrome && window.chrome.webview) {
+                    window.chrome.webview.postMessage({ type: 'videoThumbnailCacheFailed', url: url, error: (e && e.name) || 'unknown', message: (e && e.message) || '' });
+                }
+            }
+            cleanup();
+        }
+
+        // メタデータが揃ったら少し進んだ時刻にシーク (= time=0 は黒 1 フレーム目になりがちなので回避)。
+        // 動画が極短 (< 1s) なら中点、それ以外は 0.5 秒 (or 末尾手前)。
         video.addEventListener('loadedmetadata', function () {
             try {
                 const dur = video.duration || 0;
-                video.currentTime = (dur > 0 && dur < 0.2) ? dur / 2 : 0.1;
-            } catch (e) { /* seek 失敗は黒コマで fallback */ }
+                const target = (dur > 0 && dur < 1) ? (dur / 2) : Math.min(0.5, Math.max(0.1, dur - 0.05));
+                if (isFinite(target) && target > 0) {
+                    video.currentTime = target;
+                } else {
+                    captureFrame('no-seek');
+                }
+            } catch (_) {
+                captureFrame('seek-throw');
+            }
         }, { once: true });
-        slot.appendChild(video);
 
-        // ▶ オーバーレイを再追加 (renderExternalLink で出していたものは innerHTML='' で消えた)
-        const icon = document.createElement('span');
-        icon.className = 'media-play-icon';
-        slot.appendChild(icon);
+        // 望ましいパス: シーク完了 → seeked → captureFrame
+        video.addEventListener('seeked', function () { captureFrame('seeked'); }, { once: true });
+
+        // フォールバック: seeked が来ない実装でも loadeddata から 800ms 経ったらキャプチャを強行
+        video.addEventListener('loadeddata', function () {
+            setTimeout(function () { captureFrame('loadeddata-timeout'); }, 800);
+        }, { once: true });
+
+        video.addEventListener('error', function () {
+            // 既にキャプチャ済 / 後片付け中の error は無視 (= cleanup で video.src='' したときの
+            // 「Empty src not allowed」error が誤検知になるのを防ぐ)
+            if (captured || done) return;
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'videoThumbnailCacheFailed', url: url, error: 'video-load-error', message: '' });
+            }
+            cleanup();
+        }, { once: true });
+
+        // 念のため 30 秒タイムアウト
+        setTimeout(cleanup, 30000);
+
+        video.src = url;
+        try { video.load(); } catch (_) {}
     }
 
     /** 直リンク動画スロットを実際の <video> 再生要素に置換する。
@@ -1673,23 +1898,62 @@
         const mediaType = slot.dataset.mediaType;
 
         if (mediaType === 'video') {
-            // viewport 外でクリックされた場合に備えて idempotent materialize
-            if (!slot.classList.contains('materialized')) materializeVideoSlot(slot);
-            const video = slot.querySelector('video');
-            if (!video) return;
+            // Phase 5 新仕様: slot 内の旧 <video preload=metadata> は廃止し、
+            // クリック時に新規 <video controls autoplay> を生成して差し替える。
+            // src は cache-state によって分岐:
+            //   cached → 仮想ホスト URL (= ローカルディスクから即時、シーク自由)
+            //   else   → 原 URL でストリーミング + 並列 DL を kick (= 次回からキャッシュヒット)
+            const originalUrl = slot.dataset.src;
+            const cacheUrl    = slot.dataset.videoCacheUrl;
+            const cached      = slot.dataset.cacheState === 'cached' && cacheUrl;
+            const playSrc     = cached ? cacheUrl : originalUrl;
+            if (!playSrc) return;
 
-            // ▶ オーバーレイを除去、controls を付けて unmute、再生開始
-            const icon = slot.querySelector('.media-play-icon');
-            if (icon) icon.remove();
+            // 既存 thumb / icon / badge / placeholder は除去 (= スロット内を空にして <video> だけにする)
+            slot.querySelectorAll('img.video-thumb, .media-play-icon, .video-dl-badge, .image-placeholder-text')
+                .forEach(function (el) { el.remove(); });
+
+            const video = document.createElement('video');
+            video.src = playSrc;
             video.controls = true;
-            video.muted    = false;
+            video.autoplay = true;
+            video.loop     = true;
+            video.playsInline = true;
+            // コーデック非対応動画 (= H.265/HEVC など) の検出。
+            // loadedmetadata 後に videoWidth/Height が 0 のままなら、コンテナは読めたが
+            // 動画ストリームはデコードできていない (= 「再生中」表示なのに黒画面の正体)。
+            // 1.5 秒待っても 0 のままならコーデック非対応とみなして overlay バッジを表示する。
+            //
+            // 404 / ネットワークエラーは MEDIA_ERR_SRC_NOT_SUPPORTED (code=4) と混同されやすく
+            // video.error 経由の codec 判定は不正確だったため、loadedmetadata + size=0 のみを判定根拠にする。
+            // 404 は別途 VideoDownloadManager 経由の videoCacheState で downloadFailed=true として届く。
+            video.addEventListener('loadedmetadata', function () {
+                setTimeout(function () {
+                    if (video.videoWidth === 0 || video.videoHeight === 0) {
+                        debugLog('[VideoPlay] codec unsupported (size=0x0) src=' + playSrc);
+                        showCodecErrorBadge(slot);
+                    }
+                }, 1500);
+            }, { once: true });
+            video.addEventListener('error', function () {
+                const er = video.error;
+                debugLog('[VideoPlay] ERROR src=' + playSrc + ' code=' + (er && er.code) + ' msg=' + (er && er.message));
+            }, { once: true });
+            slot.appendChild(video);
             slot.classList.add('playing');
 
-            // play() は metadata 未ロード時に reject されることがある。
-            // その場合は canplay を待ってリトライ。
+            // 未キャッシュなら並列 DL を kick (完了時に C# が videoCacheState を broadcast)。
+            // ユーザの明示クリックなので、サムネ抽出失敗状態もリセットして再試行を強制する
+            // (C# 側でも HandleVideoDownloadStart で ResetThumbFailedState を呼んでいる)。
+            if (!cached && window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'videoDownloadStart', url: originalUrl });
+                slot.dataset.extractKicked = '0';
+                extractAndCacheVideoThumbnail(originalUrl);
+            }
+
             video.play().catch(function () {
                 video.addEventListener('canplay', function () {
-                    video.play().catch(function () { /* それでもダメなら諦める */ });
+                    video.play().catch(function () { /* それでも失敗時は諦め */ });
                 }, { once: true });
             });
         }
@@ -2228,14 +2492,15 @@
         }
     }
 
-    /** URL (テキストリンク or 画像サムネ) の右クリック時に C# にコンテキストメニュー表示を依頼。
+    /** URL (テキストリンク or 画像/動画サムネ) の右クリック時に C# にコンテキストメニュー表示を依頼。
      *  「リンクをコピー」等のメニューは C# (ThreadDisplayPane) 側 UrlContextMenu リソースで定義。
      *  data-url にはオリジナルのページ URL (= サムネ生成用に解決した data-src ではなく、ユーザが
-     *  共有したい元 URL) が入っているのでそれをそのまま渡す。 */
-    function postUrlContextMenu(url) {
+     *  共有したい元 URL) が入っているのでそれをそのまま渡す。
+     *  mediaType は C# 側で「ビューアで開く」項目の可視切替に使う (image / video / youtube / 未指定)。 */
+    function postUrlContextMenu(url, mediaType) {
         if (!url) return;
         if (window.chrome && window.chrome.webview) {
-            window.chrome.webview.postMessage({ type: 'urlContextMenu', url: url });
+            window.chrome.webview.postMessage({ type: 'urlContextMenu', url: url, mediaType: mediaType || '' });
         }
     }
 
@@ -2252,12 +2517,14 @@
             return;
         }
 
-        // 2) URL: テキストリンク <a[data-url]> または画像サムネ .image-slot[data-url]
+        // 2) URL: テキストリンク <a[data-url]> または画像/動画サムネ .image-slot[data-url]
         const urlEl = e.target.closest && e.target.closest('a[data-url], .image-slot[data-url]');
         if (urlEl && urlEl.dataset && urlEl.dataset.url) {
             e.preventDefault();
             e.stopPropagation();
-            postUrlContextMenu(urlEl.dataset.url);
+            // image-slot なら mediaType を読み取って C# に渡す (= ビューアで開く項目の出し分け)
+            const mt = (urlEl.dataset && urlEl.dataset.mediaType) || '';
+            postUrlContextMenu(urlEl.dataset.url, mt);
             return;
         }
     });
@@ -3211,6 +3478,11 @@
                 case 'threadPreview':
                     // 5ch.io スレ URL ホバーで投げた threadPreviewRequest の応答 (タイトル + 対象レス本文)。
                     onThreadPreviewResponse(msg);
+                    break;
+                case 'videoCacheState':
+                    // Phase 5: 動画スロットのキャッシュ状態 (= サムネ有無 / 動画本体有無 / DL 中 / URL)。
+                    // 初回 query 応答、サムネキャッシュ書込完了、動画DL完了の各タイミングで届く。
+                    applyVideoCacheState(msg);
                     break;
                 case 'scrollToPost': {
                     // ContextMenu 「このレスに飛ぶ」から呼ばれる。primary レス (id="rN") に scrollIntoView。

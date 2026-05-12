@@ -182,9 +182,57 @@ a.anchor.missing {
     border-color: #ccc;
 }
 
-/* materialized (first frame サムネ表示中) のときはストライプ背景を消して video の上に直接 ▶ を重ねる */
-.image-slot.video.materialized {
+/* Phase 5: キャッシュサムネ画像がスロット内に描画されているときはストライプ背景を消す */
+.image-slot.video img.video-thumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
     background: #000;
+    pointer-events: none;
+}
+
+/* 未DL / DL中 / 取得失敗 バッジ: スロット右上に小さく表示 */
+.video-dl-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 3px;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* 取得失敗時は赤系バッジで視認性を上げる (= 通常の未DLとはひと目で区別したい) */
+.image-slot.video[data-cache-state="failed"] .video-dl-badge {
+    background: rgba(180, 30, 30, 0.85);
+}
+
+/* コーデック非対応 (= H.265/HEVC など Chromium がデコード不可) はオレンジ系バッジ。
+   ファイルは取得できているが再生はできない、を視覚的に区別する。 */
+.image-slot.video[data-cache-state="codec-error"] .video-dl-badge {
+    background: rgba(200, 130, 30, 0.9);
+}
+
+/* ファイルサイズラベル (= キャッシュ済動画のみ): スロット左下に半透明黒で表示。
+   再生中も残るので動画長さの目安として常時表示できる。 */
+.video-size-label {
+    position: absolute;
+    left: 4px;
+    bottom: 4px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 3px;
+    pointer-events: none;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
 }
 
 /* 中央に重ねる ▶ アイコン (黒丸 + 白い三角) */

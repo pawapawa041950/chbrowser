@@ -22,6 +22,16 @@ public partial class App : Application
     private MonazillaClient?   _monazilla;
     private ImageMetaService?  _imageMeta;
     private ImageCacheService? _imageCache;
+    /// <summary>外部 (ThreadDisplayPane / ImageViewerWindow 等) から画像キャッシュサービスを参照するためのプロパティ。
+    /// 動画サムネキャッシュ書き込み (Phase 3) / 動画 DL マネージャ (Phase 4) 等が利用する。
+    /// OnStartup 完了前は null。</summary>
+    public ImageCacheService? ImageCacheServiceInstance => _imageCache;
+
+    private ChBrowser.Services.Media.VideoDownloadManager? _videoDownloadManager;
+    /// <summary>動画本体のバックグラウンドダウンロード管理 (Phase 4)。
+    /// スレッド側 / ビューワ側からの「DL 要求」を URL 単位でコアレスし、完了/失敗イベントを発火する。
+    /// OnStartup 完了前は null。</summary>
+    public ChBrowser.Services.Media.VideoDownloadManager? VideoDownloadManagerInstance => _videoDownloadManager;
     private AiImageMetadataService? _aiImageMeta;
     private UrlExpander?       _urlExpander;
     private ConfigStorage?     _configStorage;
@@ -149,6 +159,12 @@ public partial class App : Application
 
         // WebResourceRequested による透過キャッシュ介在を有効化
         WebView2Helper.RegisterImageCache(_imageCache);
+        // Phase 3: CORS proxy 用に HttpClient を登録 (動画サムネ抽出時の crossOrigin リクエストを横取り)。
+        // MonazillaClient.Http を流用 (= 既存設定 Timeout / UA がそのまま効く)。
+        WebView2Helper.RegisterHttpClient(_monazilla.Http);
+        // Phase 4: 動画本体の並列 DL マネージャ。
+        // 内部で動画 DL 専用のブラウザ UA HttpClient を生成する (= 外部 CDN が UA で挙動を変える対策)。
+        _videoDownloadManager = new ChBrowser.Services.Media.VideoDownloadManager(_imageCache);
 
         // ウィンドウ/ペインサイズの永続化
         var layoutStorage = new LayoutStorage(paths);

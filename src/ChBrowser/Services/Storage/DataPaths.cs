@@ -50,6 +50,11 @@ public sealed class DataPaths
     public string NgByBoardDir    => EnsureDir(Path.Combine(NgDir, "by_board"));
     public string DonguriDir      => EnsureDir(Path.Combine(Root, "donguri"));
     public string CacheImagesDir  => EnsureDir(Path.Combine(Root, "cache", "images"));
+    /// <summary>動画本体ファイルのキャッシュディレクトリ (Phase 動画キャッシュ拡張)。
+    /// 画像と同じ index.json (= CacheImagesDir 配下) で集約管理されるが、ファイル本体は
+    /// 巨大になりがちなので物理的にディレクトリを分けて運用上の混乱を避ける。
+    /// 動画サムネ (JPEG) は Image 同様 CacheImagesDir に置く。</summary>
+    public string CacheVideosDir  => EnsureDir(Path.Combine(Root, "cache", "videos"));
     public string ThemesDir       => EnsureDir(Path.Combine(Root, "themes"));
 
     public string Root5chIo       => EnsureDir(Path.Combine(Root, "5ch.io"));

@@ -8,6 +8,10 @@
 //   バインディングは shortcuts.json で管理。zoom_in/out, rotate_right/left は JS ローカル即時実行。
 //   close, save, next_image, prev_image は C# 側で処理。
 //
+// メディア種別:
+//   .mp4/.webm/.mov の URL なら <video controls autoplay> を rendering、
+//   それ以外は <img>。setImage 受信時に URL 種別が現在の要素と違えば DOM ごと差し替える。
+//
 // C# → JS:
 //   { type: 'setImage', url }
 //   { type: 'setShortcutBindings', bindings: {...} } — ブリッジ用 (shortcut-bridge.js が直接受信)
@@ -22,7 +26,7 @@
     'use strict';
 
     var stage   = document.getElementById('stage');
-    var img     = document.getElementById('image');
+    var media   = document.getElementById('media'); // 初期は viewer.html の <img id="media">
     var statusEl = document.getElementById('status');
 
     var zoom = 1.0;
@@ -30,9 +34,21 @@
     var panY = 0;
     var rotation = 0; // 度 (90 単位)
 
+    var VIDEO_EXT_RE = /\.(mp4|webm|mov)(?:[?#]|$)/i;
+    function isVideoUrl(url) { return VIDEO_EXT_RE.test(url || ''); }
+
+    /** 現在の media 要素の自然サイズ。img なら naturalWidth/Height、video なら videoWidth/Height。
+     *  まだ load 中で 0 のことがあるので呼び出し側で 0 ガードする。 */
+    function naturalSize() {
+        if (media.tagName === 'VIDEO') {
+            return { w: media.videoWidth || 0, h: media.videoHeight || 0 };
+        }
+        return { w: media.naturalWidth || 0, h: media.naturalHeight || 0 };
+    }
+
     function applyTransform() {
         // translate(-50%, -50%) でセンタリング → translate(panX, panY) で移動 → scale でズーム → rotate で回転
-        img.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
+        media.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
     }
 
     function resetView() {
@@ -113,34 +129,121 @@
         }
     }
 
+    /** ビューワ側で再生中の <video> からフレームを抽出して ImageCacheService (Kind=VideoThumb) に保存。
+     *  thread.js の extractAndCacheVideoThumbnail と同じ通信フロー (videoThumbnailCache メッセージ) で、
+     *  保存後に C# 側がタブの ThumbnailPath を更新する。
+     *  cross-origin 動画で CORS ヘッダが無い場合は canvas が tainted になり toDataURL が SecurityError を投げる。
+     *  この関数は seeked 後に呼ぶ前提 (= 0.5 秒など意味のあるフレームを捕捉する)。 */
+    function tryCaptureVideoThumbnail(srcUrl) {
+        try {
+            if (media.tagName !== 'VIDEO') return;
+            var w = media.videoWidth;
+            var h = media.videoHeight;
+            if (!w || !h) return;
+            // 長辺 240px まで縮小 (= thread 側 extractAndCacheVideoThumbnail と同じパラメタ)
+            var max = 240;
+            var scale = Math.min(1, max / Math.max(w, h));
+            var canvas = document.createElement('canvas');
+            canvas.width  = Math.max(1, Math.round(w * scale));
+            canvas.height = Math.max(1, Math.round(h * scale));
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
+            var dataUri = canvas.toDataURL('image/jpeg', 0.85);
+            post({ type: 'videoThumbnailCache', url: srcUrl, dataUri: dataUri });
+        } catch (e) {
+            post({ type: 'videoThumbnailCacheFailed', url: srcUrl, error: (e && e.name) || 'unknown', message: (e && e.message) || '' });
+        }
+    }
+
+    /** URL 種別に応じて #media を <img> / <video> に差し替える (既に正しい型なら何もしない)。
+     *  パンや wheel/dblclick/contextmenu のリスナは要素ではなく stage 側にあるので再 attach 不要。 */
+    function ensureMediaElement(wantsVideo) {
+        var isVideo = media.tagName === 'VIDEO';
+        if (isVideo === wantsVideo) return;
+        var next;
+        if (wantsVideo) {
+            next = document.createElement('video');
+            next.controls = true;
+            next.autoplay = true;
+            next.loop     = true;          // 5ch でよくある短尺ループ動画想定
+            next.playsInline = true;
+        } else {
+            next = document.createElement('img');
+            next.alt = '';
+        }
+        next.id = 'media';
+        media.replaceWith(next);
+        media = next;
+    }
+
     function setImage(url) {
         if (!url) {
-            img.removeAttribute('src');
+            // 空 URL: 現状の要素から src だけ落とす
+            if (media.tagName === 'VIDEO') media.removeAttribute('src');
+            else                           media.removeAttribute('src');
             return;
         }
+        var wantsVideo = isVideoUrl(url);
+        ensureMediaElement(wantsVideo);
         resetView();
-        img.onload = function () {
-            // 初期表示: window に収まるよう自動フィット (= 小さい画像は原寸キープ、大きい画像は縮小)
-            fitToStage(/*capAtNatural*/ true);
-            post({ type: 'imageReady' });
-        };
-        img.onerror = function () {
-            post({ type: 'imageError' });
-        };
-        img.src = url;
+        if (wantsVideo) {
+            // <video> は loadedmetadata で size が確定する。再生エラーは error イベント。
+            media.onloadedmetadata = function () {
+                fitToStage(/*capAtNatural*/ true);
+                post({ type: 'imageReady' });
+                // サムネ抽出のために 0.5 秒地点へシーク (= time=0 は黒フレームになりがちなので回避)。
+                // ユーザの主観上はクリック直後の数百 ms に過ぎず実害なし。
+                try {
+                    var dur = media.duration || 0;
+                    var target = (dur > 0 && dur < 1) ? (dur / 2) : Math.min(0.5, Math.max(0.1, dur - 0.05));
+                    if (isFinite(target) && target > 0) {
+                        media.currentTime = target;
+                    } else {
+                        tryCaptureVideoThumbnail(url);
+                    }
+                } catch (_) { tryCaptureVideoThumbnail(url); }
+            };
+            // seeked: 上記 currentTime 設定の完了通知。意味のあるフレームを取得できる。
+            media.onseeked = function () {
+                tryCaptureVideoThumbnail(url);
+            };
+            // crossOrigin='anonymous' で proxy 経由の CORS-clean レスポンス → canvas 抽出可。
+            // proxy 失敗 (CDN 側 CORS 全く受け付けない) の場合のフォールバックは onerror 経路で外す。
+            media.crossOrigin = 'anonymous';
+            var corsFallbackTried = false;
+            media.onerror = function () {
+                if (!corsFallbackTried) {
+                    corsFallbackTried = true;
+                    try { media.removeAttribute('crossorigin'); } catch (_) {}
+                    media.onseeked = null;     // 再試行ではサムネ抽出は諦める (tainted canvas 回避)
+                    media.src = url;
+                    try { media.load(); } catch (_) {}
+                    return;
+                }
+                post({ type: 'imageError' });
+            };
+            media.src = url;
+            // load() は src 設定で暗黙に起動するが、autoplay が確実に効くよう明示
+            try { media.load(); } catch (_) {}
+        } else {
+            media.onload  = function () {
+                fitToStage(/*capAtNatural*/ true);
+                post({ type: 'imageReady' });
+            };
+            media.onerror = function () { post({ type: 'imageError' }); };
+            media.src = url;
+        }
     }
 
     /** ウィンドウに合わせる。
      *  capAtNatural = true (初期表示 / リサイズ時): 画像が小さくても原寸 (1.0) より大きくしない。
-     *  capAtNatural = false (右クリックメニューからの明示要求): キャップなしで stage いっぱいに広げる。
-     *  メニュー経由時にキャップをかけると「100% から動かない」現象 (= 既に zoom=1.0 のとき何も変わらない) が出るため切り替える。 */
+     *  capAtNatural = false (右クリックメニューからの明示要求): キャップなしで stage いっぱいに広げる。 */
     function fitToStage(capAtNatural) {
         var sw = stage.clientWidth;
         var sh = stage.clientHeight;
-        var iw = img.naturalWidth;
-        var ih = img.naturalHeight;
-        if (!sw || !sh || !iw || !ih) return;
-        var fit = Math.min(sw / iw, sh / ih);
+        var n  = naturalSize();
+        if (!sw || !sh || !n.w || !n.h) return;
+        var fit = Math.min(sw / n.w, sh / n.h);
         zoom = capAtNatural ? Math.min(1, fit) : fit;
         panX = 0;
         panY = 0;
@@ -184,12 +287,16 @@
     }, { passive: false });
 
     // ---- ドラッグでパン ----
+    // video 上では pointer-events: auto により video が drag を消費するため
+    // 視覚的には「外側の余白でしか pan できない」が、それで十分。controls 操作と両立させる。
     var dragging = false;
     var dragStartX = 0, dragStartY = 0;
     var dragOrigPanX = 0, dragOrigPanY = 0;
 
     stage.addEventListener('mousedown', function (e) {
         if (e.button !== 0) return; // 左クリックのみ
+        // 動画 controls クリックは pan させない (= video 要素自身が target)
+        if (e.target && e.target.tagName === 'VIDEO') return;
         dragging = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
@@ -224,10 +331,14 @@
         post({ type: 'contextMenu' });
     });
 
-    // ---- ウィンドウサイズ変更でフィット再計算 (画像未ロードなら何もしない) ----
-    // (= 初期表示と同じく、小さい画像は原寸キープで拡大しない)
+    // ---- ウィンドウサイズ変更でフィット再計算 ----
+    // 画像: img.complete && naturalWidth > 0。動画: readyState >= 1 && videoWidth > 0。
     window.addEventListener('resize', function () {
-        if (img.complete && img.naturalWidth > 0) fitToStage(/*capAtNatural*/ true);
+        if (media.tagName === 'VIDEO') {
+            if (media.readyState >= 1 && media.videoWidth > 0) fitToStage(/*capAtNatural*/ true);
+        } else {
+            if (media.complete && media.naturalWidth > 0) fitToStage(/*capAtNatural*/ true);
+        }
     });
 
     // ---- C# からのメッセージ受信 ----

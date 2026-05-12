@@ -49,10 +49,23 @@
             </MenuItem>
         </ContextMenu>
 
-        <!-- URL (本文中のテキストリンク / 画像サムネ) 右クリック用コンテキストメニュー。
+        <!-- URL (本文中のテキストリンク / 画像/動画サムネ) 右クリック用コンテキストメニュー。
              JS の urlContextMenu メッセージを受けて HandleUrlContextMenu が IsOpen=true で開く。
-             対象 URL は ContextMenu.Tag に積んでクリックハンドラから読み出す。 -->
+             対象 URL は ContextMenu.Tag に積んでクリックハンドラから読み出す。
+             「ビューアで開く」は画像/動画サムネ右クリック時のみ Visible (HandleUrlContextMenu で切替)。 -->
         <ContextMenu x:Key="UrlContextMenu" x:Shared="False">
+            <!-- ビューア項目は Tag="openInViewer" で HandleUrlContextMenu から識別 (x:Name は
+                 x:Shared="False" だと毎回違う名前スコープに登録されるため Tag のほうが扱いやすい)。 -->
+            <MenuItem Header="ビューアで開く"
+                      Tag="openInViewer"
+                      Click="OpenInViewer_Click"
+                      Visibility="Collapsed" />
+            <!-- キャッシュ削除: 動画スロット (mediaType=='video') 右クリック時のみ表示。
+                 VideoThumb + Video のキャッシュエントリ + DL 失敗状態をクリアする。 -->
+            <MenuItem Header="キャッシュ削除"
+                      Tag="deleteVideoCache"
+                      Click="DeleteVideoCache_Click"
+                      Visibility="Collapsed" />
             <MenuItem Header="リンクをコピー" Click="UrlCopy_Click" />
         </ContextMenu>
     </UserControl.Resources>

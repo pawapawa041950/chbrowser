@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -210,6 +212,40 @@ public static partial class WebView2Helper
     /// post.html (テンプレ) と post.css をスレシェルに注入する。</summary>
     public static void RegisterThemeService(ThemeService theme) => _themeService = theme;
 
+    /// <summary>CORS proxy 用の HttpClient (Phase 3)。
+    /// 5ch 共有先 (tadaup.jp 等) は Monazilla UA を弾く / 特殊ヘッダを期待することがあるため、
+    /// 5ch 本体用の <see cref="MonazillaClient.Http"/> ではなくブラウザ UA の専用 HttpClient を使う。
+    /// 初回利用時に lazy 生成。</summary>
+    private static HttpClient? _corsProxyHttp;
+    private static readonly object _corsProxyHttpLock = new();
+    private static HttpClient GetCorsProxyHttpClient()
+    {
+        if (_corsProxyHttp is not null) return _corsProxyHttp;
+        lock (_corsProxyHttpLock)
+        {
+            if (_corsProxyHttp is not null) return _corsProxyHttp;
+            var handler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect        = true,
+                MaxAutomaticRedirections = 5,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            };
+            var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 ChBrowser");
+            http.DefaultRequestHeaders.AcceptLanguage.ParseAdd("ja,en;q=0.8");
+            _corsProxyHttp = http;
+            return _corsProxyHttp;
+        }
+    }
+
+    /// <summary>(現状未使用) 外部から HttpClient を差し替えるための拡張点。
+    /// 標準では <see cref="GetCorsProxyHttpClient"/> のブラウザ UA HttpClient を使う。</summary>
+    public static void RegisterHttpClient(HttpClient http)
+    {
+        lock (_corsProxyHttpLock) { _corsProxyHttp = http; }
+    }
+
     private static void InstallWebResourceHandlers(WebView2 wv)
     {
         if (_imageCache is null) return; // 画像キャッシュ未登録なら何もしない
@@ -219,12 +255,53 @@ public static partial class WebView2Helper
         var core = wv.CoreWebView2;
         if (core is null) return;
 
+        // Phase 2: キャッシュフォルダを HTTPS 仮想ホスト化する (画像 / 動画サムネ / 動画本体すべて共通)。
+        // https://chbrowser-cache.local/images/aa/<hash>.jpg
+        // https://chbrowser-cache.local/videos/aa/<hash>.mp4
+        // のような URL を <img>/<video> の src に直接渡せば、WebView2 がローカルファイルを配信する。
+        // Phase 5+ のキャッシュ済動画再生で利用する (動画は範囲リクエストも仮想ホスト側で適切に処理される)。
+        try
+        {
+            core.SetVirtualHostNameToFolderMapping(
+                ImageCacheService.VirtualHostName,
+                _imageCache.CacheRootDir,
+                CoreWebView2HostResourceAccessKind.Allow);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VirtualHost] mapping setup failed: {ex.Message}");
+        }
+
         // <img> や CSS background-image などブラウザが画像として要求する全リソースを対象にする。
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Image);
+        // <video> / <audio> 要素のメディアリクエストも対象 (Phase 3 で CORS proxy が必要)。
+        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Media);
 
         core.WebResourceRequested += (s, e) =>
         {
             var url = e.Request.Uri;
+            var ctx = e.ResourceContext;
+
+            // ---- Media (= <video> / <audio>) リクエスト処理 ----
+            if (ctx == CoreWebView2WebResourceContext.Media)
+            {
+                // crossOrigin='anonymous' な <video> からのリクエストは Origin ヘッダが付く。
+                // この場合だけ C# 側で取得して Access-Control-Allow-Origin: * を付けて返す
+                // (= CORS proxy)。Origin が無い通常の <video> は WebView2 にそのまま処理させる。
+                //
+                // GetHeader は対象が無いと COMException ERROR_NOT_FOUND を投げる SDK 仕様なので
+                // TryGetHeaderSafe で握り潰す (= ストリーミング動画の range request 毎の first-chance 例外抑制)。
+                var origin = TryGetHeaderSafe(e, "Origin");
+                if (!string.IsNullOrEmpty(origin))
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[CorsProxy] intercept url={url} origin={origin}");
+                    var deferral = e.GetDeferral();
+                    _ = ProxyCorsMediaAsync(core, e, url, deferral);
+                }
+                return; // CORS 不要なメディアリクエストは素通り
+            }
+
+            // ---- Image リクエスト処理 (既存ロジック) ----
 
             // pixiv の i.pximg.net は Referer: https://www.pixiv.net/ が無いと 403 を返す。
             if (url.IndexOf(".pximg.net", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -242,8 +319,8 @@ public static partial class WebView2Helper
             // CreateWebResourceResponse + Response 設定 + Complete を完了通知に集約する。
             // 旧実装の File.ReadAllBytes (= 巨大画像で数十 ms 同期ブロック + 全画像分のメモリ確保)
             // が解消される。FileShare.Read で同じファイルを 2 経路から並列読みされても安全。
-            var deferral = e.GetDeferral();
-            _ = ServeFromCacheAsync(core, e, hit, url, deferral);
+            var deferralImg = e.GetDeferral();
+            _ = ServeFromCacheAsync(core, e, hit, url, deferralImg);
         };
 
         core.WebResourceResponseReceived += async (s, e) =>
@@ -275,6 +352,123 @@ public static partial class WebView2Helper
                 Debug.WriteLine($"[ImageCache] capture failed: {ex.Message}");
             }
         };
+    }
+
+    /// <summary>crossOrigin='anonymous' な <c>&lt;video&gt;</c> からのリクエスト (= Origin ヘッダ付き) を
+    /// C# HttpClient で取り直し、<c>Access-Control-Allow-Origin: *</c> を付けて返す。
+    /// これにより canvas tainted を回避してサムネ抽出 (Phase 3) が可能になる。
+    ///
+    /// <para>UA はブラウザ風 (<see cref="GetCorsProxyHttpClient"/>) を使う
+    /// (= Monazilla UA を弾く 5ch 共有先 (tadaup.jp 等) に備える)。</para>
+    ///
+    /// <para>レスポンスはストリーミングで WebView2 に渡し、ストリームの dispose で
+    /// HttpResponseMessage も一緒に dispose する (= 大きい動画でも全 buffer せず、
+    /// preload=metadata で途中 abort されるケースで帯域を無駄遣いしない)。</para>
+    ///
+    /// <para>失敗時は <c>e.Response</c> をセットせずに deferral.Complete() する
+    /// (= WebView2 が通常通り CDN にリクエスト → CORS 違反でブロックされる流れ。
+    /// JS 側の <c>video.onerror</c> で検知できる)。</para></summary>
+    private static async Task ProxyCorsMediaAsync(
+        CoreWebView2 core,
+        CoreWebView2WebResourceRequestedEventArgs e,
+        string url,
+        CoreWebView2Deferral deferral)
+    {
+        // WebView2 のイベント引数は COM オブジェクトで、worker thread からの
+        // ヘッダ取得は例外を投げることがある (Range/Referer が無いと ERROR_NOT_FOUND)。
+        // そのため UI スレッドの段階で必要なヘッダを抜き出してから await Task.Yield に入る。
+        string? range   = TryGetHeaderSafe(e, "Range");
+        string? referer = TryGetHeaderSafe(e, "Referer");
+
+        HttpResponseMessage? resp = null;
+        try
+        {
+            await Task.Yield();
+            var http = GetCorsProxyHttpClient();
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+
+            if (!string.IsNullOrEmpty(range))
+            {
+                try { req.Headers.TryAddWithoutValidation("Range", range); }
+                catch (Exception ex) { Debug.WriteLine($"[CorsProxy] range header set failed: {ex.Message}"); }
+            }
+            if (!string.IsNullOrEmpty(referer))
+            {
+                try { req.Headers.TryAddWithoutValidation("Referer", referer); } catch { }
+            }
+
+            resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[CorsProxy] response status={(int)resp.StatusCode} url={url}");
+
+            // ヘッダを構築 (CRLF 区切り、CreateWebResourceResponse の仕様)。
+            // upstream の Access-Control-* は捨てて C# 側で必ず * を付け直す (= 確実に CORS-clean)。
+            var sb = new StringBuilder();
+            foreach (var h in resp.Headers)
+            {
+                if (h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var v in h.Value) sb.Append(h.Key).Append(": ").Append(v).Append("\r\n");
+            }
+            if (resp.Content is not null)
+            {
+                foreach (var h in resp.Content.Headers)
+                {
+                    if (h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase)) continue;
+                    foreach (var v in h.Value) sb.Append(h.Key).Append(": ").Append(v).Append("\r\n");
+                }
+            }
+            sb.Append("Access-Control-Allow-Origin: *\r\n");
+
+            if (resp.Content is null)
+            {
+                Debug.WriteLine($"[CorsProxy] response.Content was null url={url}");
+                return;
+            }
+
+            // MemoryStream にプリバッファ。理由:
+            //   - WebView2 にネットワークストリームを直接渡すと Length 等のメタデータクエリで
+            //     NotSupportedException が出る (= first-chance 例外がデバッガで毎回ブレーク)。
+            //   - CORS proxy 経路は thumbnail extraction (preload=metadata) 専用なので、
+            //     データサイズは現実的に小さい (大きい mp4 でもサーバ側で early-abort される)。
+            //   - 安定性 / デバッグ体験 > 帯域効率、で MemoryStream を選択。
+            var ms = new MemoryStream();
+            await resp.Content.CopyToAsync(ms).ConfigureAwait(false);
+            ms.Position = 0;
+
+            var status     = (int)resp.StatusCode;
+            var reason     = resp.ReasonPhrase ?? "OK";
+            var headerText = sb.ToString();
+
+            // CreateWebResourceResponse は UI スレッドで呼ぶ必要があるため Dispatcher へ。
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                try
+                {
+                    var webResp = core.Environment.CreateWebResourceResponse(ms, status, reason, headerText);
+                    e.Response = webResp;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[CorsProxy] CreateResponse failed: {ex.Message}");
+                    ms.Dispose();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[CorsProxy] failed url={url}: {ex.GetType().Name} - {ex.Message}");
+        }
+        finally
+        {
+            resp?.Dispose();
+            deferral.Complete();
+        }
+    }
+
+    /// <summary>WebView2 のイベント引数からヘッダを安全に取得 (= 無い場合の COMException も握り潰す)。</summary>
+    private static string? TryGetHeaderSafe(CoreWebView2WebResourceRequestedEventArgs e, string name)
+    {
+        try { return e.Request.Headers.GetHeader(name); }
+        catch { return null; }
     }
 
     /// <summary>キャッシュヒットしたローカルファイルを <see cref="FileStream"/> で開いて

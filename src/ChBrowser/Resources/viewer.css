@@ -25,7 +25,9 @@ html, body {
     cursor: grabbing;
 }
 
-#image {
+/* #media は img / video の共通スタイル。viewer.js が URL 種別に応じて要素を差し替えるが
+   どちらも同じ class/id でセンタリングされる。 */
+#media {
     position: absolute;
     left: 50%;
     top: 50%;
@@ -35,7 +37,19 @@ html, body {
     max-height: none;
     user-drag: none;
     -webkit-user-drag: none;
-    pointer-events: none; /* 画像自身に drag を捕まれないようにし、stage 全体で wheel/drag を扱う */
+}
+
+/* 画像は drag を捕まれないようにし、stage 全体で wheel/drag を扱う。 */
+img#media {
+    pointer-events: none;
+}
+
+/* 動画は controls を操作する必要があるので pointer-events: auto。
+   stage の drag による pan は動画上では効かなくなるが、外側の余白で pan できる。
+   wheel / dblclick / contextmenu は要素上から stage へ bubble するので問題なし。 */
+video#media {
+    pointer-events: auto;
+    background: #000;
 }
 
 #status {

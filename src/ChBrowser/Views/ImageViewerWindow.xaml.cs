@@ -294,10 +294,78 @@ public partial class ImageViewerWindow : Window
                     }
                     break;
                 }
+                case "videoThumbnailCache":
+                {
+                    // viewer.js が <video> のフレーム (seeked 後) を canvas で抽出して送ってきた
+                    // JPEG data URI。スレッド側と同じ ImageCacheService (Kind=VideoThumb) に保存する。
+                    // 保存後に該当タブの ThumbnailPath をローカルファイルパスに差し替える。
+                    var dataUri = root.TryGetProperty("dataUri", out var dp2) ? dp2.GetString() : null;
+                    var thumbUrl = root.TryGetProperty("url", out var up2) ? up2.GetString() : null;
+                    if (!string.IsNullOrEmpty(dataUri) && !string.IsNullOrEmpty(thumbUrl))
+                    {
+                        _ = SaveVideoThumbAndRefreshAsync(vm, thumbUrl!, dataUri!);
+                    }
+                    break;
+                }
+                case "videoThumbnailCacheFailed":
+                {
+                    var failUrl  = root.TryGetProperty("url",     out var fup) ? fup.GetString() : "";
+                    var failErr  = root.TryGetProperty("error",   out var fep) ? fep.GetString() : "";
+                    var failMsg  = root.TryGetProperty("message", out var fmp) ? fmp.GetString() : "";
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[VideoThumb] viewer capture failed url={failUrl} error={failErr} msg={failMsg}");
+                    break;
+                }
                 // imageError は今のところ無視 (status 表示は Phase 10c 以降で検討)
             }
         }
         catch (JsonException) { /* malformed message — ignore */ }
+    }
+
+    /// <summary>viewer.js から届いた動画フレーム data URI を <see cref="ImageCacheService"/> に
+    /// Kind=VideoThumb で保存し、対応タブの <see cref="ImageViewerTabViewModel.ThumbnailPath"/> を
+    /// ローカルファイルパスに差し替える。data URI の decode 失敗 / I/O 失敗時は何もしない
+    /// (= タブは ▶ オーバーレイのみのまま)。
+    ///
+    /// 旧実装の temp file 経路 (<c>%TEMP%/ChBrowser_VideoThumbs</c>) は廃止し、スレッド側 / ビューワ側で
+    /// 統一して ImageCacheService 経由でキャッシュ管理する。これにより:
+    /// <list type="bullet">
+    /// <item><description>thread / viewer のどちらで先に抽出してももう一方からキャッシュヒットで利用できる</description></item>
+    /// <item><description>LRU 削除や上限管理が一貫</description></item>
+    /// </list></summary>
+    private async Task SaveVideoThumbAndRefreshAsync(ImageViewerViewModel vm, string url, string dataUri)
+    {
+        // data:image/jpeg;base64,<payload>
+        var commaIdx = dataUri.IndexOf(',');
+        if (commaIdx < 0) return;
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(dataUri[(commaIdx + 1)..]); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VideoThumb] base64 decode failed: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            using var ms = new MemoryStream(bytes);
+            await _imageCache.SaveAsync(url, ms, "image/jpeg", CacheKind.VideoThumb).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VideoThumb] SaveAsync failed: {ex.Message}");
+            return;
+        }
+
+        // 保存後 (or 既にキャッシュ済) の物理ファイルパスを取って該当タブに反映。
+        if (!_imageCache.TryGet(url, out var hit, CacheKind.VideoThumb)) return;
+        foreach (var t in vm.Tabs)
+        {
+            if (t.Url == url)
+            {
+                t.ThumbnailPath = hit.FilePath;
+                break;
+            }
+        }
     }
 
     /// <summary>layout.json から読んだ <see cref="ViewerWindowGeometry"/> を反映する。
@@ -335,8 +403,13 @@ public partial class ImageViewerWindow : Window
     {
         if (DataContext is not ImageViewerViewModel vm) return;
         var tab = vm.OpenOrAddTab(url);
-        // 既にキャッシュにあれば即座にサムネをローカルファイルに切替 (HTTP fetch を避ける)
+        // 画像タブ: 既にキャッシュにあれば即座にサムネをローカルファイルに切替 (HTTP fetch を避ける)
         tab.RefreshThumbnailFromCache(_imageCache);
+        // Phase 6: 動画タブはサムネキャッシュ流用 + 動画本体キャッシュ参照 / 未キャッシュなら並列 DL kick
+        if (tab.IsVideo && Application.Current is App app && app.VideoDownloadManagerInstance is { } mgr)
+        {
+            tab.InitializeForVideo(_imageCache, mgr);
+        }
         if (!IsVisible) Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();

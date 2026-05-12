@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using ChBrowser.Services.Image;
 using ChBrowser.Services.WebView2;
 using ChBrowser.ViewModels;
 using Microsoft.Web.WebView2.Core;
@@ -23,6 +24,7 @@ public partial class ThreadDisplayPane : UserControl
     {
         InitializeComponent();
         ChBrowser.Controls.PaneDragInitiator.Attach(HeaderBar, ChBrowser.Models.PaneId.ThreadDisplay);
+        Loaded += (_, __) => WireVideoDownloadCompletionToPane();
     }
 
     // ---- ペインフォーカス → ViewModel に通知 ----
@@ -60,7 +62,202 @@ public partial class ThreadDisplayPane : UserControl
             case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
             case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
             case "threadPreviewRequest": HandleThreadPreviewRequest(sender, payload); break;
+            case "videoThumbnailCache": HandleVideoThumbnailCache(sender, payload); break;
+            case "videoThumbnailCacheFailed":
+            {
+                // サムネ抽出失敗を VideoDownloadManager に記憶。次回スレッド表示時の自動再試行を抑制する。
+                // ユーザ明示クリック (videoDownloadStart) でリセットされる。
+                var failUrl = payload.TryGetProperty("url",     out var fup) ? fup.GetString() : "";
+                var failErr = payload.TryGetProperty("error",   out var fep) ? fep.GetString() : "";
+                var failMsg = payload.TryGetProperty("message", out var fmp) ? fmp.GetString() : "";
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[VideoThumbCache] extract FAILED url={failUrl} error={failErr} msg={failMsg}");
+                if (!string.IsNullOrEmpty(failUrl)
+                    && Application.Current is App app
+                    && app.VideoDownloadManagerInstance is { } failMgr)
+                {
+                    failMgr.MarkThumbFailed(failUrl);
+                }
+                break;
+            }
+            case "videoCacheQuery":    HandleVideoCacheQuery(sender, payload); break;
+            case "videoDownloadStart": HandleVideoDownloadStart(sender, payload); break;
         }
+    }
+
+    // ---- 動画サムネキャッシュ書き込み (Phase 3) + 状態問い合わせ / DL 起動 (Phase 5) ----
+
+    /// <summary>thread.js の <c>extractAndCacheVideoThumbnail</c> が抽出した JPEG data URI を受け、
+    /// <see cref="ImageCacheService"/> に Kind=VideoThumb で保存する。
+    /// 保存完了後、sender WebView2 に <c>videoCacheState</c> を push して slot に thumb URL を伝える。</summary>
+    private static void HandleVideoThumbnailCache(object sender, JsonElement payload)
+    {
+        if (!payload.TryGetProperty("url",     out var urlProp))     return;
+        if (!payload.TryGetProperty("dataUri", out var dataUriProp)) return;
+        var url     = urlProp.GetString();
+        var dataUri = dataUriProp.GetString();
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(dataUri)) return;
+
+        if (Application.Current is not App app) return;
+        var cache = app.ImageCacheServiceInstance;
+        if (cache is null) return;
+
+        // data:image/jpeg;base64,<base64-payload>
+        var commaIdx = dataUri.IndexOf(',');
+        if (commaIdx < 0) return;
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(dataUri[(commaIdx + 1)..]); }
+        catch (Exception ex) { Debug.WriteLine($"[VideoThumbCache] base64 decode failed: {ex.Message}"); return; }
+
+        // SaveAsync は Stream を消費するので、MemoryStream に積んで投げる。
+        // 保存完了後に sender WebView2 へ state を push (= スロットに thumb 表示を反映)。
+        var ms = new System.IO.MemoryStream(bytes);
+        _ = SaveThenPushStateAsync(sender, cache, url!, ms);
+
+        static async System.Threading.Tasks.Task SaveThenPushStateAsync(object sender, ImageCacheService cache, string url, System.IO.MemoryStream ms)
+        {
+            try
+            {
+                await cache.SaveAsync(url, ms, "image/jpeg", ChBrowser.Services.Image.CacheKind.VideoThumb).ConfigureAwait(true);
+            }
+            catch (Exception ex) { Debug.WriteLine($"[VideoThumbCache] SaveAsync failed: {ex.Message}"); }
+            PushVideoCacheStateTo(sender, cache, url);
+        }
+    }
+
+    /// <summary>JS が動画スロット表示時/クリック時に「この URL のキャッシュ状態を教えてほしい」と問い合わせるメッセージ。
+    /// 状態 = (hasThumb, hasVideo, thumbUrl?, videoUrl?, downloading) を返信する。</summary>
+    private static void HandleVideoCacheQuery(object sender, JsonElement payload)
+    {
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (Application.Current is not App app) return;
+        var cache = app.ImageCacheServiceInstance;
+        if (cache is null) return;
+        PushVideoCacheStateTo(sender, cache, url);
+    }
+
+    /// <summary>JS から「DL を開始してほしい」要求。<see cref="VideoDownloadManager.Request"/> を呼ぶ。
+    /// 完了/失敗イベントは <see cref="WireVideoDownloadCompletionToPane"/> で sender にプッシュされる。</summary>
+    private void HandleVideoDownloadStart(object sender, JsonElement payload)
+    {
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = urlProp.GetString();
+        if (string.IsNullOrEmpty(url)) return;
+
+        if (Application.Current is not App app) return;
+        var mgr = app.VideoDownloadManagerInstance;
+        if (mgr is null) return;
+
+        // ユーザの明示クリック → サムネ抽出失敗状態もクリア (= 「再試行したい」意思とみなす)。
+        // 抽出の実際の再キックは JS 側 (playMedia) で行う。
+        mgr.ResetThumbFailedState(url);
+
+        // 完了通知を sender に届けるため、URL ごとに待機 sender を覚えておく。
+        // 既に DL 中なら Request() は no-op で false を返すが、最後の待機 sender に上書きすればよい
+        // (= 同 URL の slot が複数 WebView2 にあった場合は最後のクリックの WebView2 に state push される。
+        //   Phase 5 では十分な妥協、Phase 6+ で全 WebView2 broadcast に拡張予定)。
+        _pendingDownloadSenders[url] = sender;
+        mgr.Request(url);
+    }
+
+    /// <summary>UrlContextMenu「キャッシュ削除」項目クリック。
+    /// 対象 URL の VideoThumb + Video キャッシュエントリ + DL 失敗状態をクリアし、
+    /// state push でスロットを「未DL」状態に戻す。</summary>
+    private void DeleteVideoCache_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi) return;
+        var owner = ItemsControl.ItemsControlFromItemContainer(mi) as ContextMenu
+                  ?? mi.Parent as ContextMenu;
+        if (owner?.Tag is not string url || string.IsNullOrEmpty(url)) return;
+
+        if (Application.Current is not App app) return;
+        var cache = app.ImageCacheServiceInstance;
+        if (cache is null) return;
+
+        cache.Delete(url, ChBrowser.Services.Image.CacheKind.VideoThumb);
+        cache.Delete(url, ChBrowser.Services.Image.CacheKind.Video);
+        app.VideoDownloadManagerInstance?.ResetFailedState(url);
+
+        // state push で UI を未DL状態に戻す。push 先はメニューを開いた WebView2 (= owner.PlacementTarget)。
+        if (owner.PlacementTarget is WebView2 wv)
+        {
+            PushVideoCacheStateTo(wv, cache, url);
+        }
+    }
+
+    /// <summary>進行中 DL に対する応答先 WebView2 のマップ。
+    /// <see cref="VideoDownloadManager.DownloadCompleted"/> 発火時に該当 sender に <c>videoCacheState</c> を push する。
+    /// pane 単位で持つ (= 同 URL の DL 完了通知は最後にこの pane で要求した WebView2 に届く)。
+    /// クロスペイン broadcast は Phase 6+ で検討。</summary>
+    private readonly System.Collections.Generic.Dictionary<string, object> _pendingDownloadSenders = new();
+
+    /// <summary>VideoDownloadManager のイベントをこのペインに配線する (Loaded 時 1 回)。
+    /// 完了通知を受けたら <see cref="_pendingDownloadSenders"/> から対象 WebView2 を引いて state push。</summary>
+    private void WireVideoDownloadCompletionToPane()
+    {
+        if (Application.Current is not App app) return;
+        var mgr = app.VideoDownloadManagerInstance;
+        var cache = app.ImageCacheServiceInstance;
+        if (mgr is null || cache is null) return;
+
+        EventHandler<ChBrowser.Services.Media.VideoDownloadEventArgs> handler = (s, e) =>
+        {
+            // UI thread にディスパッチして PostWebMessageAsJson を安全に呼ぶ。
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_pendingDownloadSenders.TryGetValue(e.Url, out var sender))
+                {
+                    _pendingDownloadSenders.Remove(e.Url);
+                    PushVideoCacheStateTo(sender, cache, e.Url);
+                }
+            }));
+        };
+        mgr.DownloadCompleted += handler;
+        mgr.DownloadFailed    += handler;
+        // 一度配線したらアンサブスクライブはしない (= ペインはアプリ寿命と同等で問題ない想定)。
+    }
+
+    /// <summary>指定 WebView2 に「この URL の現在のキャッシュ状態」を JSON で push するヘルパ。
+    /// hasThumb/hasVideo に応じて仮想ホスト URL を埋め込む。</summary>
+    private static void PushVideoCacheStateTo(object senderObj, ImageCacheService cache, string url)
+    {
+        if (senderObj is not WebView2 wv) return;
+        if (wv.CoreWebView2 is null) return;
+
+        var hasThumb = cache.TryGet(url, out var thumbHit, ChBrowser.Services.Image.CacheKind.VideoThumb);
+        var hasVideo = cache.TryGet(url, out var videoHit, ChBrowser.Services.Image.CacheKind.Video);
+        string? thumbUrl = hasThumb ? cache.BuildVirtualHostUrl(thumbHit) : null;
+        string? videoUrl = hasVideo ? cache.BuildVirtualHostUrl(videoHit) : null;
+        // 動画本体ファイルのサイズ (bytes)。キャッシュ無しなら 0。JS 側でラベル表示に使う。
+        long videoSize = hasVideo ? videoHit.Size : 0L;
+
+        var downloading        = false;
+        var downloadFailed     = false;
+        var thumbExtractFailed = false;
+        if (Application.Current is App app && app.VideoDownloadManagerInstance is { } mgr)
+        {
+            downloading        = mgr.IsDownloading(url);
+            downloadFailed     = mgr.IsFailed(url);
+            thumbExtractFailed = mgr.IsThumbFailed(url);
+        }
+
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "videoCacheState",
+            url,
+            hasThumb,
+            hasVideo,
+            thumbUrl,
+            videoUrl,
+            videoSize,
+            downloading,
+            downloadFailed,
+            thumbExtractFailed,
+        });
+        try { wv.CoreWebView2.PostWebMessageAsJson(json); }
+        catch (Exception ex) { ChBrowser.Services.Logging.LogService.Instance.Write($"[VideoCache] push failed: {ex.Message}"); }
     }
 
     // ---- 5ch.io スレ URL ホバー時のプレビューポップアップ (Phase 25) ----
@@ -117,15 +314,31 @@ public partial class ThreadDisplayPane : UserControl
     // ---- URL (テキストリンク / 画像サムネ) 右クリックメニュー (Phase 25) ----
 
     /// <summary>JS から「URL リンクが右クリックされた」通知を受け、UrlContextMenu を開く。
-    /// 対象 URL は ContextMenu.Tag に積んで <see cref="UrlCopy_Click"/> などから読み出す。</summary>
+    /// 対象 URL は ContextMenu.Tag に積んで <see cref="UrlCopy_Click"/> などから読み出す。
+    /// mediaType が "image" / "video" の場合は「ビューアで開く」項目を表示 (それ以外は Collapsed)。</summary>
     private void HandleUrlContextMenu(object sender, JsonElement payload)
     {
         if (sender is not WebView2 wv) return;
         if (!payload.TryGetProperty("url", out var urlProp)) return;
         var url = urlProp.GetString();
         if (string.IsNullOrEmpty(url)) return;
+        var mediaType = payload.TryGetProperty("mediaType", out var mtp) ? (mtp.GetString() ?? "") : "";
 
         if (TryFindResource("UrlContextMenu") is not ContextMenu menu) return;
+        // 「ビューアで開く」は image / video のみ表示。
+        // 「キャッシュ削除」は video のみ表示。
+        // x:Shared="False" なのでこの menu インスタンス内の MenuItem を直接いじる。
+        var canOpenInViewer = mediaType == "image" || mediaType == "video";
+        var canDeleteCache  = mediaType == "video";
+        foreach (var item in menu.Items)
+        {
+            if (item is not MenuItem mi || mi.Tag is not string tag) continue;
+            switch (tag)
+            {
+                case "openInViewer":     mi.Visibility = canOpenInViewer ? Visibility.Visible : Visibility.Collapsed; break;
+                case "deleteVideoCache": mi.Visibility = canDeleteCache  ? Visibility.Visible : Visibility.Collapsed; break;
+            }
+        }
         menu.PlacementTarget = wv;
         menu.Placement       = PlacementMode.MousePoint;
         menu.Tag             = url;
@@ -142,6 +355,19 @@ public partial class ThreadDisplayPane : UserControl
             try { Clipboard.SetText(url); }
             catch (Exception ex) { Debug.WriteLine($"[UrlCopy] Clipboard.SetText failed: {ex.Message}"); }
         }
+    }
+
+    /// <summary>UrlContextMenu の「ビューアで開く」項目クリック。
+    /// 対象 URL を画像ビューアウィンドウの新タブで開く (動画 URL は viewer.js 側で &lt;video&gt; レンダリング)。</summary>
+    private void OpenInViewer_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi) return;
+        var owner = ItemsControl.ItemsControlFromItemContainer(mi) as ContextMenu
+                  ?? mi.Parent as ContextMenu;
+        if (owner?.Tag is not string url || string.IsNullOrEmpty(url)) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
+        if (Application.Current is App app) app.ShowImageInViewer(url);
     }
 
     // ---- レス番号 (post-no) コンテキストメニュー (Phase 25 で HTML から WPF ネイティブに移行) ----

@@ -105,9 +105,28 @@
                           Width="{Binding DataContext.ThumbnailSize, RelativeSource={RelativeSource AncestorType=Window}}"
                           Height="{Binding DataContext.ThumbnailSize, RelativeSource={RelativeSource AncestorType=Window}}"
                           ToolTip="{Binding Url}">
+                        <!-- 動画タブはサムネ画像が空 (= キャプチャ前 or CORS で取れない) のことがあるので、
+                             背景に黒タイルを敷いて視認性を保つ。画像タブでは Image が覆い隠す。 -->
+                        <Rectangle Fill="#222"
+                                   Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}" />
                         <Image Source="{Binding ThumbnailPath}"
                                Stretch="Uniform"
                                RenderOptions.BitmapScalingMode="HighQuality" />
+                        <!-- 動画タブの ▶ オーバーレイ (デザイン目的のみ、クリックは Grid 全体に届く)。
+                             半透明黒の丸 + 中央の三角。タブ左下に小さく表示して「これは動画」と示す。
+                             Margin の bottom=14 はファイル名ストリップ (= 下端の半透明 Border、約 12px) を
+                             避けるためのオフセット。 -->
+                        <Grid Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}"
+                              IsHitTestVisible="False"
+                              HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                              Margin="3,0,0,14"
+                              Width="20" Height="20">
+                            <Ellipse Fill="#A0000000" />
+                            <!-- 三角形は Polygon (= 右向き ▶)。サイズは Ellipse 内に収まるよう調整 (20x20)。 -->
+                            <Polygon Points="7,5 7,15 15,10"
+                                     Fill="White"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
                         <!-- 閉じるボタン (タイルにマウスが乗ったときだけ表示) -->
                         <Button HorizontalAlignment="Right" VerticalAlignment="Top"
                                 Margin="2"
@@ -155,7 +174,10 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:ImageViewerTabViewModel}">
-                    <wv2:WebView2 ctrl:WebView2Helper.ImageUrl="{Binding Url}"
+                    <!-- Phase 6: PlaybackUrl は通常 Url と同一だが、動画キャッシュヒット時は
+                         仮想ホスト URL (https://chbrowser-cache.local/videos/...) に差替えられる。
+                         InitializeForVideo() がタブ生成直後にこれをセットする。 -->
+                    <wv2:WebView2 ctrl:WebView2Helper.ImageUrl="{Binding PlaybackUrl}"
                                   ctrl:WebView2Helper.ZoomModePush="{Binding PendingZoomMode}"
                                   WebMessageReceived="ViewerWebView_WebMessageReceived"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
