@@ -186,10 +186,14 @@
         var wantsVideo = isVideoUrl(url);
         ensureMediaElement(wantsVideo);
         resetView();
+        // ロード前に媒体を不可視化 (= ビューワー初回オープン時の「原寸 → 縮小」チラつき対策)。
+        // fitToStage で transform が適用された後にまとめて visibility: visible に戻す。
+        media.style.visibility = 'hidden';
         if (wantsVideo) {
             // <video> は loadedmetadata で size が確定する。再生エラーは error イベント。
             media.onloadedmetadata = function () {
                 fitToStage(/*capAtNatural*/ true);
+                media.style.visibility = 'visible';
                 post({ type: 'imageReady' });
                 // サムネ抽出のために 0.5 秒地点へシーク (= time=0 は黒フレームになりがちなので回避)。
                 // ユーザの主観上はクリック直後の数百 ms に過ぎず実害なし。
@@ -220,6 +224,7 @@
                     try { media.load(); } catch (_) {}
                     return;
                 }
+                media.style.visibility = 'visible'; // エラーで止まっても次の遷移で詰まらないように戻す
                 post({ type: 'imageError' });
             };
             media.src = url;
@@ -228,9 +233,13 @@
         } else {
             media.onload  = function () {
                 fitToStage(/*capAtNatural*/ true);
+                media.style.visibility = 'visible';
                 post({ type: 'imageReady' });
             };
-            media.onerror = function () { post({ type: 'imageError' }); };
+            media.onerror = function () {
+                media.style.visibility = 'visible';
+                post({ type: 'imageError' });
+            };
             media.src = url;
         }
     }

@@ -176,9 +176,12 @@
                 <DataTemplate DataType="{x:Type vm:ImageViewerTabViewModel}">
                     <!-- Phase 6: PlaybackUrl は通常 Url と同一だが、動画キャッシュヒット時は
                          仮想ホスト URL (https://chbrowser-cache.local/videos/...) に差替えられる。
-                         InitializeForVideo() がタブ生成直後にこれをセットする。 -->
+                         InitializeForVideo() がタブ生成直後にこれをセットする。
+                         DefaultBackgroundColor: ビューワー初回オープン時の白いフラッシュ抑制。
+                         HTML ロード前から viewer.css body と同じ暗色を表示することで「白 → 暗」のチラつきを消す。 -->
                     <wv2:WebView2 ctrl:WebView2Helper.ImageUrl="{Binding PlaybackUrl}"
                                   ctrl:WebView2Helper.ZoomModePush="{Binding PendingZoomMode}"
+                                  DefaultBackgroundColor="#1E1E1E"
                                   WebMessageReceived="ViewerWebView_WebMessageReceived"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
                 </DataTemplate>
