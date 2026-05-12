@@ -2638,6 +2638,66 @@
         }
     });
 
+    // ============================================================
+    // サムネイルサイズのドラッグリサイズ。
+    // 仕様: image-slot 右下 14px にホバー時、半透明三角ハンドル + nwse-resize カーソル表示。
+    //       そこから mousedown でドラッグ → ドラッグ距離に応じて CSS 変数 --slot-scale を更新
+    //       → 全 image-slot が calc(基準 * scale) で一括追従。
+    //       スコープは WebView2 セッション内のみ (= タブを閉じて開き直すと既定値 1.0 に戻る)。
+    //
+    // 性能メモ: 何千レスでも CSS 変数 1 個の変更で済むので、走査コストは無い。
+    //          リフローはブラウザ依存だが、img/iframe の中身そのものは再ロードしない。
+    // ============================================================
+    const SLOT_SCALE_MIN = 0.3;
+    const SLOT_SCALE_MAX = 3.0;
+    const RESIZE_HANDLE_PX = 14;
+    function getSlotScale() {
+        const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--slot-scale'));
+        return isFinite(v) && v > 0 ? v : 1;
+    }
+    function setSlotScale(v) {
+        const clamped = Math.max(SLOT_SCALE_MIN, Math.min(SLOT_SCALE_MAX, v));
+        document.documentElement.style.setProperty('--slot-scale', clamped.toFixed(3));
+        return clamped;
+    }
+
+    document.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return; // 左クリックのみ
+        const slot = e.target.closest && e.target.closest('.image-slot');
+        if (!slot) return;
+        const rect = slot.getBoundingClientRect();
+        const xFromRight  = rect.right - e.clientX;
+        const yFromBottom = rect.bottom - e.clientY;
+        if (xFromRight < 0 || yFromBottom < 0) return; // 範囲外
+        if (xFromRight > RESIZE_HANDLE_PX || yFromBottom > RESIZE_HANDLE_PX) return; // ハンドル外
+
+        // ドラッグ開始 → click イベントが続けて発火するのを抑止 (= viewer に飛ばない)
+        e.preventDefault();
+        e.stopPropagation();
+        document.body.classList.add('slot-resizing');
+
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startScale = getSlotScale();
+        // スケール 1.0 のときの画像スロット基準サイズ (= CSS の calc 第一項に合わせる)
+        const REF = 240;
+
+        function onMove(ev) {
+            const dx = ev.clientX - startX;
+            const dy = ev.clientY - startY;
+            // 対角線の x/y 両方の影響を取り入れる: 平均値ベースで滑らかな増減。
+            const drag = (dx + dy) / 2;
+            setSlotScale(startScale + drag / REF);
+        }
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.classList.remove('slot-resizing');
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup',   onUp);
+    });
+
     document.addEventListener('click', function (e) {
         // .post-no 左クリック → C# にコンテキストメニュー表示要求。anchor/URL ロジックより先に拾って早期 return。
         // 右クリックは別 listener (contextmenu) で同じ要求を出している (= どちらでもメニューが出る)。
