@@ -333,6 +333,7 @@
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"
+                                  Unloaded="ThreadViewWebView_Unloaded"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>

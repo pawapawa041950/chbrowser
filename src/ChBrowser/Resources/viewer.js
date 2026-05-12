@@ -47,8 +47,25 @@
     }
 
     function applyTransform() {
-        // translate(-50%, -50%) でセンタリング → translate(panX, panY) で移動 → scale でズーム → rotate で回転
-        media.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
+        if (media.tagName === 'VIDEO') {
+            // 動画は CSS width/height を直接変えて拡縮する。理由: transform: scale だと
+            // ネイティブ <video controls> パネルまで一緒に scale されて、操作 UI が極端に
+            // 縮んだり巨大化する。要素サイズを変える方式なら controls は固定 px 高さを保ったまま
+            // 横幅だけが追従する (= UI 操作性を維持しつつ動画は拡縮)。
+            var w = media.videoWidth  || 0;
+            var h = media.videoHeight || 0;
+            if (w > 0 && h > 0) {
+                media.style.width  = (w * zoom) + 'px';
+                media.style.height = (h * zoom) + 'px';
+            }
+            media.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) rotate(' + rotation + 'deg)';
+        } else {
+            // 画像 (<img>): 従来通り transform: scale でズーム (= img には controls が無いので問題なし)。
+            // 要素自体は natural サイズ、transform で見た目を拡縮 → 高速で滑らか。
+            media.style.width  = '';
+            media.style.height = '';
+            media.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
+        }
     }
 
     function resetView() {

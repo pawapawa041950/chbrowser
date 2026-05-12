@@ -35,6 +35,30 @@ public partial class ThreadDisplayPane : UserControl
     private void Pane_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         => (DataContext as MainViewModel)?.MarkThreadPaneActive();
 
+    // ---- WebView2 のライフサイクル管理 ----
+
+    /// <summary>タブが ThreadTabs から削除されると、ItemsControl が対応 DataTemplate コンテナを
+    /// 可視ツリーから外し Unloaded が発火する。WebView2 は IDisposable な native HWND を抱える
+    /// (= 動画再生/JS 実行/ネットワーク要求などを継続する) ので、ここで明示的に Dispose しないと
+    /// タブを閉じても動画音声が鳴り続ける + 再オープン時に二重再生になる。
+    ///
+    /// 注意: Unloaded はタブ切替時 (= Visibility 変化) には発火しないが、ペインの可視ツリー再構成
+    /// (= 例えばペインを別ロケーションに付け直す) でも発火することがある。そのため、
+    /// 「自分の DataContext が ThreadTabs にもう存在しない」ことを確認してから Dispose する
+    /// (= 偽陽性で動いている WebView2 を壊さない)。</summary>
+    private void ThreadViewWebView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not WebView2 wv) return;
+        // WPF は ItemsControl コンテナの解体時に DataContext を null に戻してから Unloaded を発火する
+        // ケースがあるので、ctx が null になっていても「本当に閉じられた」と解釈して Dispose する。
+        // ctx が拾えてかつ ThreadTabs にまだ存在する場合のみ「一時的 unload」(= ペイン構造の再構成等) と
+        // みなして Dispose しない。
+        var ctx = wv.DataContext as ThreadTabViewModel;
+        if (ctx is not null && DataContext is MainViewModel main && main.ThreadTabs.Contains(ctx)) return;
+        try { wv.Dispose(); }
+        catch (Exception ex) { Debug.WriteLine($"[ThreadDisplayPane] WebView2 Dispose failed: {ex.Message}"); }
+    }
+
     // ---- WebView2 → JS メッセージ受信 ----
 
     private void ThreadViewWebView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)

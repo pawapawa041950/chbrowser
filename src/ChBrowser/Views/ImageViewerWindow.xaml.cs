@@ -11,6 +11,7 @@ using ChBrowser.Models;
 using ChBrowser.Services.Image;
 using ChBrowser.ViewModels;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
 
 namespace ChBrowser.Views;
@@ -215,6 +216,21 @@ public partial class ImageViewerWindow : Window
         {
             Debug.WriteLine($"[Viewer] PushDetails failed: {ex.Message}");
         }
+    }
+
+    /// <summary>タブが <see cref="ImageViewerViewModel.Tabs"/> から削除されると Unloaded が発火する。
+    /// WebView2 は IDisposable な native HWND を抱える (= 動画再生/JS 実行を継続する) ため、
+    /// ここで明示的に Dispose しないと閉じたタブの動画音声が鳴り続ける + 再オープン時に二重再生になる。
+    /// WPF は teardown 中に DataContext を null に戻してから Unloaded を発火するケースがあるので、
+    /// ctx が拾えなかった場合は「本当に閉じられた」と解釈して Dispose する。
+    /// ctx が拾えてかつ Tabs にまだ存在する場合のみ「一時的 unload」とみなして Dispose しない。</summary>
+    private void ViewerWebView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not WebView2 wv) return;
+        var ctx = wv.DataContext as ImageViewerTabViewModel;
+        if (ctx is not null && DataContext is ImageViewerViewModel vm && vm.Tabs.Contains(ctx)) return;
+        try { wv.Dispose(); }
+        catch (Exception ex) { Debug.WriteLine($"[ImageViewerWindow] WebView2 Dispose failed: {ex.Message}"); }
     }
 
     /// <summary>JS の viewer.js から飛んでくるメッセージを捌く。</summary>
