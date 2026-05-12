@@ -48,6 +48,12 @@ public sealed record AppConfig
     /// ワッチョイには赤化の閾値は無く、複数あればリンク風装飾のみ。即時反映 (setConfig メッセージ)。</summary>
     public int IdHighlightThreshold { get; init; } = 5;
 
+    /// <summary>ワッチョイ / ID のリンク風装飾に対するポップアップ表示モード。
+    /// true (既定): クリックして初めて表示 (誤ホバーで邪魔にならない)。
+    /// false: 従来通りマウスホバーで表示。
+    /// 即時反映 (setConfig メッセージ → thread.js)。</summary>
+    public bool MetaPopupClickOnly { get; init; } = true;
+
     // ---- 画像 ----
     /// <summary>画像キャッシュ上限 (MB)。即時反映 (ImageCacheService.MaxBytes)。</summary>
     public int CacheMaxMb { get; init; } = 1024;

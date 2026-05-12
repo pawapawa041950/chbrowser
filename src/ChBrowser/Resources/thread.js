@@ -1165,12 +1165,26 @@
     function clearMetaDecorations(scopeRoot) {
         const root = scopeRoot || document.getElementById('posts');
         if (!root) return;
+        // span を text node に置換すると親内に隣接 text node が残るので、後で normalize() してマージする。
+        // これをやらないと再 decorateMeta 時に「ID」と「:」が別 text node に分かれていて
+        // wrapTextMatches の /\bID(?=:)/ lookahead が node 境界を跨げず装飾失敗する (section A バグの原因)。
+        const affectedParents = new Set();
         root.querySelectorAll('.watchoi-link, .id-link').forEach(function (el) {
-            el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
+            const parent = el.parentNode;
+            if (!parent) return;
+            affectedParents.add(parent);
+            parent.replaceChild(document.createTextNode(el.textContent), el);
         });
         // .id-count は装飾の付帯要素なので、再装飾前にまるごと取り除く。
         root.querySelectorAll('.id-count').forEach(function (el) {
-            if (el.parentNode) el.parentNode.removeChild(el);
+            if (el.parentNode) {
+                affectedParents.add(el.parentNode);
+                el.parentNode.removeChild(el);
+            }
+        });
+        // 隣接 text node 統合 (= 上記コメント参照)。
+        affectedParents.forEach(function (p) {
+            if (p && typeof p.normalize === 'function') p.normalize();
         });
         root.querySelectorAll('.post[data-meta-decorated="1"]').forEach(function (postEl) {
             delete postEl.dataset.metaDecorated;
@@ -1211,23 +1225,91 @@
         }
     }
 
-    /** scopeRoot 内の .watchoi-link / .id-link にホバーハンドラを取付ける。
-     *  ポップアップは anchor / 返信件数バッジ と同じ仕組み (.anchor-popup) を使い、入れ子表示も対応。 */
+    /** scopeRoot 内の .watchoi-link / .id-link にハンドラを取付ける。
+     *  モード切替 (META_POPUP_CLICK_ONLY) はハンドラ内で flag を見て分岐するため、
+     *  再描画なしの runtime トグルにも対応できる。
+     *  - hover モード (= flag false): mouseenter/mouseleave で従来のポップアップ
+     *  - click モード (= flag true):  クリックで openMetaListPopupClickMode を起動
+     */
     function attachMetaHoverHandlers(scopeRoot, level) {
         scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]').forEach(function (el) {
             el.addEventListener('mouseenter', function () {
+                if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
                 openMetaListPopup(el, el.dataset.watchoiList, level);
             });
-            el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+            el.addEventListener('mouseleave', function () {
+                if (META_POPUP_CLICK_ONLY) return;
+                scheduleCloseAt(level);
+            });
+            el.addEventListener('click', function (ev) {
+                if (!META_POPUP_CLICK_ONLY) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                openMetaListPopupClickMode(el, el.dataset.watchoiList);
+            });
         });
         scopeRoot.querySelectorAll('.id-link[data-id-list]').forEach(function (el) {
             el.addEventListener('mouseenter', function () {
+                if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
                 openMetaListPopup(el, el.dataset.idList, level);
             });
-            el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
+            el.addEventListener('mouseleave', function () {
+                if (META_POPUP_CLICK_ONLY) return;
+                scheduleCloseAt(level);
+            });
+            el.addEventListener('click', function (ev) {
+                if (!META_POPUP_CLICK_ONLY) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                openMetaListPopupClickMode(el, el.dataset.idList);
+            });
         });
+    }
+
+    /** click モード用の ID/ワッチョイポップアップ。
+     *  hover モードの popups[] チェーンは使わず単独管理 (= 一度に 1 つだけ表示)。
+     *  外側クリック or 同じリンクの再クリックで閉じる。
+     *  デフォルトは config (MetaPopupClickOnly) の値で、setConfig で動的に切替可。 */
+    let META_POPUP_CLICK_ONLY = true;
+    let _activeClickMetaPopup = null;
+    let _clickMetaPopupOutsideHandler = null;
+    function openMetaListPopupClickMode(target, listStr) {
+        closeClickMetaPopup();
+        const list = (listStr || '').split(',')
+            .map(function (s) { return parseInt(s, 10); })
+            .filter(function (n) { return !isNaN(n); });
+        if (list.length === 0) return;
+        const el = document.createElement('div');
+        el.className = 'anchor-popup meta-popup-click';
+        el.appendChild(buildPopupContentFromList(list));
+        document.body.appendChild(el);
+        positionPopup(el, target);
+        // ネスト先 (popup 内の watchoi/id/anchor) にも同じ flag ベースのハンドラを attach。
+        // 再帰的に click モードで動く (= ネストもクリックで開く)。
+        attachAnchorHandlers(el, 1);
+        attachMetaHoverHandlers(el, 1);
+        _activeClickMetaPopup = el;
+        // 外側クリックで閉じる。setTimeout で次の tick に登録 (= 起動時のクリックを拾わない)。
+        _clickMetaPopupOutsideHandler = function (ev) {
+            if (el.contains(ev.target)) return;     // ポップアップ内部は維持
+            if (target.contains(ev.target)) return; // 起動元リンク自身は別ハンドラ (toggle 相当) で処理
+            closeClickMetaPopup();
+        };
+        setTimeout(function () {
+            document.addEventListener('click', _clickMetaPopupOutsideHandler);
+        }, 0);
+    }
+    function closeClickMetaPopup() {
+        if (_activeClickMetaPopup) {
+            try { _activeClickMetaPopup.remove(); } catch (_) {}
+            _activeClickMetaPopup = null;
+        }
+        if (_clickMetaPopupOutsideHandler) {
+            document.removeEventListener('click', _clickMetaPopupOutsideHandler);
+            _clickMetaPopupOutsideHandler = null;
+        }
     }
 
     /** ID / ワッチョイホバー用ポップアップ。data-*-list の "3,7,12" を読んでレスを並べるだけ。
@@ -2660,16 +2742,15 @@
      *  - 「返信N件」バッジを除去 → そこからさらに返信ポップアップが連鎖しない
      *  - ツリー / 重複なしツリー表示で対象レスに inline 埋め込まれている子レス (= .post.embedded) を除去
      *    → popup は対象レス本体だけを見せ、それへの返信は出さない
-     *  - ワッチョイリンク (.watchoi-link) は wrapper を外してテキスト化 → ポップアップ内ではリンク装飾なし &
-     *    hover ポップアップが連鎖しない (ワッチョイ字列が長くマウス通過で誤発火しやすいため)
-     *  バッジや子レスは元レス側にはそのまま残るので、通常スレ表示でのホバー / ツリー表示は引き続き機能する。 */
+     *  バッジや子レスは元レス側にはそのまま残るので、通常スレ表示でのホバー / ツリー表示は引き続き機能する。
+     *
+     *  ワッチョイ/ID リンクはクローンに残す (= ネストポップアップで再帰的にホバー/クリック可)。
+     *  hover モードでの「ワッチョイの長い字列をマウス通過で誤発火」対策は、新設定 MetaPopupClickOnly
+     *  (デフォルト ON) によって click モードで運用される前提で不要になった。 */
     function clonePostForPopup(src) {
         const clone = src.cloneNode(true);
         clone.querySelectorAll('.post-reply-count').forEach(function (el) { el.remove(); });
         clone.querySelectorAll('.post.embedded').forEach(function (el) { el.remove(); });
-        clone.querySelectorAll('.watchoi-link').forEach(function (el) {
-            if (el.parentNode) el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
-        });
         return clone;
     }
 
@@ -3466,6 +3547,11 @@
                         // しきい値変化で id-many クラスの付与判定が変わるので decoration を再計算
                         clearMetaDecorations();
                         decorateMeta();
+                    }
+                    if (typeof msg.metaPopupClickOnly === 'boolean') {
+                        META_POPUP_CLICK_ONLY = msg.metaPopupClickOnly;
+                        // モード切替で開いている click モードの popup は閉じる (= 二重表示を避ける)。
+                        if (!META_POPUP_CLICK_ONLY) closeClickMetaPopup();
                     }
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();

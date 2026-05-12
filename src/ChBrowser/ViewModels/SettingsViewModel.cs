@@ -38,6 +38,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
     [ObservableProperty] private int    _idHighlightThreshold  = 5;
+    [ObservableProperty] private bool   _metaPopupClickOnly    = true;
     [ObservableProperty] private int    _cacheMaxMb            = 1024;
     [ObservableProperty] private int    _viewerThumbnailSize   = 80;
     [ObservableProperty] private bool   _viewerDetailsPaneDefaultOpen = true;
@@ -191,6 +192,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
         IdHighlightThreshold         = initial.IdHighlightThreshold;
+        MetaPopupClickOnly           = initial.MetaPopupClickOnly;
         CacheMaxMb                   = initial.CacheMaxMb;
         ViewerThumbnailSize          = initial.ViewerThumbnailSize;
         ViewerDetailsPaneDefaultOpen = initial.ViewerDetailsPaneDefaultOpen;
@@ -293,6 +295,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
         IdHighlightThreshold        = IdHighlightThreshold,
+        MetaPopupClickOnly          = MetaPopupClickOnly,
         CacheMaxMb                  = CacheMaxMb,
         ViewerThumbnailSize         = ViewerThumbnailSize,
         ViewerDetailsPaneDefaultOpen = ViewerDetailsPaneDefaultOpen,

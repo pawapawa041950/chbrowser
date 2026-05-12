@@ -543,6 +543,7 @@ public sealed partial class MainViewModel : ObservableObject
             popularThreshold      = config.PopularThreshold,
             imageSizeThresholdMb  = config.ImageSizeThresholdMb,
             idHighlightThreshold  = config.IdHighlightThreshold,
+            metaPopupClickOnly    = config.MetaPopupClickOnly,
         });
 
         // Phase 11b: 3 ペイン向け。各ペインは自分の JSON だけ受け取り、setConfig.openOnSingleClick を解釈する。

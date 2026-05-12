@@ -53,5 +53,13 @@
                  HorizontalAlignment="Left"
                  Margin="0,0,0,16" />
 
+        <CheckBox IsChecked="{Binding MetaPopupClickOnly, Mode=TwoWay}"
+                  Content="ワッチョイとIDのポップアップはクリックするまで出さないようにする"
+                  Margin="0,0,0,4" />
+        <TextBlock Text="ON にすると、ワッチョイ / ID のリンク風装飾はマウスを乗せただけでは反応せず、クリックして初めてポップアップが表示されます。意図しないホバーでポップアップが頻発するのを抑えたいときに便利です。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,16" />
+
     </StackPanel>
 </UserControl>
