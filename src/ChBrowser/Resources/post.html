@@ -17,6 +17,7 @@
     {{hasFewReplies}}  返信 1-2 件のときだけ true。post-no をピンクにするのに使う
     {{hasManyReplies}} 返信 3 件以上のときだけ true。post-no を赤にするのに使う
     {{isOwn}}          「自分の書き込み」マーク対象なら true。post-name の直前に <span class="post-own">自分</span> を出す
+    {{isReplyToOwn}}   このレスが「自分の書き込み」へ返信していれば true。post-own の直後に <span class="post-reply-to-own">返信</span> を出す
     {{children}}       ツリー表示時に直下に展開する子レスの HTML                ※ raw 挿入
     {{isEmbedded}}     ツリー表示の埋め込みレスかどうか (true/false)
     {{domId}}          要素に id="r{{number}}" を付けるか (true/false)。重複 ID を避けるため
@@ -44,7 +45,7 @@
     既定テンプレが再展開される (削除してから起動するだけでよい)。
 -->
 <div class="post{{#if isEmbedded}} embedded{{/if}}"{{#if domId}} id="r{{number}}"{{/if}}>
-<div class="post-header"><span class="post-no {{#if hasFewReplies}}has-replies-few{{/if}}{{#if hasManyReplies}}has-replies-many{{/if}}" data-number="{{number}}" role="button" tabindex="0">{{number}}</span>: <span class="post-reply-count" data-count="{{replyCount}}" data-replies="{{replyNumbers}}">返<span class="reply-num">{{replyCount}}</span> </span>{{#if isOwn}}<span class="post-own">自分</span> {{/if}}<span class="post-name">{{name}} </span>{{#if mail}}<span class="post-mail">[{{mail}}]</span> {{/if}}<span class="post-meta">{{date}} {{#if id}}ID:{{id}}{{/if}}</span></div>
+<div class="post-header"><span class="post-no {{#if hasFewReplies}}has-replies-few{{/if}}{{#if hasManyReplies}}has-replies-many{{/if}}" data-number="{{number}}" role="button" tabindex="0">{{number}}</span>: <span class="post-reply-count" data-count="{{replyCount}}" data-replies="{{replyNumbers}}">返<span class="reply-num">{{replyCount}}</span> </span>{{#if isOwn}}<span class="post-own">自分</span> {{/if}}{{#if isReplyToOwn}}<span class="post-reply-to-own">返信</span> {{/if}}<span class="post-name">{{name}} </span>{{#if mail}}<span class="post-mail">[{{mail}}]</span> {{/if}}<span class="post-meta">{{date}} {{#if id}}ID:{{id}}{{/if}}</span></div>
 <div class="post-body">{{body}}</div>
 <div class="post-media">{{media}}</div>
 {{children}}

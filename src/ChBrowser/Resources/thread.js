@@ -764,6 +764,16 @@
         return '';
     }
 
+    /** p の forward anchor (= 自分が >>参照しているレス番号集合) のうち ownPostNumbers に
+     *  含まれるものがあれば true。「自分宛の返信」判定。
+     *  getValidForwardAnchors を使うので INLINE_EXPAND_RANGE_LIMIT を越える広域 anchor は無視。 */
+    function postRepliesToOwn(p) {
+        if (!p || ownPostNumbers.size === 0) return false;
+        const anchors = getValidForwardAnchors(p);
+        for (const n of anchors) if (ownPostNumbers.has(n)) return true;
+        return false;
+    }
+
     /** post 1 件の view-data を作る (テンプレに渡す変数たち)。 */
     function postDataFor(p, isEmbedded, omitId, children) {
         const num     = p.number;
@@ -784,6 +794,7 @@
             hasFewReplies:  count >= REPLY_TIER_PINK && count < REPLY_TIER_RED,
             hasManyReplies: count >= REPLY_TIER_RED,
             isOwn:          ownPostNumbers.has(num), // 「自分の書き込み」バッジ表示用
+            isReplyToOwn:   postRepliesToOwn(p),     // 「返信」バッジ表示用 (自分宛 anchor を持つ)
             isEmbedded:     !!isEmbedded,
             domId:          !omitId,
             children:       children || '',
@@ -2549,16 +2560,49 @@
         return String(name).replace(/<[^>]+>/g, '').trim();
     }
 
+    /** 「返信」バッジ (= 自分宛の返信レス) を post N の primary DOM に反映する。
+     *  postRepliesToOwn() の現在値を見て add / remove する (= 冪等)。
+     *  primary レス (id="rN") のみ更新する点は applyOwnPostsChanges と同じ方針。 */
+    function applyReplyToOwnBadge(n) {
+        const el = document.getElementById('r' + n);
+        if (!el) return;
+        const header = el.querySelector(':scope > .post-header');
+        if (!header) return;
+        const post = postsByNumber.get(n);
+        const should = postRepliesToOwn(post);
+        let badge = header.querySelector(':scope > .post-reply-to-own');
+        if (should) {
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'post-reply-to-own';
+                badge.textContent = '返信';
+                // テンプレ順 [post-own][post-reply-to-own][post-name] を保つため post-name の直前に挿入。
+                const nameEl = header.querySelector(':scope > .post-name');
+                if (nameEl) header.insertBefore(badge, nameEl);
+                else        header.appendChild(badge);
+            }
+        } else if (badge) {
+            badge.remove();
+        }
+    }
+
     /** updateOwnPosts メッセージで届いた変更を ownPostNumbers Set + DOM の「自分」バッジに反映する。
+     *  さらに、toggle されたレスに >>参照しているレス (currentReverseIndex 経由で逆引き) の
+     *  「返信」バッジも再評価して add/remove する。
      *  primary レス (id="rN") のみ更新。tree モード等で重複表示されている embedded レスは
      *  次回再レンダで反映される (= 全件 DOM 走査でコストを払うほどの優先度ではない)。 */
     function applyOwnPostsChanges(changes) {
+        const affectedReplyPosts = new Set(); // 「返信」バッジ再評価対象のレス番号
         for (const c of changes) {
             const n = c && c.number;
             const isOwn = !!(c && c.isOwn);
             if (typeof n !== 'number') continue;
             if (isOwn) ownPostNumbers.add(n);
             else       ownPostNumbers.delete(n);
+
+            // n を >>参照しているレス全てを 返信バッジ 再評価対象に追加 (currentReverseIndex は逆引き)。
+            const repliers = currentReverseIndex.get(n);
+            if (repliers) for (const r of repliers) affectedReplyPosts.add(r);
 
             const el = document.getElementById('r' + n);
             if (!el) continue;
@@ -2570,15 +2614,19 @@
                     badge = document.createElement('span');
                     badge.className = 'post-own';
                     badge.textContent = '自分';
-                    // post-name の直前に挿入 (= テンプレで指定されている挿入位置)
-                    const nameEl = header.querySelector(':scope > .post-name');
-                    if (nameEl) header.insertBefore(badge, nameEl);
-                    else        header.appendChild(badge);
+                    // テンプレ順 [post-own][post-reply-to-own][post-name] を保つため、
+                    // 既に 返信バッジ が居ればその直前へ、無ければ post-name の直前へ挿入。
+                    const replyBadge = header.querySelector(':scope > .post-reply-to-own');
+                    const nameEl     = header.querySelector(':scope > .post-name');
+                    const refNode    = replyBadge || nameEl;
+                    if (refNode) header.insertBefore(badge, refNode);
+                    else         header.appendChild(badge);
                 }
             } else if (badge) {
                 badge.remove();
             }
         }
+        for (const r of affectedReplyPosts) applyReplyToOwnBadge(r);
         // 自分マーカーは scrollbar の mark トラックにも色違いで出している。
         // toggle 直後に必ず再描画 (= 即時反映、追加/解除の両方)。
         updateMarkScrollbarMarker();

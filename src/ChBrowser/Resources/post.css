@@ -59,6 +59,20 @@
     vertical-align: middle;
 }
 
+/* 「返信」バッジ。自分の書き込みへ返信しているレスに付く。post-own の直後、post-name の前。
+ * .post-own と同じ寸法・配置で色だけ赤系。ownPostNumbers の増減に追従して thread.js が差分更新する。 */
+.post-reply-to-own {
+    display: inline-block;
+    padding: 0 4px;
+    background: #d33;
+    color: #fff;
+    font-size: 11px;
+    font-weight: bold;
+    border-radius: 2px;
+    margin: 0 2px;
+    vertical-align: middle;
+}
+
 .post-meta {
     color: #666;
 }
