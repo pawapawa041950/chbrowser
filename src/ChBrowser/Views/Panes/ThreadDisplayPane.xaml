@@ -20,7 +20,8 @@
                      Opened="ThreadTabContextMenu_Opened">
             <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadTabFav_Click" />
             <Separator />
-            <MenuItem Header="板を開く" Click="ThreadTabOpenBoard_Click" />
+            <MenuItem Header="板を開く"                       Click="ThreadTabOpenBoard_Click" />
+            <MenuItem Header="SETTING.TXTをブラウザで開く"    Click="ThreadTabOpenSettingTxt_Click" />
             <Separator />
             <MenuItem Header="コピー">
                 <MenuItem Header="タイトルコピー"        Click="ThreadTabCopyTitle_Click" />

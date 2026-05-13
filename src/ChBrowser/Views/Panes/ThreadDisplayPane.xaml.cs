@@ -849,6 +849,33 @@ public partial class ThreadDisplayPane : UserControl
         _ = main.OpenBoardByUrlAsync(tab.Board.Host, tab.Board.DirectoryName);
     }
 
+    /// <summary>「SETTING.TXTをブラウザで開く」: スレが属する板の SETTING.TXT を OS 既定ブラウザで開く。
+    /// アプリ内に専用ビューを持つほどの利用頻度ではないため、外部ブラウザに委譲する方針。</summary>
+    private void ThreadTabOpenSettingTxt_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
+        OpenSettingTxtInBrowser(tab.Board);
+    }
+
+    /// <summary>Board.Url 末尾の "/" を吸収して "{Url}/SETTING.TXT" を OS 既定ブラウザで開く。
+    /// SETTING.TXT は SJIS だがブラウザが処理するのでアプリは関与不要。</summary>
+    private static void OpenSettingTxtInBrowser(Models.Board board)
+    {
+        var url = board.Url.TrimEnd('/') + "/SETTING.TXT";
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName        = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[OpenSettingTxt] failed: {ex.Message}");
+        }
+    }
+
     private void ThreadTabCopyTitle_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;

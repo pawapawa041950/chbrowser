@@ -202,6 +202,7 @@ public partial class ThreadListPane : UserControl
 
         foreach (var item in TabClickHelper.EnumerateAllMenuItems(cm))
         {
+            // openSetting も「Board が無いタブ (= お気に入りフォルダ等) では使えない」項目に該当。
             switch (item.Tag as string)
             {
                 case "fav":
@@ -209,6 +210,7 @@ public partial class ThreadListPane : UserControl
                     item.Header    = isFav ? "お気に入りから削除" : "お気に入りに追加";
                     break;
                 case "copyUrl":
+                case "openSetting":
                     item.IsEnabled = hasBoard;
                     break;
             }
@@ -241,5 +243,26 @@ public partial class ThreadListPane : UserControl
     {
         if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
         Clipboard.SetText($"{board.BoardName}\n{board.Url}");
+    }
+
+    /// <summary>「SETTING.TXTをブラウザで開く」: 板の SETTING.TXT を OS 既定ブラウザに渡す。
+    /// Board が無いタブ (= お気に入りフォルダ等) では Opened 側で IsEnabled=false に落ちているので
+    /// ハンドラには到達しないが、念のためここでも Board null チェックする。</summary>
+    private void ThreadListTabOpenSettingTxt_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
+        var url = board.Url.TrimEnd('/') + "/SETTING.TXT";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName        = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OpenSettingTxt] failed: {ex.Message}");
+        }
     }
 }

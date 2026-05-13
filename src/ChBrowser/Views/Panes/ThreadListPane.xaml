@@ -19,6 +19,9 @@
                      Opened="ThreadListTabContextMenu_Opened">
             <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListTabFav_Click" />
             <Separator />
+            <MenuItem Tag="openSetting" Header="SETTING.TXTをブラウザで開く"
+                      Click="ThreadListTabOpenSettingTxt_Click" />
+            <Separator />
             <MenuItem Header="コピー">
                 <MenuItem               Header="タイトルコピー"        Click="ThreadListTabCopyTitle_Click" />
                 <MenuItem Tag="copyUrl" Header="URLコピー"             Click="ThreadListTabCopyUrl_Click" />
