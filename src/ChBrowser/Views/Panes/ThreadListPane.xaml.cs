@@ -265,4 +265,13 @@ public partial class ThreadListPane : UserControl
             System.Diagnostics.Debug.WriteLine($"[OpenSettingTxt] failed: {ex.Message}");
         }
     }
+
+    /// <summary>「SETTING.TXTの更新」: 板の SETTING.TXT をサーバから再取得して上書き保存。
+    /// 取得結果はステータスバーに反映 (MainViewModel.RefreshSettingTxtAsync 側で StatusMessage を更新)。</summary>
+    private void ThreadListTabRefreshSettingTxt_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
+        if (DataContext is not MainViewModel main) return;
+        _ = main.RefreshSettingTxtAsync(board);
+    }
 }

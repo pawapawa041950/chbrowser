@@ -176,10 +176,33 @@ public sealed class PostDialog : Window
         Grid.SetRow(headerStack, 1);
         root.Children.Add(headerStack);
 
-        // (2) "本文:" ラベル
-        var bodyLabel = new TextBlock { Text = "本文:", Margin = new Thickness(0, 0, 0, 4) };
-        Grid.SetRow(bodyLabel, 2);
-        root.Children.Add(bodyLabel);
+        // (2) "本文:" ラベル + 右側に「現在行数 / 上限」表示。上限は板の SETTING.TXT の BBS_LINE_NUMBER から
+        //     注入される (= 取得済みでなければ MainViewModel が PostFormViewModel.LineLimit を null にしておき
+        //     ラベル側は「N 行」のみ表示する)。
+        var bodyHeader = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var bodyLabel = new TextBlock { Text = "本文:" };
+        Grid.SetColumn(bodyLabel, 0);
+        bodyHeader.Children.Add(bodyLabel);
+
+        var lineCountLabel = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground        = Brushes.Gray,
+            FontSize          = 11,
+        };
+        lineCountLabel.SetBinding(TextBlock.TextProperty,
+            new Binding(nameof(PostFormViewModel.LineCountText)));
+        // 上限超過時のみ赤字。LineLimit が null のときは IsOverLineLimit が常に false で灰のまま。
+        lineCountLabel.SetBinding(TextBlock.ForegroundProperty,
+            new Binding(nameof(PostFormViewModel.IsOverLineLimit)) { Converter = new OverLimitToBrushConverter() });
+        Grid.SetColumn(lineCountLabel, 1);
+        bodyHeader.Children.Add(lineCountLabel);
+
+        Grid.SetRow(bodyHeader, 2);
+        root.Children.Add(bodyHeader);
 
         // (3) message text box (multi-line)
         var msgBox = new TextBox
@@ -536,6 +559,17 @@ internal sealed class EmptyStringToVisibilityConverter : IValueConverter
 {
     public object Convert(object? value, System.Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => string.IsNullOrEmpty(value as string) ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object? value, System.Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+/// <summary>行数表示ラベル用: 上限超過 true → 赤、false → 灰。
+/// IsOverLineLimit Binding で foreground を切り替えるためだけの専用 converter。</summary>
+internal sealed class OverLimitToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, System.Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => value is true ? (object)Brushes.Red : Brushes.Gray;
 
     public object ConvertBack(object? value, System.Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => Binding.DoNothing;

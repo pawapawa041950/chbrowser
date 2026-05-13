@@ -146,6 +146,7 @@ public partial class App : Application
         }
         var bbsmenu      = new BbsmenuClient(_monazilla, paths);
         var subjectTxt   = new SubjectTxtClient(_monazilla, paths);
+        var settingTxt   = new SettingTxtClient(_monazilla, paths);
         var dat          = new DatClient(_monazilla, paths);
         var threadIndex  = new ThreadIndexService(paths);
         _imageMeta       = new ImageMetaService();
@@ -201,7 +202,7 @@ public partial class App : Application
         var ngStorage = new NgStorage(paths);
         _ngService    = new ChBrowser.Services.Ng.NgService(ngStorage);
 
-        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths);
+        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths);
         _mainVm          = mainVm;
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);

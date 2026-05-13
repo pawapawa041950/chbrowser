@@ -59,6 +59,26 @@ public sealed partial class PostFormViewModel : ObservableObject
     [ObservableProperty]
     private string _statusMessage = "";
 
+    /// <summary>板の SETTING.TXT で指定された 1 投稿あたりの行数上限 (= <c>BBS_LINE_NUMBER</c>)。
+    /// 取得失敗 / SETTING.TXT に該当キーが無い場合は null。表示時は「上限不明」扱いになる。</summary>
+    [ObservableProperty]
+    private int? _lineLimit;
+
+    /// <summary>本文の現在行数 (LF 換算)。<see cref="Message"/> 変化に同期して
+    /// <see cref="OnMessageChanged"/> から手動で通知発火する。</summary>
+    public int CurrentLineCount => CountLines(Message);
+
+    /// <summary>「7 / 32 行」のような表示用文字列。上限不明なら「7 行」のみ。
+    /// PostDialog のラベルが直接 Binding する派生プロパティ。</summary>
+    public string LineCountText =>
+        LineLimit is int limit
+            ? $"{CurrentLineCount} / {limit} 行"
+            : $"{CurrentLineCount} 行";
+
+    /// <summary>現在行数が上限を超えているか (= ラベルを赤字に変える判定に使う)。
+    /// 上限不明 (= null) のときは常に false。</summary>
+    public bool IsOverLineLimit => LineLimit is int limit && CurrentLineCount > limit;
+
     /// <summary>送信完了後 (Outcome=Success) に true。ダイアログ側はこれを観測して Close する。</summary>
     [ObservableProperty]
     private bool _shouldClose;
@@ -111,9 +131,33 @@ public sealed partial class PostFormViewModel : ObservableObject
         }
     }
 
-    partial void OnMessageChanged(string value)  => SubmitCommand.NotifyCanExecuteChanged();
+    partial void OnMessageChanged(string value)
+    {
+        SubmitCommand.NotifyCanExecuteChanged();
+        // 行数派生プロパティを手動で通知発火 (= ObservableProperty にしていないため自動更新されない)。
+        OnPropertyChanged(nameof(CurrentLineCount));
+        OnPropertyChanged(nameof(LineCountText));
+        OnPropertyChanged(nameof(IsOverLineLimit));
+    }
     partial void OnSubjectChanged(string value)  => SubmitCommand.NotifyCanExecuteChanged();
     partial void OnIsBusyChanged(bool value)     => SubmitCommand.NotifyCanExecuteChanged();
+    partial void OnLineLimitChanged(int? value)
+    {
+        OnPropertyChanged(nameof(LineCountText));
+        OnPropertyChanged(nameof(IsOverLineLimit));
+    }
+
+    /// <summary>本文の改行数を数える。LF / CRLF どちらでも「LF の個数 + 1」を行数とする方針
+    /// (= CR は数えない、CRLF の \r 部分が二重カウントされるのを防ぐ)。
+    /// 空文字は 0 行。「最終行に文字が無い (= 末尾 LF) 」場合も新しい行扱いになるが、
+    /// これは TextBox の見た目 (カーソルが次の行に居る) と一致する直感的挙動。</summary>
+    private static int CountLines(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0;
+        var n = 1;
+        foreach (var c in s) if (c == '\n') n++;
+        return n;
+    }
 
     private async Task SubmitAsync(CancellationToken ct)
     {

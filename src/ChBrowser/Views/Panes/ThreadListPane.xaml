@@ -21,6 +21,8 @@
             <Separator />
             <MenuItem Tag="openSetting" Header="SETTING.TXTをブラウザで開く"
                       Click="ThreadListTabOpenSettingTxt_Click" />
+            <MenuItem Tag="openSetting" Header="SETTING.TXTの更新"
+                      Click="ThreadListTabRefreshSettingTxt_Click" />
             <Separator />
             <MenuItem Header="コピー">
                 <MenuItem               Header="タイトルコピー"        Click="ThreadListTabCopyTitle_Click" />

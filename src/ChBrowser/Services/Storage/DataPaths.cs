@@ -90,6 +90,11 @@ public sealed class DataPaths
     public string SubjectTxtPath(string host, string directoryName)
         => Path.Combine(BoardDir(host, directoryName), "_subject.txt");
 
+    /// <summary>板の SETTING.TXT を置く場所。アンダースコア prefix は subject.txt と同方針
+    /// (= dat ファイル群と並んでも視認しやすいよう板メタファイルにだけ印を付ける)。</summary>
+    public string SettingTxtPath(string host, string directoryName)
+        => Path.Combine(BoardDir(host, directoryName), "_SETTING.TXT");
+
     public string DatPath(string host, string directoryName, string threadKey)
         => Path.Combine(BoardDir(host, directoryName), threadKey + ".dat");
 

@@ -357,6 +357,7 @@ public sealed partial class MainViewModel
     {
         var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode());
         if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
+        _ = ApplyLineLimitFromSettingAsync(vm, tab.Board);
         var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
         {
@@ -370,6 +371,40 @@ public sealed partial class MainViewModel
             AutoMarkSubmittedPostAsOwn(tab, prevCount, submittedMessage);
         };
         dlg.Show();
+    }
+
+    /// <summary>板の SETTING.TXT から行数上限 (BBS_LINE_NUMBER) を非同期で取り出し、ダイアログの VM に注入する。
+    /// ローカル未保存ならネットワーク取得、有ればローカル読みのみ (= 自動更新はしない、設計通り)。
+    /// 取得失敗時は <see cref="PostFormViewModel.LineLimit"/> を null のままにする (= ダイアログ側は「N 行」のみ表示)。
+    /// ダイアログ open と並行で走るため、初回は表示が「N 行」→「N / M 行」に切り替わる過渡状態が見える。</summary>
+    private async Task ApplyLineLimitFromSettingAsync(PostFormViewModel vm, Board board)
+    {
+        try
+        {
+            var settings = await _settingClient.GetOrFetchAsync(board).ConfigureAwait(true);
+            vm.LineLimit = SettingTxtClient.GetLineLimit(settings);
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[SETTING.TXT] 行数上限取得に失敗 {board.Host}/{board.DirectoryName}: {ex.Message}");
+        }
+    }
+
+    /// <summary>スレ一覧タブの右クリック「SETTING.TXTの更新」用エントリ。
+    /// ローカルキャッシュを無視して常にサーバから再取得し、保存する。成功 / 失敗はステータスバーに表示。</summary>
+    public async Task RefreshSettingTxtAsync(Board board)
+    {
+        StatusMessage = $"SETTING.TXT を取得中 — {board.BoardName}…";
+        try
+        {
+            await _settingClient.FetchAndSaveAsync(board).ConfigureAwait(true);
+            StatusMessage = $"SETTING.TXT を更新しました — {board.BoardName}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"SETTING.TXT 取得失敗: {ex.Message}";
+        }
     }
 
     // ---- 自分の書き込みの自動 own マーク ----
@@ -580,6 +615,7 @@ public sealed partial class MainViewModel
         }
         var board = listTab.Board;
         var vm    = new PostFormViewModel(_postClient, board, DefaultPostAuthMode());
+        _ = ApplyLineLimitFromSettingAsync(vm, board);
         var dlg   = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
         {

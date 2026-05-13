@@ -28,6 +28,7 @@ public sealed partial class MainViewModel : ObservableObject
     // ----- サービス参照 (ctor で受け取る) -----
     private readonly BbsmenuClient                    _bbsmenuClient;
     private readonly SubjectTxtClient                 _subjectClient;
+    private readonly SettingTxtClient                 _settingClient;
     private readonly DatClient                        _datClient;
     private readonly ThreadIndexService               _threadIndex;
     private readonly PostClient                       _postClient;
@@ -356,6 +357,7 @@ public sealed partial class MainViewModel : ObservableObject
     public MainViewModel(
         BbsmenuClient        bbsmenuClient,
         SubjectTxtClient     subjectClient,
+        SettingTxtClient     settingClient,
         DatClient            datClient,
         ThreadIndexService   threadIndex,
         FavoritesStorage     favoritesStorage,
@@ -366,6 +368,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _bbsmenuClient = bbsmenuClient;
         _subjectClient = subjectClient;
+        _settingClient = settingClient;
         _datClient     = datClient;
         _threadIndex   = threadIndex;
         _postClient    = postClient;
