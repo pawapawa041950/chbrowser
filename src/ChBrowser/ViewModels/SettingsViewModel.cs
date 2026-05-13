@@ -26,6 +26,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private string _hiDpiMode             = "Unaware";
     [ObservableProperty] private bool   _enableKakikomiLog     = true;
+    [ObservableProperty] private bool   _restoreOpenTabsOnStartup = true;
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
     // 認証カテゴリ (どんぐりメール認証)
@@ -184,6 +185,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _suppressSave                = true;
         HiDpiMode                    = initial.HiDpiMode;
         EnableKakikomiLog            = initial.EnableKakikomiLog;
+        RestoreOpenTabsOnStartup  = initial.RestoreOpenTabsOnStartup;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
         DonguriEmail                 = initial.DonguriEmail;
@@ -287,6 +289,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Version                     = 1,
         HiDpiMode                   = HiDpiMode,
         EnableKakikomiLog           = EnableKakikomiLog,
+        RestoreOpenTabsOnStartup = RestoreOpenTabsOnStartup,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
         DonguriEmail                = DonguriEmail,

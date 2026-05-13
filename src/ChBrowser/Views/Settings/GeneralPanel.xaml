@@ -31,6 +31,18 @@
         </TextBlock>
         <CheckBox Content="kakikomi.txt に書き込み履歴を記録する"
                   IsChecked="{Binding EnableKakikomiLog, Mode=TwoWay}"
+                  Margin="0,0,0,16" />
+
+        <!-- タブの起動時復元。終了時にタブ一覧 (スレ一覧タブ + スレタブの両方) を保存し、起動時に同じ順で再オープン。 -->
+        <TextBlock Text="セッション復元" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,4">
+            アプリを終了した時に開いていたタブ (スレ一覧タブとスレッドタブの両方) を記憶し、
+            次回起動時に同じ順番で開き直します。
+        </TextBlock>
+        <CheckBox Content="終了時に開いていたタブを次回起動時に開く"
+                  IsChecked="{Binding RestoreOpenTabsOnStartup, Mode=TwoWay}"
                   Margin="0,0,0,4" />
     </StackPanel>
 </UserControl>

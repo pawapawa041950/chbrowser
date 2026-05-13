@@ -93,6 +93,12 @@ public partial class MainWindow : Window
         try { _vm?.FlushAllThreadScrollPositionsToDisk(); }
         catch (Exception ex) { Debug.WriteLine($"[MainWindow] scroll pos flush failed: {ex.Message}"); }
 
+        // 開いている全タブ (スレ一覧タブ + スレタブ) を open_tabs.json に保存。
+        // 起動時に AppConfig.RestoreOpenTabsOnStartup が true なら同じ並びで再オープンされる。
+        // 設定 OFF でも保存は実行する (= 後で ON に戻したら復元できるように)。
+        try { _vm?.SaveOpenTabsToDisk(); }
+        catch (Exception ex) { Debug.WriteLine($"[MainWindow] open-tabs save failed: {ex.Message}"); }
+
         if (LayoutStorage is null) return;
         try { LayoutStorage.Save(CaptureLayout()); }
         catch (Exception ex) { Debug.WriteLine($"[MainWindow] layout save failed: {ex.Message}"); }

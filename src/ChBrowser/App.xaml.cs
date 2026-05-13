@@ -202,7 +202,8 @@ public partial class App : Application
         var ngStorage = new NgStorage(paths);
         _ngService    = new ChBrowser.Services.Ng.NgService(ngStorage);
 
-        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths);
+        var openTabsStorage = new OpenTabsStorage(paths);
+        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths, openTabsStorage);
         _mainVm          = mainVm;
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
@@ -244,12 +245,29 @@ public partial class App : Application
 
         window.Show();
 
-        // 既存キャッシュがあれば即読み込み (await しない)
-        _ = mainVm.InitializeAsync();
+        // 既存キャッシュがあれば即読み込み (await しない)。
+        // 設定が ON なら、初期化完了後にタブ一覧 (スレ一覧タブ + スレタブ) を順番通り復元する
+        // (= bbsmenu / Favorites がロード済の状態で LoadThreadListAsync / OpenThreadFromListAsync 等を呼ぶ)。
+        _ = InitializeAndRestoreAsync(mainVm, _currentConfig.RestoreOpenTabsOnStartup);
 
         // どんぐりメール認証: 設定にメアドがあれば起動時にログインを試行 (await しない)。
         // 進行状況は MainViewModel.DonguriLoginStatus に流してステータスバーに常時表示する。
         _ = TryDonguriLoginAsync(donguriService, _currentConfig, mainVm);
+    }
+
+    /// <summary>InitializeAsync の完了後にタブ復元を発火させるラッパ。
+    /// 復元は同期前段でタブを追加してから fire-and-forget で I/O を進めるので、await しなくても
+    /// 並びは保存順に揃う (MainViewModel.RestoreOpenTabs のコメント参照)。</summary>
+    private static async Task InitializeAndRestoreAsync(MainViewModel mainVm, bool restoreEnabled)
+    {
+        try { await mainVm.InitializeAsync().ConfigureAwait(true); }
+        catch (Exception ex) { Debug.WriteLine($"[App] InitializeAsync failed: {ex.Message}"); }
+
+        if (restoreEnabled)
+        {
+            try { mainVm.RestoreOpenTabs(); }
+            catch (Exception ex) { Debug.WriteLine($"[App] RestoreOpenTabs failed: {ex.Message}"); }
+        }
     }
 
     /// <summary>ステータスバー表示用の先頭マーク。設定画面側では除いて表示する。</summary>

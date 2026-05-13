@@ -67,6 +67,11 @@ public sealed class DataPaths
     /// <summary>アプリ全体設定 (Phase 11)。<see cref="ChBrowser.Models.AppConfig"/> の保存先。</summary>
     public string ConfigJsonPath    => Path.Combine(AppDir, "config.json");
 
+    /// <summary>終了時に開いていたタブ一覧 (= スレ一覧タブ + スレタブの両方、それぞれ並び順を維持) の永続化先。
+    /// 起動時に <see cref="ChBrowser.Models.AppConfig.RestoreOpenTabsOnStartup"/> が true なら
+    /// このファイルを読み、保存されていた順番で各タブを再オープンする。</summary>
+    public string OpenTabsJsonPath => Path.Combine(AppDir, "open_tabs.json");
+
     // NG ルールは Phase 13e で `data/ng/rules.json` の単一ファイルに統合 (= NgStorage 内で組み立て)。
     // 旧 `global.json` + `by_board/*.json` は NgStorage.LoadAndMigrate が自動で吸収 + 削除する。
 

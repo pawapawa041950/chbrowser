@@ -16,6 +16,12 @@ public sealed record AppConfig
     /// 既定 ON。OFF にすると追記を行わない (既存ファイルには触らない)。即時反映。</summary>
     public bool EnableKakikomiLog { get; init; } = true;
 
+    /// <summary>アプリ終了時に開いていたタブ (スレ一覧タブ + スレタブ両方) を
+    /// <c>data/app/open_tabs.json</c> に保存し、次回起動時にその順番のまま自動で開き直すか。既定 ON。
+    /// OFF にしても保存ファイルは作られる (= 後で ON に戻したら復元可)、復元処理だけがスキップされる。
+    /// 即時反映 — 設定変更タイミングではなく次回起動・終了で効く。</summary>
+    public bool RestoreOpenTabsOnStartup { get; init; } = true;
+
     // ---- 通信 ----
     /// <summary>カスタム User-Agent。空文字なら既定 (Monazilla/1.00 ChBrowser/&lt;ver&gt;)。即時反映。</summary>
     public string UserAgentOverride { get; init; } = "";

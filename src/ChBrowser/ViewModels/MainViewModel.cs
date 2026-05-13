@@ -36,6 +36,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly DispatcherTimer                  _donguriTimer;
     private readonly ChBrowser.Services.Ng.NgService  _ng;
     private readonly DataPaths                        _paths;
+    private readonly OpenTabsStorage               _openTabsStorage;
 
     // ----- ペイン用コレクション -----
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
@@ -364,18 +365,20 @@ public sealed partial class MainViewModel : ObservableObject
         PostClient           postClient,
         DonguriService       donguri,
         ChBrowser.Services.Ng.NgService ng,
-        DataPaths            paths)
+        DataPaths            paths,
+        OpenTabsStorage   openTabsStorage)
     {
-        _bbsmenuClient = bbsmenuClient;
-        _subjectClient = subjectClient;
-        _settingClient = settingClient;
-        _datClient     = datClient;
-        _threadIndex   = threadIndex;
-        _postClient    = postClient;
-        _donguri       = donguri;
-        _ng            = ng;
-        _paths         = paths;
-        Favorites      = new FavoritesViewModel(favoritesStorage);
+        _bbsmenuClient   = bbsmenuClient;
+        _subjectClient   = subjectClient;
+        _settingClient   = settingClient;
+        _datClient       = datClient;
+        _threadIndex     = threadIndex;
+        _postClient      = postClient;
+        _donguri         = donguri;
+        _ng              = ng;
+        _paths           = paths;
+        _openTabsStorage = openTabsStorage;
+        Favorites        = new FavoritesViewModel(favoritesStorage);
 
         Favorites.Changed += RefreshFavoritesHtml;
         // 「上ボタン」バー: お気に入り変更のたびに再構築 (= フォルダ直下を ObservableCollection に流し込む)。

@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using ChBrowser.Models;
 using ChBrowser.Services.Api;
+using ChBrowser.Services.Storage;
 
 namespace ChBrowser.ViewModels;
 
@@ -707,6 +708,113 @@ public sealed partial class MainViewModel
     public void FlushAllThreadScrollPositionsToDisk()
     {
         foreach (var tab in ThreadTabs) FlushScrollPositionToDisk(tab);
+    }
+
+    /// <summary>現在開いている全タブ (スレ一覧タブ + スレタブ) を <c>open_tabs.json</c> に保存する。
+    /// それぞれのコレクションの順番をそのまま JSON に書き出す (= 次回起動で同じ並びで再オープン)。
+    /// アプリ終了時 (<see cref="MainWindow.OnClosing"/>) から呼ばれる。
+    /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> が OFF でも常に書き出すので、後で ON に戻したら復元可。</summary>
+    public void SaveOpenTabsToDisk()
+    {
+        // スレ一覧タブ: 「板タブ」と「お気に入りフォルダタブ」を Kind で区別。
+        // FavoritesFolderId == Guid.Empty は「お気に入り全体 (= 仮想ルート)」を表す。
+        var listEntries = new System.Collections.Generic.List<OpenThreadListTabEntry>(ThreadListTabs.Count);
+        foreach (var tab in ThreadListTabs)
+        {
+            if (tab.Board is { } b)
+            {
+                listEntries.Add(new OpenThreadListTabEntry(
+                    Kind:          "board",
+                    Host:          b.Host,
+                    DirectoryName: b.DirectoryName,
+                    FolderId:      null));
+            }
+            else if (tab.FavoritesFolderId is Guid id)
+            {
+                listEntries.Add(new OpenThreadListTabEntry(
+                    Kind:          "favoritesFolder",
+                    Host:          null,
+                    DirectoryName: null,
+                    FolderId:      id.ToString()));
+            }
+            // 上記いずれにも該当しないタブ (= 想定外、現状無し) は保存対象外。
+        }
+
+        var threadEntries = new System.Collections.Generic.List<OpenThreadTabEntry>(ThreadTabs.Count);
+        foreach (var tab in ThreadTabs)
+        {
+            threadEntries.Add(new OpenThreadTabEntry(
+                Host:          tab.Board.Host,
+                DirectoryName: tab.Board.DirectoryName,
+                Key:           tab.ThreadKey,
+                Title:         tab.Title ?? ""));
+        }
+
+        _openTabsStorage.Save(listEntries, threadEntries);
+    }
+
+    /// <summary>前回終了時に保存されたタブ一覧 (スレ一覧タブ + スレタブ) を読み込み、保存されていた順番で再オープンする。
+    /// 順番保証の仕組み:
+    ///   - <see cref="LoadThreadListAsync"/> / <see cref="OpenFavoritesFolderAsync"/> / <see cref="OpenAllRootAsBoardAsync"/>
+    ///     はいずれも同期前段で ThreadListTabs.Add を行い、その後で subject.txt / 集約取得を await する。
+    ///   - <see cref="OpenThreadAsync"/> も同様に同期前段で ThreadTabs.Add を行ってから dat fetch を await する。
+    ///   - ここで fire-and-forget で順に呼べば、各呼び出しの sync 部 (= タブ追加) は呼び出し順に同期実行され、
+    ///     その後の I/O 部分だけが並列で走る (= 並びは保存順 = ユーザの要件、復元時間は最遅 I/O に律速)。
+    /// 復元の発火タイミング: <see cref="InitializeAsync"/> 完了後 (= bbsmenu / Favorites がロード済の状態)。
+    /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> による on/off は呼び出し側 (App) で判定する。</summary>
+    public void RestoreOpenTabs()
+    {
+        var saved = _openTabsStorage.Load();
+        if (saved.ThreadListTabs.Count == 0 && saved.ThreadTabs.Count == 0) return;
+
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[restoreOpenTabs] 復元開始: スレ一覧タブ {saved.ThreadListTabs.Count} 件, スレタブ {saved.ThreadTabs.Count} 件");
+
+        // (1) スレ一覧タブを先に — 復元順序のユーザ視認性のため、左ペインのタブを先に並べてからスレタブを並べる。
+        foreach (var entry in saved.ThreadListTabs)
+        {
+            try
+            {
+                if (string.Equals(entry.Kind, "board", StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(entry.Host) || string.IsNullOrEmpty(entry.DirectoryName)) continue;
+                    var board = ResolveBoard(entry.Host, entry.DirectoryName, "");
+                    _ = LoadThreadListAsync(new BoardViewModel(board));
+                }
+                else if (string.Equals(entry.Kind, "favoritesFolder", StringComparison.Ordinal))
+                {
+                    if (!Guid.TryParse(entry.FolderId, out var id)) continue;
+                    if (id == Guid.Empty)
+                    {
+                        _ = OpenAllRootAsBoardAsync();
+                    }
+                    else if (Favorites.FindById(id) is FavoriteFolderViewModel folder)
+                    {
+                        _ = OpenFavoritesFolderAsync(folder);
+                    }
+                    // フォルダが既に削除されていた場合は何もしない (= サイレントに skip)。
+                }
+            }
+            catch (Exception ex)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[restoreOpenTabs] スレ一覧タブ復元失敗 ({entry.Kind} {entry.Host}/{entry.DirectoryName} {entry.FolderId}): {ex.Message}");
+            }
+        }
+
+        // (2) スレタブ。OpenThreadAsync は同期前段で ThreadTabs.Add するので await 不要。
+        foreach (var entry in saved.ThreadTabs)
+        {
+            try
+            {
+                _ = OpenThreadFromListAsync(entry.Host, entry.DirectoryName, entry.Key, entry.Title);
+            }
+            catch (Exception ex)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[restoreOpenTabs] スレタブ復元失敗 ({entry.Host}/{entry.DirectoryName}/{entry.Key}): {ex.Message}");
+            }
+        }
     }
 
     /// <summary>ThreadTabs の CollectionChanged ハンドラ。
