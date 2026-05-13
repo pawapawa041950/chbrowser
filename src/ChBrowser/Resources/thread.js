@@ -3121,15 +3121,25 @@
             });
             a.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         });
-        // post-no ホバー → 返信元レスをポップアップ (data は兄弟 .post-reply-count[data-replies] から取る)。
-        // ポップアップ内クローンは clonePostForPopup が .post-reply-count を剥がすので、ポップアップ中の
-        // post-no をホバーしても兄弟バッジが見つからず再帰ポップアップは開かない (= 連鎖防止)。
+        // post-no ホバー → 返信元レスをポップアップ。
+        //  通常スレ表示: 兄弟 .post-reply-count[data-replies] からレス番号一覧を取る (= テンプレで render される)。
+        //  ポップアップ内クローン: clonePostForPopup が .post-reply-count を剥がしているので、その場合は
+        //    currentReverseIndex (= 「num → num を >>参照しているレス番号配列」) を JS データ側から引いて
+        //    擬似 dataSource を組み立てる (= ポップアップ中の post-no ホバーで返信を見られる動線)。
+        //  openReplyPopup は dataSource.dataset.replies しか読まないので、ダミー <span> に dataset を載せれば足りる。
         root.querySelectorAll('.post-no').forEach(function (postNo) {
             postNo.addEventListener('mouseenter', function () {
                 const header = postNo.parentElement;
                 if (!header) return;
-                const badge = header.querySelector(':scope > .post-reply-count');
-                if (!badge || !badge.dataset.replies) return;
+                let badge = header.querySelector(':scope > .post-reply-count');
+                if (!badge || !badge.dataset.replies) {
+                    const num = parseInt(postNo.dataset.number || '0', 10);
+                    if (!num) return;
+                    const replies = currentReverseIndex.get(num);
+                    if (!replies || replies.length === 0) return;
+                    badge = document.createElement('span');
+                    badge.dataset.replies = replies.join(',');
+                }
                 cancelCloseAt(level);
                 openReplyPopup(postNo, badge, level);
             });
