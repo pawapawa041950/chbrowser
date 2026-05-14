@@ -29,6 +29,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _restoreOpenTabsOnStartup = true;
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
+    // AI カテゴリ (LLM 連携)
+    [ObservableProperty] private string _llmApiUrl             = "";
+    [ObservableProperty] private string _llmApiKey             = "";
+    [ObservableProperty] private string _llmModel              = "";
+    [ObservableProperty] private int    _llmContextSize        = 8192;
+    /// <summary>AI パネルに表示する接続確認結果。表示専用で ConfigStorage には保存しない。
+    /// "OK — ..." / "NG — ..." / "確認中…" / "未確認" のいずれかで始まる (= 色分け converter の規約)。</summary>
+    [ObservableProperty] private string _llmConnectionStatus   = "未確認";
     // 認証カテゴリ (どんぐりメール認証)
     [ObservableProperty] private string _donguriEmail          = "";
     [ObservableProperty] private string _donguriPassword       = "";
@@ -115,6 +123,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// 入力中の値を <see cref="FlushPendingSave"/> で即時保存 → ConfigStorage に反映 → App 側でログイン試行。</summary>
     public IRelayCommand LoginNowCommand       { get; }
 
+    /// <summary>AI カテゴリの「接続確認」ボタン用。入力中の値を確定してから OpenAI 互換 API に
+    /// 最小リクエストを投げ、結果を <see cref="LlmConnectionStatus"/> に反映する。
+    /// 実行中は CanExecute=false で再入を防ぐ (AsyncRelayCommand の既定挙動)。</summary>
+    public IAsyncRelayCommand TestLlmConnectionCommand { get; }
+
     // ---- Phase 11d: デザイン編集 ----
     public IRelayCommand<string>? OpenCssFileCommand { get; }
     public IRelayCommand           OpenThemeFolderCommand   { get; }
@@ -129,6 +142,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action                _restartNowAction;
     private readonly Action?               _clearCookiesAction;
     private readonly Action?               _loginNowAction;
+    /// <summary>AI カテゴリの接続確認用コールバック。App が LlmClient を束ねて注入する。
+    /// null のときは接続確認ボタンを無効化する。</summary>
+    private readonly Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? _testLlmConnectionAction;
     // Phase 11d
     private readonly Action<string>?       _openCssFileAction;
     private readonly Action?               _openThemeFolderAction;
@@ -151,7 +167,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action?           reloadAllCssAction       = null,
         Action?           extractDefaultCssAction  = null,
         Action?           clearCookiesAction       = null,
-        Action?           loginNowAction           = null)
+        Action?           loginNowAction           = null,
+        Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null)
     {
         _storage                 = storage;
         _initialConfig           = initial;
@@ -166,11 +183,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         _extractDefaultCssAction = extractDefaultCssAction;
         _clearCookiesAction      = clearCookiesAction;
         _loginNowAction          = loginNowAction;
+        _testLlmConnectionAction = testLlmConnectionAction;
 
         // カテゴリ枠。NG / ショートカット / マウスジェスチャー は別ウィンドウ管理。
         Categories.Add(new("全般",         "HiDPI モード"));
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
         Categories.Add(new("認証",         "どんぐり (5ch) のメール認証"));
+        Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作"));
@@ -188,6 +207,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         RestoreOpenTabsOnStartup  = initial.RestoreOpenTabsOnStartup;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
+        LlmApiUrl                    = initial.LlmApiUrl;
+        LlmApiKey                    = initial.LlmApiKey;
+        LlmModel                     = initial.LlmModel;
+        LlmContextSize               = initial.LlmContextSize;
         DonguriEmail                 = initial.DonguriEmail;
         DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
@@ -244,7 +267,35 @@ public sealed partial class SettingsViewModel : ObservableObject
             _loginNowAction?.Invoke();
         }, () => _loginNowAction is not null);
 
+        // AI カテゴリ「接続確認」: 入力中の値を確定 → App 注入の接続テストを実行 → 結果を表示。
+        // AsyncRelayCommand は実行中 CanExecute=false になるので連打 / 再入は自動で防がれる。
+        TestLlmConnectionCommand = new AsyncRelayCommand(TestLlmConnectionAsync,
+                                                        () => _testLlmConnectionAction is not null);
+
         RefreshCacheSizeDisplay();
+    }
+
+    /// <summary>「接続確認」ボタンの本体。debounce 待ちの未保存入力を確定してから接続テストを呼ぶ
+    /// (= メアド即ログインと同じ理由: 入力直後にボタンを押しても最新値で試行できるように)。</summary>
+    private async System.Threading.Tasks.Task TestLlmConnectionAsync()
+    {
+        if (_testLlmConnectionAction is null) return;
+        FlushPendingSave();
+        LlmConnectionStatus = "確認中…";
+        try
+        {
+            var settings = new LlmSettings(
+                (LlmApiUrl ?? "").Trim(),
+                LlmApiKey ?? "",
+                (LlmModel ?? "").Trim(),
+                LlmContextSize);
+            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
+            LlmConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
+        }
+        catch (Exception ex)
+        {
+            LlmConnectionStatus = $"NG — {ex.Message}";
+        }
     }
 
     private void OnAnyPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -256,7 +307,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(SelectedCategory):
             case nameof(RestartRequired):
             case nameof(CacheSizeDisplay):
-            case nameof(DonguriLoginStatus):  // ログイン状態は表示専用 (ConfigStorage に書かない)
+            case nameof(DonguriLoginStatus):    // ログイン状態は表示専用 (ConfigStorage に書かない)
+            case nameof(LlmConnectionStatus):   // LLM 接続確認結果も表示専用
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -292,6 +344,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         RestoreOpenTabsOnStartup = RestoreOpenTabsOnStartup,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
+        LlmApiUrl                   = LlmApiUrl,
+        LlmApiKey                   = LlmApiKey,
+        LlmModel                    = LlmModel,
+        LlmContextSize              = LlmContextSize,
         DonguriEmail                = DonguriEmail,
         DonguriPassword             = DonguriPassword,
         PopularThreshold            = PopularThreshold,
