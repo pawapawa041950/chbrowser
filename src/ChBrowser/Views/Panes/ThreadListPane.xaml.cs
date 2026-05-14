@@ -211,6 +211,7 @@ public partial class ThreadListPane : UserControl
                     break;
                 case "copyUrl":
                 case "openSetting":
+                case "needsBoard":
                     item.IsEnabled = hasBoard;
                     break;
             }
@@ -243,6 +244,25 @@ public partial class ThreadListPane : UserControl
     {
         if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
         Clipboard.SetText($"{board.BoardName}\n{board.Url}");
+    }
+
+    /// <summary>「本板をブラウザで開く」: 板の URL を OS 既定ブラウザで開く。
+    /// Board が無いタブ (= お気に入りフォルダ等) では Opened 側で IsEnabled=false に落ちている。</summary>
+    private void ThreadListTabOpenBoardInBrowser_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName        = board.Url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[OpenBoardInBrowser] failed: {ex.Message}");
+        }
     }
 
     /// <summary>「SETTING.TXTをブラウザで開く」: 板の SETTING.TXT を OS 既定ブラウザに渡す。

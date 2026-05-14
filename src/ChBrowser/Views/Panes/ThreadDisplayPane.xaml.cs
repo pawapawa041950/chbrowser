@@ -849,6 +849,13 @@ public partial class ThreadDisplayPane : UserControl
         _ = main.OpenBoardByUrlAsync(tab.Board.Host, tab.Board.DirectoryName);
     }
 
+    /// <summary>「本スレッドをブラウザで開く」: このスレの read.cgi URL を OS 既定ブラウザで開く。</summary>
+    private void ThreadTabOpenInBrowser_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
+        OpenUrlInBrowser(tab.Url);
+    }
+
     /// <summary>「SETTING.TXTをブラウザで開く」: スレが属する板の SETTING.TXT を OS 既定ブラウザで開く。
     /// アプリ内に専用ビューを持つほどの利用頻度ではないため、外部ブラウザに委譲する方針。</summary>
     private void ThreadTabOpenSettingTxt_Click(object sender, RoutedEventArgs e)
@@ -860,8 +867,11 @@ public partial class ThreadDisplayPane : UserControl
     /// <summary>Board.Url 末尾の "/" を吸収して "{Url}/SETTING.TXT" を OS 既定ブラウザで開く。
     /// SETTING.TXT は SJIS だがブラウザが処理するのでアプリは関与不要。</summary>
     private static void OpenSettingTxtInBrowser(Models.Board board)
+        => OpenUrlInBrowser(board.Url.TrimEnd('/') + "/SETTING.TXT");
+
+    /// <summary>URL を OS 既定ブラウザで開く共通ヘルパ。失敗は debug ログのみ (= ユーザ操作の妨げにしない)。</summary>
+    private static void OpenUrlInBrowser(string url)
     {
-        var url = board.Url.TrimEnd('/') + "/SETTING.TXT";
         try
         {
             Process.Start(new ProcessStartInfo
@@ -872,7 +882,7 @@ public partial class ThreadDisplayPane : UserControl
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[OpenSettingTxt] failed: {ex.Message}");
+            Debug.WriteLine($"[OpenUrlInBrowser] failed: {ex.Message}");
         }
     }
 

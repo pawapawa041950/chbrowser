@@ -19,6 +19,8 @@
                      Opened="ThreadListTabContextMenu_Opened">
             <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListTabFav_Click" />
             <Separator />
+            <MenuItem Tag="needsBoard" Header="本板をブラウザで開く"
+                      Click="ThreadListTabOpenBoardInBrowser_Click" />
             <MenuItem Tag="openSetting" Header="SETTING.TXTをブラウザで開く"
                       Click="ThreadListTabOpenSettingTxt_Click" />
             <MenuItem Tag="openSetting" Header="SETTING.TXTの更新"
