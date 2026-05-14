@@ -353,8 +353,26 @@
     // "p" / "tp" / "ttp" / "s" / "ps" 等の suffix を URL と誤判定するのを防ぐためで、
     // ユーザが意図した省略 URL は通常 行頭 / 空白 / 句読点 等の直後に書かれるので実用上影響しない。
     // フル形 (https?://) は既存挙動 (= 前置文字を問わず拾う) を維持。
+    //
+    // sssp://img.5ch.io/ico/<path> は 5ch のレス毎アイコン記法で、実体は http://img.5ch.io/ico/<path>。
+    // 文書中のその位置に <img> で表示し、後ろに元の "sssp://～" 文字列をそのまま並べる (= ユーザ要件)。
+    // URL_OR_ANCHOR_RE の他の alt より先に置いて優先マッチさせる (= truncated の "s"/"ps" 等への巻き込みを避ける)。
     const URL_OR_ANCHOR_RE =
-        /(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+        /(sssp:\/\/img\.5ch\.io\/ico\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+
+    /** sssp://img.5ch.io/ico/<path> 形式 (5ch のレス毎アイコン記法) の判定。 */
+    const SSSP_PREFIX = 'sssp://';
+    function isSsspUrl(s) {
+        return typeof s === 'string' && s.startsWith(SSSP_PREFIX);
+    }
+    /** sssp 記法を <img class="sssp-icon"> + 元の "sssp://～" 文字列ペアの HTML に変換する。
+     *  実体 URL は http:// 経路。クリックや link 化はせず、純粋なインライン装飾として扱う。 */
+    function renderSsspIcon(matched) {
+        const httpUrl = 'http://' + matched.slice(SSSP_PREFIX.length);
+        // onerror では何もせず default の broken icon を出す (= 後で原因調査できるようにする)。
+        return '<img class="sssp-icon" src="' + escapeHtml(httpUrl) + '" alt="">'
+             + '<span class="sssp-url">' + escapeHtml(matched) + '</span>';
+    }
 
     /** URL 省略形を正式な http(s):// 形に正規化して返す。既に http(s):// で始まっていればそのまま返す。
      *  data-url / サムネ展開はこの正規化結果を使う (= リンク先解決を正しくする)。
@@ -445,9 +463,14 @@
         while ((m = URL_OR_ANCHOR_RE.exec(line)) !== null) {
             if (m.index > pos) html += escapeHtml(line.slice(pos, m.index));
             if (m[1]) {
-                // 省略形 (ttp:// / s:// 等) の場合は data-url 側だけ正規化して、表示は元のまま残す。
-                const normalized = normalizeUrlScheme(m[1]);
-                html += renderExternalLink(normalized, m[1]);
+                if (isSsspUrl(m[1])) {
+                    // sssp:// は link / media slot を作らず、インラインアイコン + 元文字列に置換する。
+                    html += renderSsspIcon(m[1]);
+                } else {
+                    // 省略形 (ttp:// / s:// 等) の場合は data-url 側だけ正規化して、表示は元のまま残す。
+                    const normalized = normalizeUrlScheme(m[1]);
+                    html += renderExternalLink(normalized, m[1]);
+                }
             } else {
                 const from = parseInt(m[3], 10);
                 const to = m[4] ? parseInt(m[4], 10) : from;

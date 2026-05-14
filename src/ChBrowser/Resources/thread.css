@@ -86,6 +86,23 @@ a.anchor.missing {
     --slot-scale: 1;
 }
 
+/* 5ch のレス毎アイコン記法 (sssp://img.5ch.io/ico/<path>) のインライン表示。
+   実体 URL は http://img.5ch.io/ico/<path> で、本文中の出現位置にそのまま <img> を出す。
+   サムネ枠 (.image-slot) ではなく純粋な装飾なので display:inline で文字と並べる。
+   高さは行高に揃え、原寸が大きい場合は等倍縮小 (= 横方向は auto)。 */
+.sssp-icon {
+    display: inline-block;
+    vertical-align: text-bottom;
+    height: 2em;
+    width: auto;
+    margin: 0 2px;
+}
+/* アイコン直後の元 "sssp://～" 文字列。スタイル変化はしない (= 通常本文と同じ) が、
+   将来「目立たないように薄く出す」「ホバーで非表示」等の調整余地として class を確保。 */
+.sssp-url {
+    /* 現状は装飾なし */
+}
+
 .image-slot {
     display: block;
     width: calc(240px * var(--slot-scale));
