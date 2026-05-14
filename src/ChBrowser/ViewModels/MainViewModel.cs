@@ -37,6 +37,8 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ChBrowser.Services.Ng.NgService  _ng;
     private readonly DataPaths                        _paths;
     private readonly OpenTabsStorage               _openTabsStorage;
+    /// <summary>LLM 連携クライアント。スレッドの「AI」ボタンからチャットウィンドウを開く際に使う。</summary>
+    private readonly ChBrowser.Services.Llm.LlmClient _llmClient;
 
     // ----- ペイン用コレクション -----
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
@@ -366,7 +368,8 @@ public sealed partial class MainViewModel : ObservableObject
         DonguriService       donguri,
         ChBrowser.Services.Ng.NgService ng,
         DataPaths            paths,
-        OpenTabsStorage   openTabsStorage)
+        OpenTabsStorage   openTabsStorage,
+        ChBrowser.Services.Llm.LlmClient llmClient)
     {
         _bbsmenuClient   = bbsmenuClient;
         _subjectClient   = subjectClient;
@@ -378,6 +381,7 @@ public sealed partial class MainViewModel : ObservableObject
         _ng              = ng;
         _paths           = paths;
         _openTabsStorage = openTabsStorage;
+        _llmClient       = llmClient;
         Favorites        = new FavoritesViewModel(favoritesStorage);
 
         Favorites.Changed += RefreshFavoritesHtml;

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<!--
+  AI チャットウィンドウの会話表示シェル。
+  C# (AiChatWindow) から PostWebMessageAsJson でメッセージを受け取り、チャットバブルを描画する。
+  markdown は C# 側 (Markdig) で HTML 化済みのものが updateAssistant.html として届くので、
+  ここでは innerHTML にそのまま流し込むだけ (= リアルタイム描画は updateAssistant の連続呼び出しで実現)。
+
+  C# → JS メッセージ:
+    { type:'addUser',         text }   ユーザ発言バブルを追加 (プレーンテキスト)
+    { type:'startAssistant'  }         空のアシスタントバブルを追加し「現在の応答先」にする
+    { type:'updateAssistant', html }   現在のアシスタントバブルの中身を html で置換 (ストリーミング更新)
+    { type:'finishAssistant' }         「現在の応答先」を確定 (ポインタを解除)
+    { type:'addError',        text }   エラーバブルを追加
+  JS → C# メッセージ:
+    { type:'openExternal',    url  }   バブル内リンクのクリック (= 既定ブラウザで開く要求)
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #ffffff;
+    font-family: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    font-size: 13px;
+    color: #1a1a1a;
+  }
+  #messages {
+    padding: 10px 12px 16px;
+    box-sizing: border-box;
+  }
+  .msg {
+    max-width: 86%;
+    margin: 6px 0;
+    padding: 7px 10px;
+    border-radius: 8px;
+    box-sizing: border-box;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .msg .role {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    margin-bottom: 3px;
+  }
+  /* ユーザ発言: 右寄せ・薄青。プレーンテキストなので改行を保持。 */
+  .msg.user {
+    margin-left: auto;
+    background: #d6e8ff;
+  }
+  .msg.user .body { white-space: pre-wrap; }
+  /* アシスタント発言: 左寄せ・薄灰。中身は markdown 由来の HTML。 */
+  .msg.assistant {
+    margin-right: auto;
+    background: #f0f0f0;
+  }
+  /* エラー: 左寄せ・薄赤。 */
+  .msg.error {
+    margin-right: auto;
+    background: #fce4e4;
+    color: #802020;
+    white-space: pre-wrap;
+  }
+  /* ストリーミング中の点滅カーソル風インジケータ。 */
+  .msg.assistant.streaming .body::after {
+    content: "▍";
+    color: #888;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---- markdown 要素のスタイル (アシスタントバブル内) ---- */
+  .msg.assistant .body > :first-child { margin-top: 0; }
+  .msg.assistant .body > :last-child  { margin-bottom: 0; }
+  .msg.assistant .body p { margin: 6px 0; line-height: 1.5; }
+  .msg.assistant .body h1,
+  .msg.assistant .body h2,
+  .msg.assistant .body h3,
+  .msg.assistant .body h4 { margin: 10px 0 4px; line-height: 1.3; }
+  .msg.assistant .body h1 { font-size: 1.35em; }
+  .msg.assistant .body h2 { font-size: 1.22em; }
+  .msg.assistant .body h3 { font-size: 1.10em; }
+  .msg.assistant .body h4 { font-size: 1.02em; }
+  .msg.assistant .body ul,
+  .msg.assistant .body ol { margin: 6px 0; padding-left: 1.5em; }
+  .msg.assistant .body li { margin: 2px 0; line-height: 1.5; }
+  .msg.assistant .body a { color: #1565c0; }
+  .msg.assistant .body code {
+    background: #e4e4e4;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: "Consolas", "Cascadia Mono", monospace;
+    font-size: 0.92em;
+  }
+  .msg.assistant .body pre {
+    background: #2d2d2d;
+    color: #f0f0f0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    margin: 6px 0;
+  }
+  .msg.assistant .body pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 0.9em;
+  }
+  .msg.assistant .body blockquote {
+    margin: 6px 0;
+    padding: 2px 10px;
+    border-left: 3px solid #bbb;
+    color: #555;
+  }
+  .msg.assistant .body table {
+    border-collapse: collapse;
+    margin: 6px 0;
+    font-size: 0.95em;
+  }
+  .msg.assistant .body th,
+  .msg.assistant .body td {
+    border: 1px solid #ccc;
+    padding: 3px 8px;
+  }
+  .msg.assistant .body th { background: #e8e8e8; }
+  .msg.assistant .body hr {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 10px 0;
+  }
+  .msg.assistant .body img { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<div id="messages"></div>
+<script>
+(function () {
+  "use strict";
+  var messages = document.getElementById("messages");
+  var current = null; // ストリーミング中のアシスタントバブルの .body 要素
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function scrollToBottom() {
+    // 末尾が常に見えるように。ストリーミング中は連続で呼ばれる。
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function makeBubble(kind, roleLabel) {
+    var msg = document.createElement("div");
+    msg.className = "msg " + kind;
+    var role = document.createElement("div");
+    role.className = "role";
+    role.textContent = roleLabel;
+    var body = document.createElement("div");
+    body.className = "body";
+    msg.appendChild(role);
+    msg.appendChild(body);
+    messages.appendChild(msg);
+    return { msg: msg, body: body };
+  }
+
+  function addUser(text) {
+    var b = makeBubble("user", "あなた");
+    b.body.textContent = text; // プレーンテキスト (CSS の pre-wrap で改行保持)
+    scrollToBottom();
+  }
+
+  function startAssistant() {
+    var b = makeBubble("assistant streaming", "AI");
+    current = b.body;
+    scrollToBottom();
+  }
+
+  function updateAssistant(html) {
+    if (!current) startAssistant();
+    current.innerHTML = html; // Markdig 生成済み HTML (C# 側で raw HTML は無効化済み)
+    scrollToBottom();
+  }
+
+  function finishAssistant() {
+    if (current) {
+      // streaming クラスを外してカーソル表示を消す
+      var msg = current.parentElement;
+      if (msg) msg.classList.remove("streaming");
+      current = null;
+    }
+  }
+
+  function addError(text) {
+    finishAssistant();
+    var b = makeBubble("error", "エラー");
+    b.body.textContent = text;
+    scrollToBottom();
+  }
+
+  // バブル内リンクのクリックは WebView2 内で遷移させず、C# に「既定ブラウザで開いて」と依頼する。
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    e.preventDefault();
+    var url = a.getAttribute("href") || "";
+    if (url && window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage({ type: "openExternal", url: url });
+    }
+  });
+
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener("message", function (e) {
+      var m = e.data;
+      if (!m || typeof m !== "object" || !m.type) return;
+      switch (m.type) {
+        case "addUser":         addUser(m.text || ""); break;
+        case "startAssistant":  startAssistant(); break;
+        case "updateAssistant": updateAssistant(m.html || ""); break;
+        case "finishAssistant": finishAssistant(); break;
+        case "addError":        addError(m.text || ""); break;
+      }
+    });
+    // C# 側に「シェル準備完了」を通知 (= 以降のメッセージを安全に送れる)。
+    window.chrome.webview.postMessage({ type: "ready" });
+  }
+})();
+</script>
+</body>
+</html>

@@ -58,6 +58,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public IRelayCommand RefreshCommand         { get; }
     public IRelayCommand AddToFavoritesCommand  { get; }
     public IRelayCommand WriteCommand           { get; }
+    /// <summary>ツールバー「AI」ボタン用。このスレの内容を文脈に LLM チャットウィンドウを開く。</summary>
+    public IRelayCommand AiChatCommand          { get; }
 
     [ObservableProperty]
     private string _header;
@@ -247,7 +249,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         Action<ThreadTabViewModel>?          deleteCallback         = null,
         Action<ThreadTabViewModel>?          refreshCallback        = null,
         Action<ThreadTabViewModel>?          addToFavoritesCallback = null,
-        Action<ThreadTabViewModel>?          writeCallback          = null)
+        Action<ThreadTabViewModel>?          writeCallback          = null,
+        Action<ThreadTabViewModel>?          aiChatCallback         = null)
     {
         Board                  = board;
         ThreadKey              = info.Key;
@@ -258,6 +261,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         RefreshCommand         = new RelayCommand(() => refreshCallback?.Invoke(this));
         AddToFavoritesCommand  = new RelayCommand(() => addToFavoritesCallback?.Invoke(this));
         WriteCommand           = new RelayCommand(() => writeCallback?.Invoke(this));
+        AiChatCommand          = new RelayCommand(() => aiChatCallback?.Invoke(this));
         // enum 順で次のモードに進む (一周したら先頭に戻る)。新モードを <see cref="ThreadViewMode"/> に
         // 追加すると、ここを触らずにそのままサイクルに含まれる。
         CycleViewModeCommand   = new RelayCommand(() =>

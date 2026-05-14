@@ -136,6 +136,14 @@
                               Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
                     </Button>
 
+                    <!-- AI チャット: このスレの内容を文脈に LLM とチャットするウィンドウを開く -->
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Command="{Binding SelectedThreadTab.AiChatCommand}"
+                            ToolTip="このスレの内容を文脈に LLM とチャットする">
+                        <TextBlock Text="AI" FontSize="11" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+
                     <!-- 表示モード切替 -->
                     <Button Command="{Binding SelectedThreadTab.CycleViewModeCommand}">
                         <Button.Style>

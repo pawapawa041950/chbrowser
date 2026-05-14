@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using ChBrowser.Models;
@@ -352,6 +353,60 @@ public sealed partial class MainViewModel
     public void OpenReplyDialog(ThreadTabViewModel tab, int postNumber)
     {
         OpenPostDialogInternal(tab, $">>{postNumber}\n");
+    }
+
+    // ---- AI チャット (LLM 連携) ----
+    //
+    // スレッドタブの「AI」ボタンから呼ばれる。スレ単位でモードレスのチャットウィンドウを開き、
+    // システムプロンプトに「そのスレの全レス内容」を埋め込んだ状態で LLM と会話する。
+    // 同じスレで再度ボタンを押した場合は既存ウィンドウをアクティブ化する (= 会話履歴を失わない)。
+
+    /// <summary>スレタブ → AI チャットウィンドウ の対応表。再オープン時の重複防止 + タブ閉じ時の後片付け用。</summary>
+    private readonly Dictionary<ThreadTabViewModel, ChBrowser.Views.AiChatWindow> _aiChatWindows = new();
+
+    /// <summary>スレッドタブの「AI」ボタンから呼ばれる。LLM チャットウィンドウを開く
+    /// (既に開いていればアクティブ化)。</summary>
+    public void OpenAiChat(ThreadTabViewModel tab)
+    {
+        if (_aiChatWindows.TryGetValue(tab, out var existing))
+        {
+            try { existing.Activate(); } catch { /* 閉じる途中等は無視 */ }
+            return;
+        }
+
+        var settings     = LlmSettings.FromConfig(CurrentConfig);
+        var systemPrompt  = BuildAiSystemPrompt(tab);
+        var vm            = new AiChatViewModel(_llmClient, settings, systemPrompt, tab.Title);
+        var window        = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
+        _aiChatWindows[tab] = window;
+        window.Closed += (_, _) => _aiChatWindows.Remove(tab);
+        window.Show();
+    }
+
+    /// <summary>システムプロンプトを組み立てる。ユーザ指定の固定文に、スレの全レス内容を「生」で挟み込む
+    /// (= markdown 変換等はせず、レス番号 + 名前 + ID + 日付 + 本文 をそのまま並べるだけ)。</summary>
+    private static string BuildAiSystemPrompt(ThreadTabViewModel tab)
+    {
+        var content = BuildThreadContentForLlm(tab);
+        return "あなたは5chネラーです。スレッド内容は\n" + content + "\nの通りです。スレに対する質問に回答してください。";
+    }
+
+    /// <summary>タブが現在保持している全レス (<see cref="ThreadTabViewModel.Posts"/>) を、LLM に渡す
+    /// プレーンテキストに整形する。1 レス = 「&gt;&gt;番号 名前 ID:xxx 日付」+ 改行 + 本文。</summary>
+    private static string BuildThreadContentForLlm(ThreadTabViewModel tab)
+    {
+        var sb = new StringBuilder();
+        foreach (var p in tab.Posts)
+        {
+            sb.Append(">>").Append(p.Number);
+            if (!string.IsNullOrEmpty(p.Name))     sb.Append(' ').Append(p.Name);
+            if (!string.IsNullOrEmpty(p.Id))       sb.Append(" ID:").Append(p.Id);
+            if (!string.IsNullOrEmpty(p.DateText)) sb.Append(' ').Append(p.DateText);
+            sb.Append('\n');
+            sb.Append(p.Body ?? "");
+            sb.Append("\n\n");
+        }
+        return sb.ToString().TrimEnd();
     }
 
     private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
@@ -830,6 +885,12 @@ public sealed partial class MainViewModel
                 FlushScrollPositionToDisk(tab);
                 // 「タブを閉じる」操作の復元用履歴に積む (= DeleteThreadLog 等 suppress 中なら no-op)。
                 PushRecentlyClosedThreadTab(tab);
+                // このスレの AI チャットウィンドウが開いていれば一緒に閉じる (= 宙に浮いた窓を残さない)。
+                if (_aiChatWindows.TryGetValue(tab, out var chatWindow))
+                {
+                    _aiChatWindows.Remove(tab);
+                    try { chatWindow.Close(); } catch { /* 既に閉じている等は無視 */ }
+                }
             }
         }
     }
@@ -895,7 +956,8 @@ public sealed partial class MainViewModel
             deleteCallback:         t => DeleteThreadLog(t),
             refreshCallback:        t => _ = RefreshThreadAsync(t),
             addToFavoritesCallback: t => ToggleThreadFavorite(t),
-            writeCallback:          t => OpenPostDialog(t));
+            writeCallback:          t => OpenPostDialog(t),
+            aiChatCallback:         t => OpenAiChat(t));
 
         tab.ViewMode = CurrentConfig.DefaultThreadViewMode switch
         {
