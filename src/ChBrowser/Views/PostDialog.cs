@@ -65,12 +65,108 @@ public sealed class PostDialog : Window
 
         Content = BuildLayout();
 
+        // 送信直前の「表示中スレと書き込み先スレが違っていないか」確認 hook。
+        // スレ立てモード (= 表示中スレと比較する対象が無い) では VM が ThreadKey=null で来るのでスキップ。
+        vm.PreSubmitConfirm = ConfirmTargetThreadAsync;
+
         vm.PropertyChanged += OnVmPropertyChanged;
         Closed             += (_, _) =>
         {
             vm.PropertyChanged -= OnVmPropertyChanged;
             _previewDebounceTimer?.Stop();
         };
+    }
+
+    /// <summary>「書き込み対象スレ」と「現在表示中のスレタブ」が違うときだけ警告ダイアログを出し、
+    /// ユーザが「それでも書き込む」を選んだ場合のみ true を返す。
+    /// スレ立てモード / SelectedThreadTab が null / MainViewModel が取れない場合は無条件 true (= スキップ)。
+    /// MessageBoxButton の YesNo だと「はい/いいえ」になるので、要件に合わせて専用の小型ウィンドウを作る。</summary>
+    private Task<bool> ConfirmTargetThreadAsync()
+    {
+        // スレ立て: 「表示中スレと比較する」概念が無いので常に許可。
+        if (_vm.IsNewThread || _vm.ThreadKey is null) return Task.FromResult(true);
+        if (System.Windows.Application.Current?.MainWindow?.DataContext is not MainViewModel mvm)
+            return Task.FromResult(true);
+        var selected = mvm.SelectedThreadTab;
+        if (selected is null) return Task.FromResult(true);
+
+        var target = _vm.Board;
+        bool same =
+            string.Equals(selected.Board.Host,          target.Host,          StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(selected.Board.DirectoryName, target.DirectoryName, StringComparison.Ordinal) &&
+            string.Equals(selected.ThreadKey,           _vm.ThreadKey,        StringComparison.Ordinal);
+        if (same) return Task.FromResult(true);
+
+        var targetTitle  = string.IsNullOrEmpty(_vm.DialogTitle) ? "(タイトル不明)" : _vm.DialogTitle;
+        var currentTitle = string.IsNullOrEmpty(selected.Header) ? "(タイトル不明)" : selected.Header;
+        var message =
+            "現在表示中のスレと書き込み先のスレが異なります。\n\n" +
+            $"書き込み先: {targetTitle}\n" +
+            $"表示中: {currentTitle}\n\n" +
+            "このまま書き込みますか?";
+
+        var ok = ShowConfirmCustom(this, "書き込み先の確認", message, "それでも書き込む", "キャンセル");
+        return Task.FromResult(ok);
+    }
+
+    /// <summary>OK / Cancel の文言を自由に指定できるモーダル確認ダイアログ。
+    /// <see cref="MessageBox"/> はボタン文言を変えられないので必要時のみ自前で組む。
+    /// 既定フォーカス / Enter は「キャンセル」(= 誤爆防止)、Esc も「キャンセル」。 </summary>
+    private static bool ShowConfirmCustom(Window owner, string title, string message,
+                                          string okText, string cancelText)
+    {
+        var win = new Window
+        {
+            Title                 = title,
+            Owner                 = owner,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent         = SizeToContent.WidthAndHeight,
+            ResizeMode            = ResizeMode.NoResize,
+            ShowInTaskbar         = false,
+            MinWidth              = 380,
+        };
+
+        var root = new StackPanel { Margin = new Thickness(16) };
+        root.Children.Add(new TextBlock
+        {
+            Text         = message,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth     = 480,
+        });
+
+        var btnPanel = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin              = new Thickness(0, 16, 0, 0),
+        };
+        var okBtn = new Button
+        {
+            Content = okText,
+            MinWidth = 120,
+            Margin   = new Thickness(0, 0, 8, 0),
+            Padding  = new Thickness(8, 4, 8, 4),
+        };
+        var cancelBtn = new Button
+        {
+            Content   = cancelText,
+            MinWidth  = 120,
+            Padding   = new Thickness(8, 4, 8, 4),
+            IsCancel  = true,
+            IsDefault = true, // 既定フォーカス = キャンセル (= Enter 誤爆で別スレに書き込まないように)
+        };
+
+        var confirmed = false;
+        okBtn.Click     += (_, _) => { confirmed = true;  win.Close(); };
+        cancelBtn.Click += (_, _) => { confirmed = false; win.Close(); };
+
+        btnPanel.Children.Add(okBtn);
+        btnPanel.Children.Add(cancelBtn);
+        root.Children.Add(btnPanel);
+
+        win.Content = root;
+        win.ShowDialog();
+        return confirmed;
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)

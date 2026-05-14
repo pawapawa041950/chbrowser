@@ -89,6 +89,18 @@ public sealed partial class PostFormViewModel : ObservableObject
 
     public bool IsNewThread => _threadKey is null;
 
+    /// <summary>書き込み対象スレの板。書き込み先確認ダイアログで「今表示中のスレと同じか」判定に使う。</summary>
+    public Board Board => _board;
+
+    /// <summary>書き込み対象スレのキー (=dat ファイル名から拡張子を除いたもの)。
+    /// スレ立てモードでは null (= 比較対象スレが無い)。</summary>
+    public string? ThreadKey => _threadKey;
+
+    /// <summary>送信開始直前 (= IsBusy=true セット前) に呼ばれる確認 hook。
+    /// false を返すと送信を中止し、ダイアログは閉じない (= ユーザ入力を保持)。
+    /// View 側で「現在表示中のスレと異なるスレに書き込もうとしている」警告ダイアログを出すために使う。</summary>
+    public Func<Task<bool>>? PreSubmitConfirm { get; set; }
+
     public IAsyncRelayCommand SubmitCommand { get; }
 
     /// <summary>レス書き込み用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
@@ -161,6 +173,13 @@ public sealed partial class PostFormViewModel : ObservableObject
 
     private async Task SubmitAsync(CancellationToken ct)
     {
+        // 書き込み先確認 hook (= View 側で「表示中スレと違うスレに書こうとしてないか」を確認する)。
+        // false が返ると送信を中止し、IsBusy も触らずに抜ける = ダイアログは開いたまま、入力内容も保持される。
+        if (PreSubmitConfirm is not null)
+        {
+            var ok = await PreSubmitConfirm().ConfigureAwait(true);
+            if (!ok) return;
+        }
         ErrorMessage  = "";
         StatusMessage = "送信中…";
         IsBusy        = true;
