@@ -343,7 +343,36 @@
     // 本来 percent-encode されるべき文字の手前でリンクを止める)。
     //   許容: A-Z a-z 0-9 と unreserved (-._~) / gen-delims の :/?#@ / sub-delims の !$&*+,;= / pct の %
     //   除外: 空白 / "<>' / () / [] / {} / |\^`  /  非 ASCII (Japanese 等)
-    const URL_OR_ANCHOR_RE = /(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+    //
+    // 5ch では誘導/転載抑止で先頭の "http" を削った省略形 (ttp:// / ttps:// など) が常用される。
+    //   ttp:// / tp:// / p://      → http://  と解釈
+    //   ttps:// / tps:// / ps:// / s:// → https:// と解釈
+    //   ://                          → https:// と解釈
+    // 省略形 (truncated) は「直前が ASCII 英字でない」を negative lookbehind で要求する。
+    // これは 5ch の sssp:// (アイコン記法) や、ftp:// / nntp:// / news:// 等の別スキーム名に含まれる
+    // "p" / "tp" / "ttp" / "s" / "ps" 等の suffix を URL と誤判定するのを防ぐためで、
+    // ユーザが意図した省略 URL は通常 行頭 / 空白 / 句読点 等の直後に書かれるので実用上影響しない。
+    // フル形 (https?://) は既存挙動 (= 前置文字を問わず拾う) を維持。
+    const URL_OR_ANCHOR_RE =
+        /(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+
+    /** URL 省略形を正式な http(s):// 形に正規化して返す。既に http(s):// で始まっていればそのまま返す。
+     *  data-url / サムネ展開はこの正規化結果を使う (= リンク先解決を正しくする)。
+     *  ユーザに見える表示テキストは元の省略形を維持する (= 投稿者の表現を保つ)。
+     *  判定ルール:  "://" 直前の prefix が
+     *    - 末尾 's' 付き (ttps/tps/ps/s) → https://
+     *    - 空文字 ("://")               → https://
+     *    - それ以外 (ttp/tp/p)          → http:// */
+    function normalizeUrlScheme(matched) {
+        if (!matched) return matched;
+        if (/^https?:\/\//i.test(matched)) return matched;
+        const i = matched.indexOf('://');
+        if (i < 0) return matched;
+        const prefix = matched.slice(0, i);
+        const rest   = matched.slice(i); // '://...' 部分
+        if (prefix === '' || prefix.endsWith('s')) return 'https' + rest;
+        return 'http' + rest;
+    }
 
     // 5ch.io / 5ch.net / bbspink.com の <c>/test/read.cgi/&lt;dir&gt;/&lt;key&gt;(/&lt;postSpec&gt;)?</c> URL を検出。
     // postSpec は \d+ または \d+-\d+ (範囲)。指定が無いときは postNo=0 を返す (= 「1 レス目を見せる」の合図)。
@@ -416,7 +445,9 @@
         while ((m = URL_OR_ANCHOR_RE.exec(line)) !== null) {
             if (m.index > pos) html += escapeHtml(line.slice(pos, m.index));
             if (m[1]) {
-                html += renderExternalLink(m[1], m[1]);
+                // 省略形 (ttp:// / s:// 等) の場合は data-url 側だけ正規化して、表示は元のまま残す。
+                const normalized = normalizeUrlScheme(m[1]);
+                html += renderExternalLink(normalized, m[1]);
             } else {
                 const from = parseInt(m[3], 10);
                 const to = m[4] ? parseInt(m[4], 10) : from;
@@ -1351,14 +1382,16 @@
 
     // ---------- リッチスクロールバー ----------
     /** 本文中に「インライン画像化される URL」(直リンク / 同期展開 / 非同期展開 すべて含む) が 1 つでもあるか。 */
-    // URL_OR_ANCHOR_RE と同じ char-class (linkify と media 検出を一致させるため)。
-    const BODY_URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+/gi;
+    // URL_OR_ANCHOR_RE と同じ prefix セット (linkify と media 検出を一致させるため、省略形にも追従)。
+    // 省略形は negative lookbehind で「直前が英字でない」を要求する (sssp:// / ftp:// 等の誤検出回避)。
+    const BODY_URL_RE =
+        /https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+/gi;
     function bodyContainsImage(body) {
         if (!body) return false;
         BODY_URL_RE.lastIndex = 0;
         let m;
         while ((m = BODY_URL_RE.exec(body)) !== null) {
-            const u = m[0];
+            const u = normalizeUrlScheme(m[0]);
             if (getInlineImageSrc(u)) return true;
             if (isExpandableAsync(u)) return true;
         }
@@ -1371,7 +1404,7 @@
         BODY_URL_RE.lastIndex = 0;
         let m;
         while ((m = BODY_URL_RE.exec(body)) !== null) {
-            const u = m[0];
+            const u = normalizeUrlScheme(m[0]);
             if (isVideoUrl(u)) return true;
             if (extractYouTubeId(u)) return true;
         }
@@ -1399,7 +1432,9 @@
         for (const post of allPosts) {
             const refs     = reverseIdx.get(post.number);
             const popular  = refs && refs.length >= POPULAR_THRESHOLD;
-            const hasUrl   = /https?:\/\/\S/.test(post.body || '');
+            // 省略形 (ttp:// 等) もスクロールバーの URL マーカに反映するため、prefix セットを揃える。
+            // 省略形は直前が英字でないことを要求 (sssp:// 等の別スキーム名の suffix を誤判定しない)。
+            const hasUrl   = /https?:\/\/\S|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/\S/.test(post.body || '');
             const hasImage = bodyContainsImage(post.body);
             const hasVideo = bodyContainsVideo(post.body);
             if (!popular && !hasUrl && !hasImage && !hasVideo) continue;
