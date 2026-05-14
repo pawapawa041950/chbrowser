@@ -1051,6 +1051,8 @@
         const root = document.getElementById('posts');
         if (!root) return;
 
+        // DOM を作り直すと開いているポップアップの anchor が detached になるので先に全閉じ。
+        closeFrom(0);
         root.innerHTML = '';
         currentReverseIndex = new Map();
 
@@ -1298,9 +1300,11 @@
     /** scopeRoot 内の .watchoi-link / .id-link にハンドラを取付ける。
      *  モード切替 (META_POPUP_CLICK_ONLY) はハンドラ内で flag を見て分岐するため、
      *  再描画なしの runtime トグルにも対応できる。
-     *  - hover モード (= flag false): mouseenter/mouseleave で従来のポップアップ
-     *  - click モード (= flag true):  クリックで openMetaListPopupClickMode を起動
-     */
+     *  - hover モード (= flag false): mouseenter で開く
+     *  - click モード (= flag true):  click で開く
+     *  どちらのモードでも開いた後の挙動は共通 (= 同じ popups[] チェーンに level で積まれ、
+     *  マウスがポップアップ外へ出たら mouseleave / mousemove セーフティネットで閉じる)。
+     *  click モードでも「外側クリックで閉じる」は持たない (= hover ポップアップと閉じ方を統一)。 */
     function attachMetaHoverHandlers(scopeRoot, level) {
         scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]').forEach(function (el) {
             el.addEventListener('mouseenter', function () {
@@ -1316,7 +1320,8 @@
                 if (!META_POPUP_CLICK_ONLY) return;
                 ev.preventDefault();
                 ev.stopPropagation();
-                openMetaListPopupClickMode(el, el.dataset.watchoiList);
+                cancelCloseAt(level);
+                openMetaListPopup(el, el.dataset.watchoiList, level);
             });
         });
         scopeRoot.querySelectorAll('.id-link[data-id-list]').forEach(function (el) {
@@ -1333,57 +1338,21 @@
                 if (!META_POPUP_CLICK_ONLY) return;
                 ev.preventDefault();
                 ev.stopPropagation();
-                openMetaListPopupClickMode(el, el.dataset.idList);
+                cancelCloseAt(level);
+                openMetaListPopup(el, el.dataset.idList, level);
             });
         });
     }
 
-    /** click モード用の ID/ワッチョイポップアップ。
-     *  hover モードの popups[] チェーンは使わず単独管理 (= 一度に 1 つだけ表示)。
-     *  外側クリック or 同じリンクの再クリックで閉じる。
-     *  デフォルトは config (MetaPopupClickOnly) の値で、setConfig で動的に切替可。 */
+    /** ワッチョイ/ID ポップアップを「クリックで開く」か「ホバーで開く」かのモード。
+     *  デフォルトは config (MetaPopupClickOnly) の値で、setConfig で動的に切替可。
+     *  どちらのモードでも、開いた後の閉じ方は hover チェーン (popups[]) と完全に共通
+     *  (= マウスがポップアップ外に出たら mouseleave / mousemove セーフティネットで閉じる)。 */
     let META_POPUP_CLICK_ONLY = true;
-    let _activeClickMetaPopup = null;
-    let _clickMetaPopupOutsideHandler = null;
-    function openMetaListPopupClickMode(target, listStr) {
-        closeClickMetaPopup();
-        const list = (listStr || '').split(',')
-            .map(function (s) { return parseInt(s, 10); })
-            .filter(function (n) { return !isNaN(n); });
-        if (list.length === 0) return;
-        const el = document.createElement('div');
-        el.className = 'anchor-popup meta-popup-click';
-        el.appendChild(buildPopupContentFromList(list));
-        document.body.appendChild(el);
-        positionPopup(el, target);
-        // ネスト先 (popup 内の watchoi/id/anchor) にも同じ flag ベースのハンドラを attach。
-        // 再帰的に click モードで動く (= ネストもクリックで開く)。
-        attachAnchorHandlers(el, 1);
-        attachMetaHoverHandlers(el, 1);
-        _activeClickMetaPopup = el;
-        // 外側クリックで閉じる。setTimeout で次の tick に登録 (= 起動時のクリックを拾わない)。
-        _clickMetaPopupOutsideHandler = function (ev) {
-            if (el.contains(ev.target)) return;     // ポップアップ内部は維持
-            if (target.contains(ev.target)) return; // 起動元リンク自身は別ハンドラ (toggle 相当) で処理
-            closeClickMetaPopup();
-        };
-        setTimeout(function () {
-            document.addEventListener('click', _clickMetaPopupOutsideHandler);
-        }, 0);
-    }
-    function closeClickMetaPopup() {
-        if (_activeClickMetaPopup) {
-            try { _activeClickMetaPopup.remove(); } catch (_) {}
-            _activeClickMetaPopup = null;
-        }
-        if (_clickMetaPopupOutsideHandler) {
-            document.removeEventListener('click', _clickMetaPopupOutsideHandler);
-            _clickMetaPopupOutsideHandler = null;
-        }
-    }
 
-    /** ID / ワッチョイホバー用ポップアップ。data-*-list の "3,7,12" を読んでレスを並べるだけ。
-     *  既存 buildPopupContentFromList を再利用する (= anchor/返信ホバーと見た目が揃う)。 */
+    /** ID / ワッチョイポップアップ。data-*-list の "3,7,12" を読んでレスを並べるだけ。
+     *  既存 buildPopupContentFromList を再利用する (= anchor/返信ホバーと見た目が揃う)。
+     *  click モード・hover モードの両方からこの関数で開く (= popups[] チェーンに level で積む)。 */
     function openMetaListPopup(target, listStr, level) {
         closeFrom(level);
         const list = (listStr || '').split(',')
@@ -3073,6 +3042,8 @@
         el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
         el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         attachAnchorHandlers(el, level + 1);
+        // popup 内クローンの watchoi/ID リンクにもハンドラを付ける (= ネストでも meta popup を出せる)。
+        attachMetaHoverHandlers(el, level + 1);
         popups.push({ el: el, anchor: anchor, level: level });
     }
 
@@ -3096,6 +3067,8 @@
         el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
         el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         attachAnchorHandlers(el, level + 1);
+        // popup 内クローンの watchoi/ID リンクにもハンドラを付ける (= ネストでも meta popup を出せる)。
+        attachMetaHoverHandlers(el, level + 1);
         popups.push({ el: el, anchor: anchor, level: level });
     }
 
@@ -3184,6 +3157,8 @@
         el.addEventListener('mouseenter', function () { cancelCloseAtOrBelow(level); });
         el.addEventListener('mouseleave', function () { scheduleCloseAt(level); });
         attachAnchorHandlers(el, level + 1);
+        // スレプレビュー本文内の watchoi/ID リンクにもハンドラを付ける。
+        attachMetaHoverHandlers(el, level + 1);
         popups.push({ el: el, anchor: anchor, level: level });
     }
 
@@ -3279,35 +3254,38 @@
         return false;
     }
 
-    /** ポップアップが消え残るバグ回避用のグローバル mousemove セーフティネット。
+    /** ポップアップの開閉を一元管理するグローバル mousemove セーフティネット。
      *
-     *  典型的な漏れ: 深いポップアップ N からカーソルが直線的に外側へ抜けると、
-     *    - mouseleave は popup N でしか発火せず、popup 0..N-1 は閉じ予約が入らない
-     *    - その結果、popup N は 250ms 後に消えるが上位は残り続ける
-     *  これは mouseenter 時に cancelCloseAtOrBelow(level) で上位の close timer が
-     *  毎回キャンセルされるのが原因 (= 中間 popup には自身の close 予約がそもそも残らない)。
+     *  個々の popup の mouseenter/mouseleave だけでは漏れるケースが 2 つある:
+     *   (A) 深いポップアップ N から外側へ直線的に抜けると、mouseleave は popup N でしか
+     *       発火せず、popup 0..N-1 に閉じ予約が入らない (= 上位が残り続ける)。
+     *   (B) 子ポップアップ → 親ポップアップへ戻ると、戻る途中で子のアンカー (= 親内のリンク)
+     *       を横切った瞬間に cancelCloseAtOrBelow が子の閉じ予約をキャンセルしてしまい、
+     *       その後は誰も子の close を予約しない (= 子が残り続ける)。
      *
-     *  対策: mousemove で常時カーソル位置を見て、開いているポップアップ (および
-     *  そのアンカー) のいずれにも乗っていなければ level 0 から閉じるよう予約する。
-     *  既に level 0 の timer が走っているなら触らない (= 周期的に reset して
-     *  「永遠に消えない」状態にしないため)。
+     *  対策: mousemove で常時カーソル位置を見て「カーソルが乗っている最深レベル i」を求め、
+     *    - level <= i は close をキャンセル (= キープ)
+     *    - level >  i は close を予約 (= カーソルより深いポップアップは閉じる)
+     *  これで (A)(B) どちらも「カーソルがそのポップアップの外に出たら閉じる」に収束する。
+     *  既に予約済みの level は触らない (= 周期 reset で「永遠に消えない」状態を避ける)。
      *
      *  passive: true で hot path を維持。短時間に大量に飛んでくるが、
      *  popups.length === 0 で即 return するので通常時はほぼノーコスト。 */
     document.addEventListener('mousemove', function (e) {
         if (popups.length === 0) return;
         var x = e.clientX, y = e.clientY;
-        // 深い方から見て「ポップアップ or そのアンカー」にカーソルが乗っているレベルを探す。
-        // 見つかったら、その level 以下の close は全部キャンセル (= キープ)。
+        // 深い方から見て「ポップアップ or そのアンカー」にカーソルが乗っている最深レベルを探す。
+        // 見つからなければ depth = -1 (= どのポップアップにも乗っていない)。
+        var depth = -1;
         for (var i = popups.length - 1; i >= 0; i--) {
             var p = popups[i];
-            if (isPointInsideAnyRect(x, y, [p.el, p.anchor])) {
-                cancelCloseAtOrBelow(i);
-                return;
-            }
+            if (isPointInsideAnyRect(x, y, [p.el, p.anchor])) { depth = i; break; }
         }
-        // どのポップアップにも乗っていない → level 0 の close 予約が無いなら入れる。
-        if (!closeTimers.has(0)) scheduleCloseAt(0);
+        // depth 以下はキープ、depth より深いものは閉じ予約。
+        cancelCloseAtOrBelow(depth); // depth = -1 のときは何もキャンセルしない
+        for (var j = depth + 1; j < popups.length; j++) {
+            if (!closeTimers.has(j)) scheduleCloseAt(j);
+        }
     }, { passive: true });
 
     /** 既存レス DOM の返信数バッジ + post-no の色クラスを差分更新する (flat モード appendPosts 用)。
@@ -3704,6 +3682,9 @@
         // body に preview class を付ける (= CSS で richScrollbar / 右 padding を消す目印)
         document.body.classList.add('preview-mode');
 
+        // 描画を作り直すので、開いているポップアップは先に全閉じ (stale anchor 残り防止)。
+        closeFrom(0);
+
         // 内部状態を全クリア (allPosts / scrollTarget / mark / 逆引き indexes)
         allPosts                = [];
         postsByNumber           = new Map();
@@ -3784,8 +3765,8 @@
                     }
                     if (typeof msg.metaPopupClickOnly === 'boolean') {
                         META_POPUP_CLICK_ONLY = msg.metaPopupClickOnly;
-                        // モード切替で開いている click モードの popup は閉じる (= 二重表示を避ける)。
-                        if (!META_POPUP_CLICK_ONLY) closeClickMetaPopup();
+                        // モード切替時は開いているポップアップを一旦全閉じ (= 旧モードで開いた残りを片付ける)。
+                        closeFrom(0);
                     }
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();
