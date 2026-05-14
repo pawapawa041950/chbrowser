@@ -2746,6 +2746,59 @@
         document.addEventListener('mouseup',   onUp);
     });
 
+    // ---- サムネ D&D 直後の click 抑止 ----
+    // <img> は HTML5 ネイティブで draggable=true なので、サムネを外部アプリへドラッグできる。
+    // 通常ブラウザは「ドラッグ完了後の click は出さない」が、ドラッグ距離が極小だったり
+    // ドラッグキャンセル系のケースで稀に click が漏れ、ビューアが意図せず開く事象があった。
+    // 抑止ロジックは 2 系統:
+    //   (a) dragstart が飛んだら、続く click を 1 回だけ捨てる (= ネイティブ HTML5 D&D 経路)
+    //   (b) mousedown → mouseup の距離が閾値以上なら、続く click を 1 回だけ捨てる
+    //       (= dragstart が飛ばないが指/マウスが動いたケース。WebView2 では D&D 検出前に
+    //        mouseup が来てネイティブドラッグが成立しないことがある)
+    // capture-phase で stopImmediatePropagation するため、line 2766+ の slot 用 click
+    // ハンドラには到達しない (= viewer は開かない)。
+    let pendingDragSuppress = false;
+    let pendingDragSuppressTimerId = 0;
+    let mouseDownPos = null; // {x, y, onSlot} — mousedown 位置とスロット起点フラグ。mouseup で距離判定に使う。
+    const DRAG_DIST_THRESHOLD = 5; // px — これ以上動いていたら drag 扱いで click 抑止
+
+    document.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        const slot = e.target.closest && e.target.closest('.image-slot');
+        mouseDownPos = { x: e.clientX, y: e.clientY, onSlot: !!slot };
+    }, true);
+
+    document.addEventListener('dragstart', function (e) {
+        const slot = e.target.closest && e.target.closest('.image-slot');
+        if (!slot) return;
+        pendingDragSuppress = true;
+        clearTimeout(pendingDragSuppressTimerId);
+        // dragend が来ない異常系の救済として、1500ms で自動失効。
+        pendingDragSuppressTimerId = setTimeout(function () { pendingDragSuppress = false; }, 1500);
+    }, true);
+
+    document.addEventListener('mouseup', function (e) {
+        if (e.button !== 0) return;
+        const md = mouseDownPos;
+        mouseDownPos = null;
+        if (!md || !md.onSlot) return;
+        const dx = e.clientX - md.x;
+        const dy = e.clientY - md.y;
+        if ((dx * dx + dy * dy) < (DRAG_DIST_THRESHOLD * DRAG_DIST_THRESHOLD)) return;
+        pendingDragSuppress = true;
+        clearTimeout(pendingDragSuppressTimerId);
+        // mouseup 直後の click 用なので寿命は短く。
+        pendingDragSuppressTimerId = setTimeout(function () { pendingDragSuppress = false; }, 500);
+    }, true);
+
+    document.addEventListener('click', function (e) {
+        if (!pendingDragSuppress) return;
+        pendingDragSuppress = false;
+        clearTimeout(pendingDragSuppressTimerId);
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
+
     document.addEventListener('click', function (e) {
         // .post-no 左クリック → C# にコンテキストメニュー表示要求。anchor/URL ロジックより先に拾って早期 return。
         // 右クリックは別 listener (contextmenu) で同じ要求を出している (= どちらでもメニューが出る)。
