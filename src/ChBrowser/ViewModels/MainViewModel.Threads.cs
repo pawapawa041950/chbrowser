@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using ChBrowser.Models;
 using ChBrowser.Services.Api;
+using ChBrowser.Services.Llm;
 using ChBrowser.Services.Storage;
 
 namespace ChBrowser.ViewModels;
@@ -365,7 +366,10 @@ public sealed partial class MainViewModel
     private readonly Dictionary<ThreadTabViewModel, ChBrowser.Views.AiChatWindow> _aiChatWindows = new();
 
     /// <summary>スレッドタブの「AI」ボタンから呼ばれる。LLM チャットウィンドウを開く
-    /// (既に開いていればアクティブ化)。</summary>
+    /// (既に開いていればアクティブ化)。
+    /// 会話開始時点の <see cref="ThreadTabViewModel.Posts"/> のスナップショットから <see cref="ThreadToolset"/>
+    /// を作り、AI には function calling 経由でレスを取りに来させる方式。dat 全量をプロンプトに乗せない
+    /// (= 100k トークン超のスレでも回せる)。</summary>
     public void OpenAiChat(ThreadTabViewModel tab)
     {
         if (_aiChatWindows.TryGetValue(tab, out var existing))
@@ -374,39 +378,77 @@ public sealed partial class MainViewModel
             return;
         }
 
-        var settings     = LlmSettings.FromConfig(CurrentConfig);
-        var systemPrompt  = BuildAiSystemPrompt(tab);
-        var vm            = new AiChatViewModel(_llmClient, settings, systemPrompt, tab.Title);
-        var window        = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
+        var settings    = LlmSettings.FromConfig(CurrentConfig);
+        var toolset     = new ThreadToolset(tab.Title ?? "", tab.Board.BoardName ?? tab.Board.DirectoryName, tab.Posts);
+        var systemPrompt = BuildAiSystemPrompt(toolset);
+        var vm          = new AiChatViewModel(_llmClient, settings, systemPrompt, tab.Title ?? "", toolset);
+        var window      = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
         _aiChatWindows[tab] = window;
         window.Closed += (_, _) => _aiChatWindows.Remove(tab);
         window.Show();
     }
 
-    /// <summary>システムプロンプトを組み立てる。ユーザ指定の固定文に、スレの全レス内容を「生」で挟み込む
-    /// (= markdown 変換等はせず、レス番号 + 名前 + ID + 日付 + 本文 をそのまま並べるだけ)。</summary>
-    private static string BuildAiSystemPrompt(ThreadTabViewModel tab)
-    {
-        var content = BuildThreadContentForLlm(tab);
-        return "あなたは5chネラーです。スレッド内容は\n" + content + "\nの通りです。スレに対する質問に回答してください。";
-    }
-
-    /// <summary>タブが現在保持している全レス (<see cref="ThreadTabViewModel.Posts"/>) を、LLM に渡す
-    /// プレーンテキストに整形する。1 レス = 「&gt;&gt;番号 名前 ID:xxx 日付」+ 改行 + 本文。</summary>
-    private static string BuildThreadContentForLlm(ThreadTabViewModel tab)
+    /// <summary>function calling + plan-revise 前提のシステムプロンプトを組み立てる。dat 本体は含めず、
+    /// 「スレのメタ情報 + 進め方の手順 + 使えるツール一覧」を渡す。実際のレス本文は LLM が
+    /// ツール経由で取りに来る。指示追従性を上げるため「最初に create_plan、各タスクを実行、
+    /// 完了したら complete_task、必要なら revise_plan、全部終わってから最終回答」という段取りを強制する。</summary>
+    private static string BuildAiSystemPrompt(ThreadToolset toolset)
     {
         var sb = new StringBuilder();
-        foreach (var p in tab.Posts)
-        {
-            sb.Append(">>").Append(p.Number);
-            if (!string.IsNullOrEmpty(p.Name))     sb.Append(' ').Append(p.Name);
-            if (!string.IsNullOrEmpty(p.Id))       sb.Append(" ID:").Append(p.Id);
-            if (!string.IsNullOrEmpty(p.DateText)) sb.Append(' ').Append(p.DateText);
-            sb.Append('\n');
-            sb.Append(p.Body ?? "");
-            sb.Append("\n\n");
-        }
-        return sb.ToString().TrimEnd();
+        sb.AppendLine("あなたは5chネラーです。ユーザは特定のスレッドについて質問してきます。");
+        sb.AppendLine("スレッドの内容はあらかじめ全部渡されてはいません。提供されているツール (function calling) を使い、必要な部分を取得しながら回答してください。");
+        sb.AppendLine();
+        sb.AppendLine("【対象スレッド】");
+        sb.Append("- タイトル: ").AppendLine(toolset.ThreadTitle);
+        if (!string.IsNullOrEmpty(toolset.BoardName))
+            sb.Append("- 板: ").AppendLine(toolset.BoardName);
+        sb.Append("- 現在のレス数: ").Append(toolset.PostCount).AppendLine(" 件");
+        sb.AppendLine();
+        sb.AppendLine("【作業の進め方 (必ず守ること)】");
+        sb.AppendLine("1. まず最初に `create_plan` を呼び、ユーザの依頼を達成するためのタスク列を宣言する。");
+        sb.AppendLine("   - タスク id は \"t1\", \"t2\", ... のような短い文字列にする。");
+        sb.AppendLine("   - 各 description は「何を取得して何を確認するか」が読んで分かるように書く。");
+        sb.AppendLine("   - 単純な質問なら 1 タスクでよい。複雑な依頼ほど細かく分割する。");
+        sb.AppendLine("2. plan のタスクを 1 つずつ実行する。スレッド読み取りはスレッド読み取りツール群を使う。");
+        sb.AppendLine("3. 1 タスク終わるごとに必ず `complete_task` を呼び、finding にこのタスクで得た知見を 1〜3 文で残す。");
+        sb.AppendLine("4. 途中で当初の plan が不適切だと判明したら遠慮なく `revise_plan` で plan を書き直す。");
+        sb.AppendLine("   想定外の発見 / 余計な調査が要らないと分かった / 順序を変えたい / 抜けがあった、いずれも書き直して OK。");
+        sb.AppendLine("5. すべてのタスクが完了したら、findings を統合してユーザへの最終回答をテキストで出力する。最終回答は markdown OK。");
+        sb.AppendLine("   - 最終回答だけ出してツールを呼ばないラウンド = エージェントループ終了の合図。");
+        sb.AppendLine();
+        sb.AppendLine("【plan / task 用ツール】");
+        sb.AppendLine("- create_plan(tasks) : 計画を宣言 (最初に必ず呼ぶ)");
+        sb.AppendLine("- complete_task(id, finding) : 1 タスクを完了 + 知見メモを残す");
+        sb.AppendLine("- revise_plan(tasks) : 計画を書き直す (= 既存 id は status/finding を引き継ぐ)");
+        sb.AppendLine();
+        sb.AppendLine("【過去内容の参照ツール】");
+        sb.AppendLine("セッション内の出来事 (= 過去のユーザ発言 / アシスタント本文 / 思考過程 / ツール結果) は");
+        sb.AppendLine("コンテキスト節約のためプロンプトから省略されていることがある。必要なら以下で引き戻せる。");
+        sb.AppendLine("- list_archive(filter?) : 目録を取得。kind / task_id / keyword / tool_name / limit で絞り込める。");
+        sb.AppendLine("- recall_archive(id) : 指定 id の原文を完全に取り出す。長文を再展開するのでコンテキストを食う、必要最小限に使う。");
+        sb.AppendLine("プレースホルダ ( {\"omitted\":true,...,\"archive_id\":\"aN\"} ) を見たら、その archive_id を recall_archive に渡せば原文が戻る。");
+        sb.AppendLine();
+        sb.AppendLine("【セッション状態の自動注入】");
+        sb.AppendLine("毎ラウンド先頭に「[セッション状態スナップショット]」という system メッセージが自動的に挿入される。");
+        sb.AppendLine("その中身は (a) 現在の計画と各タスクの finding、(b) 参照可能な archive エントリ目録 (= 新しい順、上位 30 件の brief)。");
+        sb.AppendLine("これを見れば「自分が何をしてきたか」「どの id で何が引けるか」が常に把握できる。");
+        sb.AppendLine("つまり list_archive を能動的に呼ばなくても、いつでも recall_archive(id=\"aN\") で原文を引き戻せる状態になっている。");
+        sb.AppendLine();
+        sb.AppendLine("【スレッド読み取りツール】");
+        sb.AppendLine("- get_thread_meta : >>1 の全文と総レス数を取得");
+        sb.AppendLine("- get_posts(start, end) : 範囲指定でレスを取得 (1 度に最大 50 件、両端含む)");
+        sb.AppendLine("- search_posts(keyword, limit?) : キーワード検索でヒットしたレス番号と抜粋");
+        sb.AppendLine("- get_post(number) : 単一レスの全文");
+        sb.AppendLine("- get_posts_by_id(id) : 特定 ID の全レス");
+        sb.AppendLine();
+        sb.AppendLine("【方針】");
+        sb.AppendLine("- レス番号を引用するときは「>>N」の形式で書くこと。");
+        sb.AppendLine("- 推測ではなくスレ内の実際の発言を根拠に回答すること。スレに無いことは「スレ内には書かれていない」と答える。");
+        sb.AppendLine("- 大量のレスを読む必要があるときは get_posts を分割して呼ぶこと (=「読んだフリ」をしない)。");
+        sb.AppendLine("- **最終回答は必ず <think>...</think> の外側で本文を出力すること。<think> ブロックだけで応答を終わらせない**");
+        sb.AppendLine("  (= 思考過程は <think> 内、ユーザ向けの結論はその外、という分離を守る)。");
+        sb.AppendLine("- 思考時間が長くなりすぎないように。要点が見えたら think を閉じてユーザ向けの本文に移ること。");
+        return sb.ToString();
     }
 
     private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
