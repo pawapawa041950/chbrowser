@@ -224,15 +224,52 @@
   var messages = document.getElementById("messages");
   var current = null; // ストリーミング中のアシスタントバブルの .body 要素
 
+  // ---- autoscroll: 末尾に張り付くが、ユーザが上にスクロールしたら追従停止する ----
+  // ユーザが末尾近く (= 残り AT_BOTTOM_PX 内) に居る間は autoScrollEnabled=true、
+  // 上にスクロールしたら false にして以降の自動末尾移動を抑制する。
+  // 末尾に戻ってきたら再度 true に復帰し、自動追従が再開する。
+  var AT_BOTTOM_PX = 30;
+  var autoScrollEnabled = true;
+
+  function isNearBottom() {
+    return (window.scrollY + window.innerHeight) >= (document.body.scrollHeight - AT_BOTTOM_PX);
+  }
+
+  // scroll イベント: 位置を読んで autoScrollEnabled を再判定する。
+  // scrollToBottom 呼出直後にも発火するが、その時は末尾近くなので true のまま (= 問題ない)。
+  window.addEventListener("scroll", function () {
+    autoScrollEnabled = isNearBottom();
+  }, { passive: true });
+
+  function scrollToBottom() {
+    // ユーザが上にいる場合は触らない (= 読書中の位置を尊重)。
+    if (!autoScrollEnabled) return;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  // ---- details (= 思考過程 / agent work 折りたたみ) の open 状態を更新越しに保持する ----
+  // 出現順 (DOM 順) で open フラグの配列を保存しておき、innerHTML 置換後に同じ index の
+  // details へ復元する。ストリーミングは追加方向が中心なので「ユーザが開いた details」と
+  // 「更新後の同位置 details」は概ね対応する (= 完全一致ではないがユーザの開閉意図は維持される)。
+  function captureDetailsOpenStates(root) {
+    var states = [];
+    if (!root) return states;
+    var list = root.querySelectorAll("details");
+    for (var i = 0; i < list.length; i++) states.push(list[i].open);
+    return states;
+  }
+
+  function restoreDetailsOpenStates(root, states) {
+    if (!root || !states || states.length === 0) return;
+    var list = root.querySelectorAll("details");
+    var n = Math.min(list.length, states.length);
+    for (var i = 0; i < n; i++) list[i].open = states[i];
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
-
-  function scrollToBottom() {
-    // 末尾が常に見えるように。ストリーミング中は連続で呼ばれる。
-    window.scrollTo(0, document.body.scrollHeight);
   }
 
   function makeBubble(kind, roleLabel) {
@@ -252,7 +289,9 @@
   function addUser(text) {
     var b = makeBubble("user", "あなた");
     b.body.textContent = text; // プレーンテキスト (CSS の pre-wrap で改行保持)
-    scrollToBottom();
+    // ユーザ送信直後は autoscroll を強制再開 (= 新しい応答の頭は必ず見せる)。
+    autoScrollEnabled = true;
+    window.scrollTo(0, document.body.scrollHeight);
   }
 
   function startAssistant() {
@@ -263,7 +302,10 @@
 
   function updateAssistant(html) {
     if (!current) startAssistant();
+    // ユーザが手動で開閉した details の open 状態を救出 → 上書き後に同位置 details へ復元。
+    var savedStates = captureDetailsOpenStates(current);
     current.innerHTML = html; // Markdig 生成済み HTML (C# 側で raw HTML は無効化済み)
+    restoreDetailsOpenStates(current, savedStates);
     scrollToBottom();
   }
 

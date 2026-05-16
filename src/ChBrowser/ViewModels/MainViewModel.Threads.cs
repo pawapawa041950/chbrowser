@@ -8,6 +8,7 @@ using ChBrowser.Models;
 using ChBrowser.Services.Api;
 using ChBrowser.Services.Llm;
 using ChBrowser.Services.Storage;
+using ChBrowser.Services.Url;
 using CommunityToolkit.Mvvm.Input;
 
 namespace ChBrowser.ViewModels;
@@ -363,119 +364,359 @@ public sealed partial class MainViewModel
     // システムプロンプトに「そのスレの全レス内容」を埋め込んだ状態で LLM と会話する。
     // 同じスレで再度ボタンを押した場合は既存ウィンドウをアクティブ化する (= 会話履歴を失わない)。
 
-    /// <summary>スレタブ → AI チャットウィンドウ の対応表。再オープン時の重複防止 + タブ閉じ時の後片付け用。</summary>
-    private readonly Dictionary<ThreadTabViewModel, ChBrowser.Views.AiChatWindow> _aiChatWindows = new();
-
-    /// <summary>スレッドにアタッチしない (= 全タブ共有の) スタンドアロン AI チャットウィンドウ。シングルトン。</summary>
-    private ChBrowser.Views.AiChatWindow? _standaloneAiChatWindow;
+    /// <summary>AI チャットウィンドウはアプリ全体で 1 つだけ持つシングルトン。
+    /// attached スレは <see cref="SelectedThreadTab"/> に追従して動的に切り替わる
+    /// (= スレタブ閉じてもウィンドウは残り、別タブに切り替わると中身が差し替わる)。
+    /// null のときは「閉じている」状態、non-null のときは「開いている」状態。</summary>
+    private ChBrowser.Views.AiChatWindow? _aiChatWindow;
+    private AiChatViewModel?              _aiChatViewModel;
 
     /// <summary>アドレスバーの「AI」ボタンから呼ばれるコマンド。
-    /// 現在選択中のスレッドタブがあればそのスレを文脈に、無ければスレッド非依存の AI チャットを開く。</summary>
+    /// 現在選択中のスレッドタブがあればそのスレを文脈に、無ければスレッド非アタッチの AI チャットを開く。
+    /// 既に開いていれば現在の <see cref="SelectedThreadTab"/> に合わせて中身を切り替えてアクティブ化する。</summary>
     [RelayCommand]
     private void OpenAiChatFromTopBar()
         => OpenAiChat(SelectedThreadTab);
 
-    /// <summary>AI チャットウィンドウを開く。
-    /// <paramref name="tab"/> が non-null ならそのスレッド内容を ThreadToolset 経由で AI が読みに来る、
-    /// null ならスレッド非依存のチャット (= thread 系ツールは提示されない)。
-    /// 既に開いている対応ウィンドウがあればアクティブ化する。
+    /// <summary>AI チャットウィンドウを開く (= まだ無ければ生成、既にあれば <paramref name="tab"/> に合わせて context 切替)。
+    /// 会話履歴は AiChatViewModel 内で維持され、ウィンドウを閉じない限りタブ切替や全タブ閉じで失われない。
     /// 会話開始時点の <see cref="ThreadTabViewModel.Posts"/> のスナップショットから <see cref="ThreadToolset"/>
     /// を作り、AI には function calling 経由でレスを取りに来させる方式。dat 全量をプロンプトに乗せない
     /// (= 100k トークン超のスレでも回せる)。</summary>
     public void OpenAiChat(ThreadTabViewModel? tab)
     {
+        if (_aiChatWindow is not null && _aiChatViewModel is not null)
+        {
+            // 既に開いている: SelectedThreadTab の context に合わせて中身を差し替え + activate。
+            SwitchAiChatContextTo(tab);
+            try { _aiChatWindow.Activate(); } catch { /* 閉じる途中等は無視 */ }
+            return;
+        }
+
+        var settings = LlmSettings.FromConfig(CurrentConfig);
+        var toolset      = BuildToolsetForTab(tab);
+        var systemPrompt = BuildAiSystemPrompt(toolset);
+        var title        = ResolveAiChatTitle(tab);
+        var vm           = new AiChatViewModel(_llmClient, settings, systemPrompt, title, toolset);
+        var window       = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
+        _aiChatWindow    = window;
+        _aiChatViewModel = vm;
+        window.Closed += (_, _) =>
+        {
+            _aiChatWindow    = null;
+            _aiChatViewModel = null;
+        };
+        window.Show();
+    }
+
+    /// <summary>AI チャットウィンドウが開いている状態で <see cref="SelectedThreadTab"/> が変わったときの context 差替。
+    /// SelectedThreadTab の partial method (= <c>OnSelectedThreadTabChanged</c>) と、attached スレタブが
+    /// 閉じられた瞬間 (= <c>OnThreadTabsCollectionChanged</c>) の両方から呼ばれる。
+    /// ウィンドウが閉じていれば no-op。</summary>
+    private void SwitchAiChatContextTo(ThreadTabViewModel? tab)
+    {
+        if (_aiChatViewModel is null) return;
+        var toolset      = BuildToolsetForTab(tab);
+        var systemPrompt = BuildAiSystemPrompt(toolset);
+        var title        = ResolveAiChatTitle(tab);
+        _aiChatViewModel.SwitchContext(toolset, systemPrompt, title);
+    }
+
+    /// <summary>tab non-null なら attached モード、null なら非アタッチモードの ThreadToolset を構築する。
+    /// 永続化された既読位置 (idx.json) と VM 上の動的状態 (Mark / Own / HasReplyToOwn) も注入。</summary>
+    private ThreadToolset BuildToolsetForTab(ThreadTabViewModel? tab)
+    {
+        var (openThread, openBoard, openThreadList) = BuildOpenInAppCallbacks();
+        var dataLoader = BuildThreadDataLoader();
         if (tab is null)
         {
-            OpenStandaloneAiChat();
-            return;
+            return new ThreadToolset(
+                dataLoader:               dataLoader,
+                openThreadInAppAsync:     openThread,
+                openBoardInAppAsync:      openBoard,
+                openThreadListInAppAsync: openThreadList);
         }
-
-        if (_aiChatWindows.TryGetValue(tab, out var existing))
-        {
-            try { existing.Activate(); } catch { /* 閉じる途中等は無視 */ }
-            return;
-        }
-
-        var settings    = LlmSettings.FromConfig(CurrentConfig);
-        // 永続化された既読位置を idx.json から拾う (= get_thread_state で LLM に渡すため)。
-        // MarkPostNumber / OwnPostNumbers / HasReplyToOwn は VM 上の動的状態をそのままスナップショット化。
-        var savedIdx     = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
-        var toolset      = new ThreadToolset(
-            tab.Title ?? "",
-            tab.Board.BoardName ?? tab.Board.DirectoryName,
-            tab.Posts,
-            lastReadPostNumber: savedIdx?.LastReadPostNumber,
-            markPostNumber:     tab.MarkPostNumber,
-            ownPostNumbers:     tab.OwnPostNumbers,
-            hasReplyToOwn:      tab.HasReplyToOwn);
-        var systemPrompt = BuildAiSystemPrompt(toolset);
-        var vm          = new AiChatViewModel(_llmClient, settings, systemPrompt, tab.Title ?? "", toolset);
-        var window      = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
-        _aiChatWindows[tab] = window;
-        window.Closed += (_, _) => _aiChatWindows.Remove(tab);
-        window.Show();
+        var savedIdx = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
+        return new ThreadToolset(
+            dataLoader:               dataLoader,
+            openThreadInAppAsync:     openThread,
+            openBoardInAppAsync:      openBoard,
+            openThreadListInAppAsync: openThreadList,
+            attachedBoard:            tab.Board,
+            attachedThreadKey:        tab.ThreadKey,
+            attachedTitle:            tab.Title,
+            attachedPosts:            tab.Posts,
+            attachedLastRead:         savedIdx?.LastReadPostNumber,
+            attachedMarkPostNumber:   tab.MarkPostNumber,
+            attachedOwnPostNumbers:   tab.OwnPostNumbers,
+            attachedHasReplyToOwn:    tab.HasReplyToOwn);
     }
 
-    /// <summary>スレッドに依存しないスタンドアロン AI チャットを開く (既に開いていればアクティブ化)。
-    /// thread 系ツールは提示しないため、AI は自分の知識と plan / archive ツールだけで応答する。</summary>
-    private void OpenStandaloneAiChat()
+    /// <summary>AI チャットウィンドウの「タイトル領域」用文字列。attached あれば そのスレタイ、無ければ汎用ラベル。</summary>
+    private static string ResolveAiChatTitle(ThreadTabViewModel? tab)
+        => string.IsNullOrEmpty(tab?.Title) ? "(スレッド指定なし)" : tab.Title!;
+
+    /// <summary>ThreadToolset 用の <see cref="ThreadDataLoader"/> を 1 つ構築する。
+    /// flat 板リストの provider はクロージャ経由で <see cref="BoardCategories"/> を常に最新の状態で読む。
+    /// LRU キャッシュはこのインスタンスに紐づくので、AI チャットウィンドウごとに独立した会話キャッシュになる。</summary>
+    private ThreadDataLoader BuildThreadDataLoader()
+        => new(
+            subject:            _subjectClient,
+            dat:                _datClient,
+            flatBoardsProvider: () => BoardCategories
+                .SelectMany(c => c.Boards.Select(bvm => bvm.Board))
+                .ToArray(),
+            resolveBoard:       ResolveBoard);
+
+    /// <summary>open_thread_in_app / open_board_in_app / open_thread_list_in_app から呼ばれる
+    /// UI アクション delegate を 3 つ作って返す。それぞれ既存の対応関数を叩く薄ラッパ。
+    /// 失敗時は AI 側に伝わるメッセージを文字列で返す (= 例外で UI を落とさない)。</summary>
+    private (
+        Func<string, Task<string>>                                               openThread,
+        Func<string, Task<string>>                                               openBoard,
+        Func<string, IReadOnlyList<AiSearchResultEntry>, Task<string>>           openThreadList)
+        BuildOpenInAppCallbacks()
     {
-        if (_standaloneAiChatWindow is not null)
+        Func<string, Task<string>> openThread = async url =>
         {
-            try { _standaloneAiChatWindow.Activate(); } catch { /* 閉じる途中等は無視 */ }
+            var t = AddressBarParser.Parse(url);
+            if (t.Kind != AddressBarTargetKind.Thread)
+                return $"thread_url の解釈に失敗: {url}";
+            try
+            {
+                await OpenThreadByUrlAsync(t.Host, t.Directory, t.ThreadKey).ConfigureAwait(true);
+                return $"スレッドをアプリで開きました: {url}";
+            }
+            catch (Exception ex)
+            {
+                return $"スレッドを開けませんでした: {ex.Message}";
+            }
+        };
+        Func<string, Task<string>> openBoard = async url =>
+        {
+            var t = AddressBarParser.Parse(url);
+            if (t.Kind != AddressBarTargetKind.Board)
+                return $"board_url の解釈に失敗: {url}";
+            try
+            {
+                await OpenBoardByUrlAsync(t.Host, t.Directory).ConfigureAwait(true);
+                return $"板をアプリで開きました: {url}";
+            }
+            catch (Exception ex)
+            {
+                return $"板を開けませんでした: {ex.Message}";
+            }
+        };
+        Func<string, IReadOnlyList<AiSearchResultEntry>, Task<string>> openThreadList = async (title, entries) =>
+        {
+            try
+            {
+                await OpenAiSearchResultsAsync(title, entries).ConfigureAwait(true);
+                return $"検索結果タブを開きました: \"{title}\" ({entries.Count} 件)";
+            }
+            catch (Exception ex)
+            {
+                return $"検索結果タブを開けませんでした: {ex.Message}";
+            }
+        };
+        return (openThread, openBoard, openThreadList);
+    }
+
+    /// <summary>AI からの「複数スレッドを 1 タブに並べて見せる」要求を受けて新規スレ一覧タブを作る。
+    /// 同 <paramref name="label"/> で 2 度呼ばれたら既存タブを再利用 (deterministic Guid)。
+    /// 各エントリの板を <see cref="ResolveBoard"/> で正規化し、板ごとにログ状態 (青/緑/茶) を計算して行に乗せる。</summary>
+    public async Task OpenAiSearchResultsAsync(string label, IReadOnlyList<AiSearchResultEntry> entries)
+    {
+        var log = ChBrowser.Services.Logging.LogService.Instance;
+        log.Write($"[OpenAiSearchResults] 開始: label=\"{label}\", entries={entries.Count}");
+
+        // 同じ検索ラベルなら同じタブを再利用 (deterministic Guid)。
+        var tabId  = ComputeAiSearchResultsTabId(label);
+        var tab    = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == tabId);
+        var reused = tab is not null;
+        if (tab is null)
+        {
+            tab = new ThreadListTabViewModel(tabId, $"🤖 {Truncate(label, 24)}", t => ThreadListTabs.Remove(t));
+            ThreadListTabs.Add(tab);
+        }
+        SelectedThreadListTab = tab;
+        log.Write($"[OpenAiSearchResults]   タブ {(reused ? "再利用" : "新規作成")}: tabId={tabId}, ThreadListTabs.Count={ThreadListTabs.Count}");
+
+        if (tab.IsBusy)
+        {
+            log.Write("[OpenAiSearchResults] tab.IsBusy=true のため処理スキップ");
             return;
         }
 
-        var settings     = LlmSettings.FromConfig(CurrentConfig);
-        var systemPrompt = BuildStandaloneAiSystemPrompt();
-        var vm           = new AiChatViewModel(_llmClient, settings, systemPrompt, "(スレッド指定なし)", threadToolset: null);
-        var window       = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
-        _standaloneAiChatWindow = window;
-        window.Closed += (_, _) => _standaloneAiChatWindow = null;
-        window.Show();
+        try
+        {
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"AI 検索結果を構築中... ({entries.Count} 件)";
+            // 全件構築前に UI に「タブ生成 + ステータス更新」を 1 フレーム見せる (= AI ツール連打中の応答性向上)。
+            await Task.Yield();
+
+            // 各エントリを (board, ThreadInfo) に分解。同じ板への問い合わせはまとめてキャッシュする。
+            var perBoardLogStates = new Dictionary<(string Host, string Dir), IReadOnlySet<string>>();
+            var allFavKeys        = Favorites.CollectFavoriteThreadKeys();
+
+            var items     = new List<ThreadListItem>(entries.Count);
+            var orderSeq  = 0;
+            var skipped   = 0;
+            foreach (var e in entries)
+            {
+                var bp = AddressBarParser.Parse(e.ThreadUrl);
+                if (bp.Kind != AddressBarTargetKind.Thread)
+                {
+                    log.Write($"[OpenAiSearchResults]   skip (URL parse失敗): {e.ThreadUrl}");
+                    skipped++;
+                    continue;
+                }
+
+                var board = ResolveBoard(bp.Host, bp.Directory, "");
+                var info  = new ThreadInfo(bp.ThreadKey, e.Title, e.PostCount, ++orderSeq);
+
+                var boardKey = (board.Host, board.DirectoryName);
+                if (!perBoardLogStates.TryGetValue(boardKey, out var keysWithLog))
+                {
+                    keysWithLog = _datClient.EnumerateExistingThreadKeys(board);
+                    perBoardLogStates[boardKey] = keysWithLog;
+                }
+
+                LogMarkState state;
+                if (!keysWithLog.Contains(info.Key))
+                {
+                    state = LogMarkState.None;
+                }
+                else
+                {
+                    var idx     = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
+                    var fetched = idx?.LastFetchedPostCount;
+                    var hasNew  = fetched is int f && info.PostCount > 0 && info.PostCount > f;
+                    state       = hasNew ? LogMarkState.Updated : LogMarkState.Cached;
+                }
+
+                var fav = allFavKeys.Contains((board.Host, board.DirectoryName, info.Key));
+                items.Add(new ThreadListItem(info, board.Host, board.DirectoryName, board.BoardName, state, fav));
+            }
+
+            log.Write($"[OpenAiSearchResults]   items 構築完了: items={items.Count}, skipped={skipped}, boards={perBoardLogStates.Count}");
+            tab.SetItems(items, DateTimeOffset.UtcNow);
+            tab.Header        = $"🤖 {Truncate(label, 24)} ({items.Count})";
+            tab.StatusMessage = $"AI 検索結果: {items.Count} 件 (\"{label}\")";
+            log.Write($"[OpenAiSearchResults] 完了: tab.Header=\"{tab.Header}\"");
+        }
+        catch (Exception ex)
+        {
+            log.Write($"[OpenAiSearchResults] 例外: {ex.GetType().Name}: {ex.Message}");
+            log.Write($"[OpenAiSearchResults] stacktrace: {ex.StackTrace}");
+            tab.StatusMessage = $"AI 検索結果タブの構築失敗: {ex.Message}";
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
     }
 
-    /// <summary>function calling + plan-revise 前提のシステムプロンプトを組み立てる。dat 本体は含めず、
-    /// 「スレのメタ情報 + 進め方の手順 + 使えるツール一覧」を渡す。実際のレス本文は LLM が
-    /// ツール経由で取りに来る。指示追従性を上げるため「最初に create_plan、各タスクを実行、
-    /// 完了したら complete_task、必要なら revise_plan、全部終わってから最終回答」という段取りを強制する。</summary>
+    /// <summary>AI 検索結果タブの deterministic Guid (= 同ラベルで再呼出時に同タブを再利用)。
+    /// <see cref="ComputeNextThreadTabId"/> と同じ仕掛けで「prefix:label」を SHA-1 した上位 16 バイトから Guid を作る。</summary>
+    private static Guid ComputeAiSearchResultsTabId(string label)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes("aisearch:" + label);
+        using var sha = System.Security.Cryptography.SHA1.Create();
+        var hash = sha.ComputeHash(bytes);
+        var guid = new byte[16];
+        Array.Copy(hash, guid, 16);
+        return new Guid(guid);
+    }
+
+    /// <summary>function calling + plan-revise + cross-thread access 前提のシステムプロンプトを組み立てる。
+    /// attached モード / スタンドアロンモードのどちらでも同じ関数で対応 (toolset.HasAttached で分岐)。
+    /// dat 本体は含めず、必要なレス本文は LLM がツール経由で取りに来る。指示追従性のため
+    /// 「create_plan → 各タスク実行 → complete_task → revise_plan (必要時) → 最終回答」の段取りを強制する。</summary>
     private static string BuildAiSystemPrompt(ThreadToolset toolset)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("あなたは5chネラーです。ユーザは特定のスレッドについて質問してきます。");
-        sb.AppendLine("スレッドの内容はあらかじめ全部渡されてはいません。提供されているツール (function calling) を使い、必要な部分を取得しながら回答してください。");
-        sb.AppendLine();
-        sb.AppendLine("【対象スレッド】");
-        sb.Append("- タイトル: ").AppendLine(toolset.ThreadTitle);
-        if (!string.IsNullOrEmpty(toolset.BoardName))
-            sb.Append("- 板: ").AppendLine(toolset.BoardName);
-        sb.AppendLine();
-        sb.AppendLine("【スレ現況スナップショット (会話開始時点・固定値)】");
-        sb.Append(toolset.BuildInitialStateSnapshot());
-        sb.AppendLine("※ この情報は get_thread_state を呼ばなくても既に読めている状態。");
-        sb.AppendLine("  スレが進んでいる可能性があると判断したときだけ get_thread_state で再取得すること。");
-        sb.AppendLine();
-        sb.AppendLine("【自分の書き込みとそれへの反応 (会話開始時点・固定値)】");
-        sb.Append(toolset.BuildOwnPostsWithRepliesSummary());
-        sb.AppendLine();
-        sb.AppendLine("※ 上記は会話開始時点のスナップショット。長すぎる返信本文や返信が多すぎる場合は省略されているので、");
-        sb.AppendLine("  追加が要るなら get_my_posts / find_replies_to で取得し直すこと。");
-        sb.AppendLine();
+        if (toolset.HasAttached)
+        {
+            sb.AppendLine("あなたは5chネラーです。ユーザは attached されたスレッドや、他のスレ / 板についても質問してくることがあります。");
+            sb.AppendLine("スレッドの内容はあらかじめ全部渡されてはいません。提供されているツール (function calling) を使い、必要な部分を取得しながら回答してください。");
+            sb.AppendLine();
+            sb.AppendLine("【attached スレッド】");
+            sb.Append("- タイトル: ").AppendLine(toolset.ThreadTitle);
+            if (!string.IsNullOrEmpty(toolset.BoardName))
+                sb.Append("- 板: ").AppendLine(toolset.BoardName);
+            sb.AppendLine();
+            sb.AppendLine("【スレ現況スナップショット (会話開始時点・固定値)】");
+            sb.Append(toolset.BuildInitialStateSnapshot());
+            sb.AppendLine("※ この情報は get_thread_state を呼ばなくても既に読めている状態。");
+            sb.AppendLine("  スレが進んでいる可能性があると判断したときだけ get_thread_state で再取得すること。");
+            sb.AppendLine();
+            var ownSummary = toolset.BuildOwnPostsWithRepliesSummary();
+            if (!string.IsNullOrEmpty(ownSummary))
+            {
+                sb.AppendLine("【自分の書き込みとそれへの反応 (会話開始時点・固定値)】");
+                sb.Append(ownSummary);
+                sb.AppendLine();
+                sb.AppendLine("※ 上記は会話開始時点のスナップショット。返信が省略されている場合は get_my_posts / find_replies_to で完全取得可。");
+                sb.AppendLine();
+            }
+        }
+        else
+        {
+            sb.AppendLine("あなたは5chネラーかつ AI アシスタントです。特定のスレッドにはアタッチされていませんが、");
+            sb.AppendLine("ワークスペース横断ツール (list_boards / list_threads / get_posts(thread_url=...) / open_*) を使えば");
+            sb.AppendLine("板一覧から目的のスレを探し当ててその内容を読み、必要ならアプリで開かせる、まで可能です。");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("【作業の進め方 (必ず守ること)】");
         sb.AppendLine("1. まず最初に `create_plan` を呼び、ユーザの依頼を達成するためのタスク列を宣言する。");
         sb.AppendLine("   - タスク id は \"t1\", \"t2\", ... のような短い文字列にする。");
         sb.AppendLine("   - 各 description は「何を取得して何を確認するか」が読んで分かるように書く。");
         sb.AppendLine("   - 単純な質問なら 1 タスクでよい。複雑な依頼ほど細かく分割する。");
-        sb.AppendLine("2. plan のタスクを 1 つずつ実行する。スレッド読み取りはスレッド読み取りツール群を使う。");
-        sb.AppendLine("3. 1 タスク終わるごとに必ず `complete_task` を呼び、finding にこのタスクで得た知見を 1〜3 文で残す。");
-        sb.AppendLine("4. 途中で当初の plan が不適切だと判明したら遠慮なく `revise_plan` で plan を書き直す。");
+        sb.AppendLine("2. **create_plan / revise_plan の直後に必ず `estimate_and_confirm` を呼んでコスト見積りをする** (= 必須ステップ、強制ガードあり)。");
+        sb.AppendLine("   - サーバが heavy 判定したら、その応答に含まれる confirmation_template を最終回答テキストとしてそのまま出力し、ユーザの返答を待つ (= ループ停止)。");
+        sb.AppendLine("   - サーバが light 判定したら、そのまま plan 実行に進む。");
+        sb.AppendLine("   - estimate_and_confirm を呼ばずに他ツール (list_*, get_*, find_*, open_*, search_*) を呼ぶとエラー JSON が返り進行できないので必ず先に呼ぶ。");
+        sb.AppendLine("3. plan のタスクを 1 つずつ実行する。スレッド読み取りやワークスペース横断ツール群を使う。");
+        sb.AppendLine("4. 1 タスク終わるごとに必ず `complete_task` を呼び、finding にこのタスクで得た知見を 1〜3 文で残す。");
+        sb.AppendLine("   - **板やスレを特定 / 列挙したタスクの finding には、必ず thread_url / board_url を含めること。**");
+        sb.AppendLine("     例: 「漫画板 (https://mao.5ch.io/comic/) の総合スレ >>1767582872 (https://fate.5ch.io/test/read.cgi/comic/1767582872/) を特定」のように URL を残す。");
+        sb.AppendLine("     URL を残さないと後で recall_archive で引き直す羽目になる (= コスト無駄)。");
+        sb.AppendLine("5. 途中で当初の plan が不適切だと判明したら遠慮なく `revise_plan` で plan を書き直す。");
         sb.AppendLine("   想定外の発見 / 余計な調査が要らないと分かった / 順序を変えたい / 抜けがあった、いずれも書き直して OK。");
-        sb.AppendLine("5. すべてのタスクが完了したら、findings を統合してユーザへの最終回答をテキストで出力する。最終回答は markdown OK。");
+        sb.AppendLine("   revise_plan 後は再度 estimate_and_confirm が必要 (= ガードが立ち直る)。");
+        sb.AppendLine("6. すべてのタスクが完了したら、findings を統合してユーザへの最終回答をテキストで出力する。最終回答は markdown OK。");
         sb.AppendLine("   - 最終回答だけ出してツールを呼ばないラウンド = エージェントループ終了の合図。");
+        sb.AppendLine();
+        sb.AppendLine("【重い作業前の確認ルール】");
+        sb.AppendLine("create_plan を立てた直後は、**強制で estimate_and_confirm ツールを呼ぶ**こと (= ガードあり)。");
+        sb.AppendLine("ツールにこれから実行する plan のコスト見積りを渡し、サーバが heavy / light を判定する。");
+        sb.AppendLine();
+        sb.AppendLine("**heavy 判定の条件** (サーバ側ロジック):");
+        sb.AppendLine("- estimated_tool_calls >= 8 (= 残り見込みツール呼び出し 8 回以上)");
+        sb.AppendLine("- scan_breadth = \"many\" (= 5 板以上) または \"all_boards\"");
+        sb.AppendLine("- reads_full_thread = true (= 1 スレで 200 レス超を読み通す)");
+        sb.AppendLine();
+        sb.AppendLine("**サーバ応答ハンドリング**:");
+        sb.AppendLine("- severity=\"light\" / verdict=\"proceed\" の場合: そのまま plan のタスク実行に進む");
+        sb.AppendLine("- severity=\"heavy\" / verdict=\"halt_and_confirm\" の場合:");
+        sb.AppendLine("    **次のラウンドでツール呼び出しせず、応答に含まれる confirmation_template の文章をそのまま最終回答テキストとして出力**。");
+        sb.AppendLine("    エージェントループはここで一旦停止 → ユーザの返答を待つ。");
+        sb.AppendLine();
+        sb.AppendLine("ユーザの次の発言を受けて plan を確定する:");
+        sb.AppendLine("- 「(A) で」「実施」「やって」「そのまま」等 → 元の plan のまま実行に進む (新しい create_plan / revise_plan は不要、estimate は再呼出してから実行)");
+        sb.AppendLine("- 「(B) で」「軽量で」「軽くして」等 → revise_plan で軽量化してから estimate_and_confirm を再呼出し → 実行");
+        sb.AppendLine("- 「(C) で」または新指示 → revise_plan で plan を組み直し → estimate_and_confirm → 実行");
+        sb.AppendLine();
+        sb.AppendLine("**見積りは正直に**: 軽い作業なのに大袈裟に申告して毎回確認させたり、重い作業を過小評価して飛び込んだりしない。");
+        sb.AppendLine("数えるツール: list_* / get_* / find_* / search_* / open_*。estimate_and_confirm / create_plan / complete_task / revise_plan は数えない。");
         sb.AppendLine();
         sb.AppendLine("【plan / task 用ツール】");
         sb.AppendLine("- create_plan(tasks) : 計画を宣言 (最初に必ず呼ぶ)");
-        sb.AppendLine("- complete_task(id, finding) : 1 タスクを完了 + 知見メモを残す");
+        sb.AppendLine("- estimate_and_confirm(estimated_tool_calls, scan_breadth, reads_full_thread, plan_summary, lighter_alternative?) :");
+        sb.AppendLine("    create_plan / revise_plan の直後に必ず呼ぶ。サーバが heavy 判定したら confirmation_template を最終回答として出力。");
+        sb.AppendLine("- complete_task(id, finding) : 1 タスクを完了 + 知見メモを残す (URL は finding に必ず含める)");
         sb.AppendLine("- revise_plan(tasks) : 計画を書き直す (= 既存 id は status/finding を引き継ぐ)");
         sb.AppendLine();
         sb.AppendLine("【過去内容の参照ツール】");
@@ -488,69 +729,93 @@ public sealed partial class MainViewModel
         sb.AppendLine("【セッション状態の自動注入】");
         sb.AppendLine("毎ラウンド先頭に「[セッション状態スナップショット]」という system メッセージが自動的に挿入される。");
         sb.AppendLine("その中身は (a) 現在の計画と各タスクの finding、(b) 参照可能な archive エントリ目録 (= 新しい順、上位 30 件の brief)。");
-        sb.AppendLine("これを見れば「自分が何をしてきたか」「どの id で何が引けるか」が常に把握できる。");
-        sb.AppendLine("つまり list_archive を能動的に呼ばなくても、いつでも recall_archive(id=\"aN\") で原文を引き戻せる状態になっている。");
         sb.AppendLine();
-        sb.AppendLine("【スレッド読み取りツール】");
-        sb.AppendLine("- get_thread_meta : >>1 の全文と総レス数を取得");
-        sb.AppendLine("- get_thread_state : 既読位置 / 新着範囲 / 自分のレス番号 / 自分宛て返信フラグの現況を 1 発取得 (= 上記スナップショットの再取得)");
-        sb.AppendLine("- get_posts(start, end) : 範囲指定でレスを取得 (1 度に最大 50 件、両端含む)");
-        sb.AppendLine("- search_posts(keyword, limit?) : キーワード検索でヒットしたレス番号と抜粋");
-        sb.AppendLine("- get_post(number) : 単一レスの全文");
-        sb.AppendLine("- get_posts_by_id(id) : 特定 ID の全レス");
-        sb.AppendLine("- get_my_posts(include_replies?, replies_per_post_limit?) : 自分の書き込み一覧 (ツリーモードで返信ぶら下げ可)。スナップショットが省略を含む場合の完全取得用");
-        sb.AppendLine("- find_replies_to(number, limit?) : 指定レス N に >>N でぶら下がっているレス一覧 (= 被リンク逆引き)");
-        sb.AppendLine("- find_popular_posts(top_k?, range_start?, range_end?, min_count?) : 被アンカー数が多いレスを上位から (= 「読んでおくべきレス」抽出)");
+        sb.AppendLine("【スレッド読み取りツール】 (= thread_url 省略時は attached スレを対象とする)");
+        sb.AppendLine("- get_thread_meta(thread_url?) : スレタイ + 板 + 総レス数 + >>1 全文");
+        if (toolset.HasAttached)
+            sb.AppendLine("- get_thread_state : attached スレの状態 (既読位置 / 新着範囲 / 自分のレス / 返信フラグ) を 1 発取得");
+        sb.AppendLine("- get_posts(start, end, thread_url?) : 範囲指定でレス取得 (1 度に最大 50 件)");
+        sb.AppendLine("- search_posts(keyword, limit?, thread_url?) : 本文部分一致検索");
+        sb.AppendLine("- get_post(number, thread_url?) : 単一レス全文");
+        sb.AppendLine("- get_posts_by_id(id, thread_url?) : 特定 ID の全レス");
+        if (toolset.HasAttached)
+            sb.AppendLine("- get_my_posts(include_replies?, replies_per_post_limit?) : attached スレで自分の書き込みとその返信ツリー");
+        sb.AppendLine("- find_replies_to(number, limit?, thread_url?) : 指定レスに >>N でぶら下がっているレス一覧");
+        sb.AppendLine("- find_popular_posts(top_k?, range_start?, range_end?, min_count?, thread_url?) : 被アンカー数が多いレスを上位から");
+        sb.AppendLine();
+        sb.AppendLine("【ワークスペース横断ツール】");
+        sb.AppendLine("- list_boards(keyword?, limit?) : アプリにロード済みの板一覧 (= bbsmenu)。keyword で板名 / カテゴリ部分一致フィルタ");
+        sb.AppendLine("- list_threads(board_url, keyword?, limit?) : 指定板のスレ一覧 (= subject.txt)。keyword でスレタイ部分一致");
+        sb.AppendLine("- open_thread_in_app(thread_url) : 指定スレをユーザのアプリで開く (= スレ表示ペインにタブ追加)");
+        sb.AppendLine("- open_board_in_app(board_url) : 指定板をユーザのアプリで開く (= スレ一覧ペインにタブ追加)");
+        sb.AppendLine("- open_thread_list_in_app(title, threads) : **複数のスレを 1 つのタブに並べて見せる** (= スレ一覧ペインに新規タブ作成)");
+        sb.AppendLine("  - 板をまたいだ検索結果や、テーマの近いスレ群を提示するときに使う。1 件だけなら open_thread_in_app の方が向く。");
+        sb.AppendLine("  - threads は list_threads で得た thread_url / title / post_count をそのまま流用すれば OK。");
         sb.AppendLine();
         sb.AppendLine("【代表的な使い分け】");
-        sb.AppendLine("- 「新着の話題は？」→ スナップショットの新着範囲を見る → get_posts で範囲読み込み → find_popular_posts(range_start=new_start, range_end=new_end) で人気レス補強");
-        sb.AppendLine("- 「自分への返信ある？」→ スナップショット先頭の『自分の書き込みとそれへの反応』を見れば多くは即答可。返信が省略表示になっていれば get_my_posts / find_replies_to で完全取得");
-        sb.AppendLine("- 「読んでおくべきレスは？」→ find_popular_posts で被アンカー多いレスを抽出 → 必要なら get_post で本文確認");
-        sb.AppendLine("- 「あの話題に対する反応は？」→ 該当レス番号に find_replies_to");
+        if (toolset.HasAttached)
+        {
+            sb.AppendLine("- 「新着の話題は？」→ スナップショットの新着範囲を見る → get_posts で範囲読み込み → find_popular_posts(range) で人気レス補強");
+            sb.AppendLine("- 「自分への返信ある？」→ スナップショット冒頭の『自分の書き込みとそれへの反応』で多くは即答可。省略があれば get_my_posts / find_replies_to");
+        }
+        sb.AppendLine("- 「読んでおくべきレスは？」→ find_popular_posts で被アンカー多いレスを抽出 → get_post で本文確認");
+        sb.AppendLine("- 「ある話題に対する反応は？」→ 該当レス番号に find_replies_to");
+        sb.AppendLine("- 「この作品のアニメスレを探して」(= 横断検索 + 確証 + 開く):");
+        sb.AppendLine("  1) list_boards(keyword=\"アニメ\") で候補板を取得");
+        sb.AppendLine("  2) 各候補板に対し list_threads(board_url, keyword=作品名) でスレ候補を絞る");
+        sb.AppendLine("  3) 確信が持てない場合は get_posts(thread_url=候補, start=1, end=10) で >>1〜10 を読んで本物か判定");
+        sb.AppendLine("  4) 確証が取れたら open_thread_in_app(thread_url) でユーザのアプリで開く");
+        sb.AppendLine("  5) findings に「どの作品・どの板・どのスレを開いたか」を残して最終回答");
+        sb.AppendLine("- 「○○の関連スレを集めて」「△△に関するスレ一覧見せて」(= 複数ヒットを 1 タブに):");
+        sb.AppendLine("  まず「単純な単語マッチで取れる」か「曖昧 / 略称 / ジャンル判定が必要」かを判定する。");
+        sb.AppendLine();
+        sb.AppendLine("  **(A) 単純な単語マッチで取れるケース** (例: 「初音ミク」「ガンダム」「ワンピース」など、スレタイにそのまま入りやすい):");
+        sb.AppendLine("    1) list_boards で関連カテゴリの板候補を取得");
+        sb.AppendLine("    2) 各板に list_threads(board_url, keyword=作品名) でヒットを集める");
+        sb.AppendLine("    3) ヒットした {thread_url, title, post_count} を open_thread_list_in_app の threads 配列にそのまま流し込む");
+        sb.AppendLine();
+        sb.AppendLine("  **(B) 曖昧 / 略称 / ジャンル判定が必要なケース** (例: 「ソニー製品」「ダン飯 (=ダンジョン飯)」「異世界転生もの」):");
+        sb.AppendLine("    単純な keyword マッチでは取りこぼす (= スレタイに「ソニー」と直書きされてない、ダンジョン飯は「ダン飯」と略される 等)。");
+        sb.AppendLine("    **scan モード 3 段階** で進める。板段階でも keyword を絞り込まないのが重要 (= 「漫画」keyword だと「マンガ」「コミック」「漫画作品」等の関連板を取りこぼす)。");
+        sb.AppendLine();
+        sb.AppendLine("    1) **板 scan** — list_boards を **keyword 省略**で呼ぶ。全板 (= 200 件前後) のタイトル / カテゴリが返ってくる。");
+        sb.AppendLine("       返ってきたカテゴリ列を読んで、テーマに関連するカテゴリを **複数まとめて pick** する。");
+        sb.AppendLine("       例: 「ダン飯関連」→ category=\"漫画\" / \"漫画作品\" / \"漫画キャラ\" / \"漫画サロン\" / \"アニメ\" / \"アニメ実況\" / \"声優\" の **全板を pick**");
+        sb.AppendLine("            (= 漫画系板も アニメ系板もそれぞれ複数あるので、1 カテゴリ 1 板ではなく、関連カテゴリ全体を拾うこと)");
+        sb.AppendLine("       例: 「ソニー製品」→ category=\"家電\" / \"AV機器\" / \"PCハードウェア\" / \"ゲーム機\" / \"携帯ゲーム\" / \"デジカメ\" の **全板**");
+        sb.AppendLine("       **板段階で絞りすぎない** ことが取りこぼし回避の最大のポイント。漫画 / アニメ系板はそれぞれ数十あり、漫画板 1 つだけ見て終わるのは NG。");
+        sb.AppendLine();
+        sb.AppendLine("    2) **スレ scan** — 上で pick した板すべてに対し、list_threads(board_url) を **keyword 省略**で呼ぶ。");
+        sb.AppendLine("       各板からタイトル一覧 (= 100 件単位) が返ってくる。");
+        sb.AppendLine();
+        sb.AppendLine("    3) **AI 自身がタイトルから判定** — 全部のタイトルを読んで、テーマに関連すると判断したスレだけを pick。");
+        sb.AppendLine("       略称 / 連想 / シリーズ / ジャンル判定は LLM (= あなた) の知識で行う:");
+        sb.AppendLine("         - ソニー: 「PS5 総合スレ」「α7 III 質問スレ」「WH-1000XM5 ノイズキャンセル」「Bravia 4K」→ 全部関連");
+        sb.AppendLine("         - ダン飯: 「ダン飯ネタバレ」「ダンジョン飯 Part 50」「マルシル萌え」「ライオス」→ 全部関連");
+        sb.AppendLine("         - 異世界転生: 「無職転生」「ありふれた職業」「Re:ゼロ」「転スラ」→ 全部関連");
+        sb.AppendLine();
+        sb.AppendLine("    4) pick したスレの {thread_url, title, post_count} を open_thread_list_in_app に詰める。");
+        sb.AppendLine();
+        sb.AppendLine("  どちらのパターンでも:");
+        sb.AppendLine("  - **URL は必ず list_threads の戻り値からコピペする** (= 自分で組み立てない)");
+        sb.AppendLine("  - 1 件だけに絞れる場合は open_thread_in_app、複数なら open_thread_list_in_app");
+        sb.AppendLine("  - findings に「板名: ヒット件数」のサマリを残して最終回答");
+        sb.AppendLine("  - list_threads を 1 度も呼んでいないのに open_thread_list_in_app を呼ぼうとしたら、それは思考エラー (= URL を捏造している)。先に list_threads から戻ること。");
         sb.AppendLine();
         sb.AppendLine("【方針】");
-        sb.AppendLine("- レス番号を引用するときは「>>N」の形式で書くこと。");
-        sb.AppendLine("- 推測ではなくスレ内の実際の発言を根拠に回答すること。スレに無いことは「スレ内には書かれていない」と答える。");
+        sb.AppendLine("- レス番号を引用するときは「>>N」の形式で書くこと。他スレを引用するときは「板/スレタイ >>N」のように板名 / スレタイ + レス番号で文脈を補うこと。");
+        sb.AppendLine("- 推測ではなく実際のスレ内容を根拠に回答すること。スレに無いことは「スレ内には書かれていない」と答える。");
+        sb.AppendLine("- **thread_url / board_url は絶対に推測や記憶で生成しない**。必ず以下のいずれかから取得した URL のみを使う:");
+        sb.AppendLine("  (a) attached スレッドの thread_url (= スナップショットに記載済み)");
+        sb.AppendLine("  (b) list_boards / list_threads / get_thread_meta 等のツール結果に含まれていた URL");
+        sb.AppendLine("  (c) ユーザがメッセージ中で明示的に渡してきた URL");
+        sb.AppendLine("  「https://krsw.5ch.io/ai/thread_id_1/」のように <key> 部分を placeholder で埋めた URL や、");
+        sb.AppendLine("  「以前見た覚えがある」レベルの記憶 URL は禁止 (= 必ず list_threads を最新で呼び直す)。");
         sb.AppendLine("- 大量のレスを読む必要があるときは get_posts を分割して呼ぶこと (=「読んだフリ」をしない)。");
-        sb.AppendLine("- **最終回答は必ず <think>...</think> の外側で本文を出力すること。<think> ブロックだけで応答を終わらせない**");
-        sb.AppendLine("  (= 思考過程は <think> 内、ユーザ向けの結論はその外、という分離を守る)。");
-        sb.AppendLine("- 思考時間が長くなりすぎないように。要点が見えたら think を閉じてユーザ向けの本文に移ること。");
-        return sb.ToString();
-    }
-
-    /// <summary>スレッドにアタッチしていない (= スタンドアロン) AI チャット用の system prompt を組み立てる。
-    /// スレッド読み取りツールは提示されないので、AI は自分の知識と plan/archive ツールだけで応答する。
-    /// plan-revise / archive / レビュー機構は引き続き使う (= 構造を揃えて指示追従性を維持)。</summary>
-    private static string BuildStandaloneAiSystemPrompt()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("あなたは AI アシスタントです。ユーザの質問に答えてください。");
-        sb.AppendLine("(現在、特定のスレッドにはアタッチされていません。スレッド読み取り系のツールは提示されないので、自分の知識に基づいて答えてください。)");
-        sb.AppendLine();
-        sb.AppendLine("【作業の進め方 (必ず守ること)】");
-        sb.AppendLine("1. まず最初に `create_plan` を呼び、ユーザの依頼を達成するためのタスク列を宣言する。");
-        sb.AppendLine("   - 単純な質問なら 1 タスクでよい。");
-        sb.AppendLine("   - 各 description は「何を確認 / 検討するか」が分かるように書く。");
-        sb.AppendLine("2. plan のタスクを 1 つずつ実行する (= 思考と結論の組み立て)。");
-        sb.AppendLine("3. 1 タスク終わるごとに必ず `complete_task` を呼び、finding にこのタスクで得た知見を 1〜3 文で残す。");
-        sb.AppendLine("4. 途中で当初の plan が不適切だと判明したら遠慮なく `revise_plan` で plan を書き直す。");
-        sb.AppendLine("5. すべてのタスクが完了したら、findings を統合してユーザへの最終回答をテキストで出力する。");
-        sb.AppendLine();
-        sb.AppendLine("【plan / task 用ツール】");
-        sb.AppendLine("- create_plan(tasks) : 計画を宣言 (最初に必ず呼ぶ)");
-        sb.AppendLine("- complete_task(id, finding) : 1 タスクを完了 + 知見メモを残す");
-        sb.AppendLine("- revise_plan(tasks) : 計画を書き直す (= 既存 id は status/finding を引き継ぐ)");
-        sb.AppendLine();
-        sb.AppendLine("【過去内容の参照ツール】");
-        sb.AppendLine("- list_archive(filter?) : 目録を取得。kind / task_id / keyword / tool_name / limit で絞り込める。");
-        sb.AppendLine("- recall_archive(id) : 指定 id の原文を完全に取り出す。必要最小限に使う。");
-        sb.AppendLine();
-        sb.AppendLine("【セッション状態の自動注入】");
-        sb.AppendLine("毎ラウンド先頭に「[セッション状態スナップショット]」が自動的に挿入される。現在の plan と archive 目録が見える状態。");
-        sb.AppendLine();
-        sb.AppendLine("【方針】");
-        sb.AppendLine("- 推測は避け、自分の知識に基づいて回答する。不確実なことは「分からない」「確実なことは言えない」と正直に答える。");
-        sb.AppendLine("- スレッド読み取りツール (get_thread_meta 等) は提示されない。仮に呼ぼうとしてもエラーが返るだけなので試さないこと。");
+        sb.AppendLine("- ユーザが見ることを意図した依頼 (= 「開いて」「見せて」「探して開いて」「次スレ開いて」「○○板見せて」など) を出してきた場合、");
+        sb.AppendLine("  対象が特定できた時点で **open_thread_in_app / open_board_in_app を必ず呼んでアプリで開く**こと。");
+        sb.AppendLine("  「見つけました、URL は…」とテキスト報告だけで終わらせない。報告 + open ツール呼び出し までで 1 タスク。");
+        sb.AppendLine("  本物か微妙な候補が複数ある場合は、最有力候補 1 つを開いた上で「他の候補もあれば教えて」と書く方が親切。");
         sb.AppendLine("- **最終回答は必ず <think>...</think> の外側で本文を出力すること。<think> ブロックだけで応答を終わらせない**");
         sb.AppendLine("  (= 思考過程は <think> 内、ユーザ向けの結論はその外、という分離を守る)。");
         sb.AppendLine("- 思考時間が長くなりすぎないように。要点が見えたら think を閉じてユーザ向けの本文に移ること。");
@@ -1033,12 +1298,8 @@ public sealed partial class MainViewModel
                 FlushScrollPositionToDisk(tab);
                 // 「タブを閉じる」操作の復元用履歴に積む (= DeleteThreadLog 等 suppress 中なら no-op)。
                 PushRecentlyClosedThreadTab(tab);
-                // このスレの AI チャットウィンドウが開いていれば一緒に閉じる (= 宙に浮いた窓を残さない)。
-                if (_aiChatWindows.TryGetValue(tab, out var chatWindow))
-                {
-                    _aiChatWindows.Remove(tab);
-                    try { chatWindow.Close(); } catch { /* 既に閉じている等は無視 */ }
-                }
+                // 注: AI チャットウィンドウは閉じない。SelectedThreadTab がこの後 null か別タブに変わり、
+                // OnSelectedThreadTabChanged → SwitchAiChatContextTo が発火して中身が自動切替する。
             }
         }
     }

@@ -43,8 +43,9 @@ public sealed partial class AiChatViewModel : ObservableObject
     private readonly LlmClient      _llmClient;
     private readonly LlmSettings    _settings;
     /// <summary>スレッドにアタッチされたチャットなら ThreadToolset を保持し、スレッド読み取りツールを提示する。
-    /// アタッチされていない (= スレッド非依存) チャットでは null で、その場合 thread 系ツールは提示しない。</summary>
-    private readonly ThreadToolset? _threadToolset;
+    /// アタッチされていない (= スレッド非依存) チャットでは <see cref="ThreadToolset.HasAttached"/> = false の
+    /// インスタンスを保持する。<see cref="SwitchContext"/> で別 attached / 非 attached に差し替え可能。</summary>
+    private ThreadToolset? _threadToolset;
     /// <summary>plan-revise パターンの実体。チャット単位の状態 (= タスク一覧) を持つので
     /// VM が所有する。Thread ツールと並べて LLM に提示する。</summary>
     private readonly PlanToolset    _planToolset = new();
@@ -64,8 +65,12 @@ public sealed partial class AiChatViewModel : ObservableObject
     /// SendAsync の冒頭でクリアし、各 SendAsync 内で再蓄積される。</summary>
     private readonly List<(string Kind, string Payload)> _pendingReviewPrompts = new();
 
-    /// <summary>ウィンドウタイトルに出すスレタイトル。</summary>
-    public string ThreadTitle { get; }
+    /// <summary>ウィンドウタイトルに出すスレタイトル。<see cref="SwitchContext"/> で更新可能。</summary>
+    [ObservableProperty] private string _threadTitle = "";
+
+    /// <summary>ヘッダ下に出す現在モードの説明文 (= 「○○スレを文脈に会話」「スレッド非アタッチ」など)。
+    /// <see cref="SwitchContext"/> で更新する。</summary>
+    [ObservableProperty] private string _contextSubtitle = "";
 
     [ObservableProperty] private string _inputText = "";
 
@@ -95,12 +100,14 @@ public sealed partial class AiChatViewModel : ObservableObject
         string         threadTitle,
         ThreadToolset? threadToolset)
     {
-        _llmClient     = llmClient;
-        _settings      = settings;
-        _threadToolset = threadToolset;
-        ThreadTitle    = string.IsNullOrEmpty(threadTitle) ? "(無題のスレッド)" : threadTitle;
+        _llmClient      = llmClient;
+        _settings       = settings;
+        _threadToolset  = threadToolset;
+        ThreadTitle     = string.IsNullOrEmpty(threadTitle) ? "(スレッド指定なし)" : threadTitle;
+        ContextSubtitle = ComputeContextSubtitle(threadToolset);
 
         // system プロンプト (= ツール案内入り) を履歴の先頭に固定。以降 user/assistant/tool が積まれる。
+        // SwitchContext で _history[0] を別 system に差し替える運用 (= 履歴は保持しつつ attached だけ切替)。
         _history.Add(new LlmChatMessage("system", systemPrompt));
 
         SendCommand = new AsyncRelayCommand(SendAsync, () => !string.IsNullOrWhiteSpace(InputText));
@@ -111,6 +118,92 @@ public sealed partial class AiChatViewModel : ObservableObject
     }
 
     partial void OnInputTextChanged(string value) => SendCommand.NotifyCanExecuteChanged();
+
+    /// <summary>このチャットウィンドウのスレ attached を切り替える。
+    /// 履歴 (_history のユーザ/アシスタント/tool ログ・_archive・_planToolset) は維持し、
+    /// system プロンプトとツールセットだけ差し替える (= 「前の会話を引き継いで別スレ質問できる」UX)。
+    /// 切替を行うとウィンドウタイトル / サブタイトル / ステータスバーが更新される。
+    /// MainViewModel が SelectedThreadTab 変化や attached スレタブ closure を観測して呼び出す。</summary>
+    public void SwitchContext(ThreadToolset newToolset, string newSystemPrompt, string newThreadTitle)
+    {
+        _threadToolset = newToolset;
+
+        // system プロンプトを差し替え。常に _history[0] が system という不変条件を維持。
+        if (_history.Count > 0 && _history[0].Role == "system")
+            _history[0] = new LlmChatMessage("system", newSystemPrompt);
+        else
+            _history.Insert(0, new LlmChatMessage("system", newSystemPrompt));
+
+        ThreadTitle     = string.IsNullOrEmpty(newThreadTitle) ? "(スレッド指定なし)" : newThreadTitle;
+        ContextSubtitle = ComputeContextSubtitle(newToolset);
+
+        // ステータスバーに 1 回限りの通知を出す (= 次の AI 応答 / ユーザ送信で上書きされる)。
+        StatusMessage = newToolset.HasAttached
+            ? $"コンテキスト切替: 「{ThreadTitle}」にアタッチしました (以前の会話履歴は保持されています)"
+            : "コンテキスト切替: スレッドにアタッチしていない状態になりました (横断ツールは引き続き使えます)";
+    }
+
+    /// <summary>ヘッダのサブタイトル文字列を toolset 状態から組み立てる。</summary>
+    private static string ComputeContextSubtitle(ThreadToolset? toolset)
+        => toolset is { HasAttached: true }
+            ? "このスレッドを文脈に LLM と会話します (他スレも横断アクセス可)"
+            : "スレッドに非アタッチ — 板やスレを横断して質問できます";
+
+    /// <summary>「直前 AI が出した (A)/(B)/(C) 確認文に対して、このユーザ返答は『作業を進める方向の承諾』か?」を
+    /// 短い system prompt + 単発 LlmClient 呼出で分類する軽量 LLM 分類器。
+    /// メインの会話と独立した <see cref="LlmChatMessage"/> シーケンスを送るので、本流の履歴や tool 状態は触らない。
+    ///
+    /// <para><b>戻り値</b>: true なら「(A)/(B)/(C) いずれかへの承諾」と判定、false なら「別の新規依頼 / 質問 / 雑談」など。
+    /// API 失敗 / JSON parse 失敗時は false を返す (= 安全側、最悪確認文がもう 1 回出るだけ)。</para>
+    ///
+    /// <para>キーワード辞書ベースの脆い判定を避け、文脈や言い回しのブレ (= 「Bで」「軽くしよう」「うん、それで」等) に
+    /// 強くするための仕組み。プロンプトは極小 (= 100 字程度) でツール無し、生成も JSON 1 行で済むので往復は速い。</para></summary>
+    private async Task<bool> ClassifyAsApprovalAsync(string userText)
+    {
+        try
+        {
+            // 短い分類タスク。reasoning モデル (gpt-oss / gemma / DeepSeek-R1 系) が <think> に
+            // 大量トークンを使い切ってから出力する挙動を強く抑制するため、思考過程禁止 + 即時出力 + 出力例だけ、の
+            // 最低限の指示にする。プロンプトを長く / 例を多く書くほど think で「整理」しようとして遅くなるので、
+            // 説明文も短く保つ。
+            var classifierSystemPrompt =
+                "あなたは分類器です。\n" +
+                "直前 AI は「(A) 実施 / (B) 軽量版 / (C) 再依頼」をユーザに尋ねた。\n" +
+                "次のユーザ返答を分類:\n" +
+                "- approve: (A)(B)(C) のどれかを選んだ / 作業を進める方向の返答\n" +
+                "- not_approval: 別の新規依頼・質問・雑談\n" +
+                "\n" +
+                "【厳守】考察過程を一切書くな。<think>タグも絶対に使うな。reasoning を出さない。\n" +
+                "受け取ったら即 JSON 1 行だけ出力して終わり。説明文・前置き・後置きすべて禁止。\n" +
+                "出力は次の 2 通りのいずれか:\n" +
+                "{\"category\":\"approve\"}\n" +
+                "{\"category\":\"not_approval\"}";
+
+            var messages = new List<LlmChatMessage>
+            {
+                new("system", classifierSystemPrompt),
+                new("user",   userText),
+            };
+
+            var result = await _llmClient
+                .ChatStreamAsync(_settings, messages, _ => { /* no-op: 分類器の delta は捨てる */ })
+                .ConfigureAwait(true);
+
+            if (!result.Ok || string.IsNullOrEmpty(result.Content)) return false;
+
+            // think タグ等が混ざっても拾えるよう、JSON パターンを正規表現で抜き出す。
+            var m = System.Text.RegularExpressions.Regex.Match(
+                result.Content,
+                @"\{\s*""category""\s*:\s*""(approve|not_approval)""\s*\}",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success && m.Groups[1].Value.Equals("approve", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // 分類器が落ちても本流の SendAsync は止めない。確認ループ防止の最適化が外れるだけ。
+            return false;
+        }
+    }
 
     /// <summary>入力欄の内容を user メッセージとして履歴に積み、Agent ループを 1 回まわす。
     /// 実行中は <see cref="SendCommand"/> が CanExecute=false になり再入は防がれる。</summary>
@@ -125,6 +218,17 @@ public sealed partial class AiChatViewModel : ObservableObject
         _archive.RecordUserMessage(userText);
         // 前回ユーザ送信で残った review 待機列を破棄 (= 各 user 送信は独立した文脈)。
         _pendingReviewPrompts.Clear();
+
+        // 直前ラウンドで heavy 確認文が出ていた場合、このユーザ送信は「承諾応答」か「新規依頼」か。
+        // LLM 分類器を起動して判定し、承諾なら次の estimate_and_confirm を強制 light で通す
+        // (= 重い作業の確認文に対して「Bで」「やって」等で答えた直後、また同じ確認文が出る無限ループ防止)。
+        if (_planToolset.HeavyConfirmationPresented)
+        {
+            StatusMessage = "返答の意図を分類中…";
+            var approved = await ClassifyAsApprovalAsync(userText).ConfigureAwait(true);
+            if (approved) _planToolset.MarkUserPreApproved();
+        }
+
         StatusMessage = ComposeStatus("AI が応答を生成中…");
 
         // toolset を結合して LLM に提示する。plan 系を先頭、続いて archive 系、(あれば) 最後に thread 系。
@@ -250,7 +354,7 @@ public sealed partial class AiChatViewModel : ObservableObject
                                      .Append(EscapeHtml(label))
                                      .Append("</tool-call>\n\n");
 
-                        var toolResult = DispatchTool(tc.Name, tc.ArgumentsJson);
+                        var toolResult = await DispatchToolAsync(tc.Name, tc.ArgumentsJson).ConfigureAwait(true);
                         _history.Add(new LlmChatMessage("tool", toolResult)
                         {
                             ToolCallId = tc.Id,
@@ -413,18 +517,27 @@ public sealed partial class AiChatViewModel : ObservableObject
                 .Replace("\"", "&quot;");
     }
 
-    /// <summary>tool 名で plan / archive / (任意) thread のいずれの toolset に dispatch するかを決める。
-    /// 上から順に試し、thread toolset が無い (= スレッド非依存チャット) 場合は最後に error JSON を返す。</summary>
-    private string DispatchTool(string name, string argumentsJson)
+    /// <summary>tool 名で plan / archive / thread のいずれの toolset に dispatch するかを決める。
+    /// thread toolset の cross-thread ロード (= ディスク / ネット I/O) のため async。
+    ///
+    /// <para><b>estimate ガード</b>: create_plan / revise_plan 後は <see cref="PlanToolset.EstimateRequired"/> が立つ。
+    /// この間、plan 操作系以外のツールを呼ぼうとするとエラー JSON を返し AI に「先に estimate_and_confirm を呼べ」と矯正する。</para></summary>
+    private async Task<string> DispatchToolAsync(string name, string argumentsJson)
     {
+        // estimate ガード: plan を立てた直後はコスト見積りを先に呼ばせる。
+        if (_planToolset.EstimateRequired && !PlanToolset.ToolBypassesEstimateGate(name))
+        {
+            return "{\"error\":\"estimate_and_confirm を先に呼んでコスト見積りをしてください。create_plan / revise_plan の直後に重い作業に入る前の必須ステップです。引数: estimated_tool_calls (= 残り plan 実行の見込みツール呼び出し回数), scan_breadth (= single/few/many/all_boards), reads_full_thread (= bool), plan_summary (= 自然文), lighter_alternative (= heavy 候補時の軽量案)。\"}";
+        }
+
         var planResult = _planToolset.TryExecute(name, argumentsJson);
         if (planResult is not null) return planResult;
         var archiveResult = _archive.TryExecute(name, argumentsJson);
         if (archiveResult is not null) return archiveResult;
-        if (_threadToolset is not null) return _threadToolset.Execute(name, argumentsJson);
+        if (_threadToolset is not null)
+            return await _threadToolset.ExecuteAsync(name, argumentsJson).ConfigureAwait(true);
         // thread toolset が無いのに thread 系ツールを呼ばれた = LLM が手探りで叩いてきたケース。
-        // 「使えない」を明示して次のラウンドで諦めさせる。
-        return "{\"error\":\"ツール \\\"" + name.Replace("\"", "\\\"") + "\\\" はこのチャットでは利用できません (スレッドにアタッチされていません)\"}";
+        return "{\"error\":\"ツール \\\"" + name.Replace("\"", "\\\"") + "\\\" はこのチャットでは利用できません\"}";
     }
 
     /// <summary>archive に残す価値があるツール呼び出しか。plan 系 (= 状態変更だけ) と archive 系
@@ -621,8 +734,11 @@ public sealed partial class AiChatViewModel : ObservableObject
                     "think_only_retry" => BuildThinkOnlyRetryPrompt(),
                     _                  => null,
                 };
+                // role は "user" を採用。Claude API は会話が user で終わることを要求する一方、
+                // OpenAI / Gemini / llama.cpp は連続 user も許容するので、user 統一が最も互換性が高い。
+                // 意味的にも「ユーザからの追加問いかけ」として自然な扱い。
                 if (!string.IsNullOrEmpty(reviewText))
-                    trimmed.Add(new LlmChatMessage("system", reviewText));
+                    trimmed.Add(new LlmChatMessage("user", reviewText));
             }
             _pendingReviewPrompts.Clear();
         }
@@ -712,9 +828,15 @@ public sealed partial class AiChatViewModel : ObservableObject
         sb.AppendLine("## いま確認すべきこと");
         sb.AppendLine("1. 下書きはユーザの依頼に正面から答えているか? 質問の核心を外していないか?");
         sb.AppendLine("2. 抜けや誤りや推測 (= スレに無いことを書いている) は無いか?");
-        sb.AppendLine("3. 追加調査が必要なら revise_plan で新タスクを立て、調査してから再度回答に戻る");
-        sb.AppendLine("4. 問題なければ最終回答を出力する。下書きをそのまま再掲してよい (= 同じテキストでも構わない)。");
-        sb.AppendLine("5. レビュー結果として何か出力すること (空応答にしない)。");
+        sb.AppendLine("3. **ユーザの依頼にアクション要素が含まれていないか?** (例: 「開いて」「見せて」「探して開いて」「次スレ開いて」「○○板見せて」)");
+        sb.AppendLine("   含まれているのに open_thread_in_app / open_board_in_app を呼ばずに「URL はこれです」「見つけました」と報告だけで済ませようとしていないか?");
+        sb.AppendLine("   その場合は、いまこのレビュー応答で open_*_in_app をツール呼び出しで実行してから最終回答する。");
+        sb.AppendLine("4. **下書きが「確認文」(= ユーザに作業実施可否を尋ねる文) であるか?** その場合:");
+        sb.AppendLine("   - 重い作業 (= ツール 8 回以上 / 5 板以上スキャン / 200 レス超読込 等) を実施前に確認するのは正しい挙動なので、そのまま最終回答として通す。");
+        sb.AppendLine("   - 逆に「軽い作業 (= 1〜3 ツールで終わる、指示が明確) なのに確認してしまっている」場合は、確認をやめて直接実行に戻すべき。");
+        sb.AppendLine("5. 追加調査が必要なら revise_plan で新タスクを立て、調査してから再度回答に戻る");
+        sb.AppendLine("6. 問題なければ最終回答を出力する。下書きをそのまま再掲してよい (= 同じテキストでも構わない)。");
+        sb.AppendLine("7. レビュー結果として何か出力すること (空応答にしない)。");
 
         return sb.ToString();
     }

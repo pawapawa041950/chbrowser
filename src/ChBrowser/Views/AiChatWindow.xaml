@@ -30,8 +30,8 @@
                 Padding="12,8">
             <StackPanel>
                 <TextBlock Text="{Binding ThreadTitle}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                <TextBlock Text="このスレッドの内容を文脈に LLM と会話します。"
-                           Foreground="#666" FontSize="11" Margin="0,2,0,0" />
+                <TextBlock Text="{Binding ContextSubtitle}"
+                           Foreground="#666" FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
             </StackPanel>
         </Border>
 

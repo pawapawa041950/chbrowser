@@ -168,6 +168,11 @@ public sealed partial class MainViewModel : ObservableObject
         if (value is not null) _lastActivePane = ActivePane.Thread;
         RefreshAddressBarUrl();
         SyncStatusFromActivePane();
+
+        // AI チャットウィンドウが開いていれば、新しい SelectedThreadTab に合わせて context を切替
+        // (= ウィンドウは開いたまま、タイトル / system prompt / toolset が動的に更新される)。
+        // 実装は MainViewModel.Threads.cs 側 (= _aiChatViewModel フィールドのオーナー)。
+        SwitchAiChatContextTo(value);
     }
 
     private void OnActiveThreadTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
