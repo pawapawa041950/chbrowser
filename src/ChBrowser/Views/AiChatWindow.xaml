@@ -59,7 +59,9 @@
             <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="#7A6A20" FontSize="11" />
         </Border>
 
-        <!-- 入力欄: 複数行 TextBox + 送信ボタン。Enter で送信 / Shift+Enter で改行。 -->
+        <!-- 入力欄: 既定 1 行表示、テキスト量に応じて自動拡張 (MinLines/MaxLines)。
+             Shift+Enter で送信、通常 Enter は改行 (= IME 変換確定の誤送信もここで防ぐ)。
+             TextBox 自身は枠なし (BorderThickness=0)、外側の Border で CornerRadius を持って角丸を出す。 -->
         <Border Grid.Row="3"
                 Background="{x:Static SystemColors.ControlBrush}"
                 BorderBrush="{x:Static SystemColors.ControlDarkBrush}"
@@ -71,16 +73,26 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <TextBox x:Name="InputBox"
-                         Grid.Column="0"
-                         Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
-                         AcceptsReturn="True"
-                         TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto"
-                         MinHeight="56" MaxHeight="140"
-                         FontFamily="Yu Gothic UI, Meiryo, Segoe UI"
-                         KeyDown="InputBox_KeyDown"
-                         ToolTip="Enter で送信 / Shift+Enter で改行" />
+                <Border Grid.Column="0"
+                        CornerRadius="8"
+                        Background="White"
+                        BorderBrush="{x:Static SystemColors.ControlDarkBrush}"
+                        BorderThickness="1"
+                        Padding="8,4"
+                        VerticalAlignment="Bottom">
+                    <TextBox x:Name="InputBox"
+                             Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             MinLines="1" MaxLines="8"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="0"
+                             FontFamily="Yu Gothic UI, Meiryo, Segoe UI"
+                             KeyDown="InputBox_KeyDown"
+                             ToolTip="Shift+Enter で送信 / Enter で改行" />
+                </Border>
 
                 <Button Grid.Column="1"
                         Content="送信"

@@ -40,12 +40,14 @@ public sealed partial class AiChatViewModel : ObservableObject
     /// これを超えても本文が出てこなければエラーとして諦める。</summary>
     private const int MaxThinkOnlyRetries = 2;
 
-    private readonly LlmClient     _llmClient;
-    private readonly LlmSettings   _settings;
-    private readonly ThreadToolset _threadToolset;
+    private readonly LlmClient      _llmClient;
+    private readonly LlmSettings    _settings;
+    /// <summary>スレッドにアタッチされたチャットなら ThreadToolset を保持し、スレッド読み取りツールを提示する。
+    /// アタッチされていない (= スレッド非依存) チャットでは null で、その場合 thread 系ツールは提示しない。</summary>
+    private readonly ThreadToolset? _threadToolset;
     /// <summary>plan-revise パターンの実体。チャット単位の状態 (= タスク一覧) を持つので
     /// VM が所有する。Thread ツールと並べて LLM に提示する。</summary>
-    private readonly PlanToolset   _planToolset = new();
+    private readonly PlanToolset    _planToolset = new();
     /// <summary>チャット内で起きた全ての出来事 (ユーザ発言 / アシスタント本文 / 思考 / ツール結果) を
     /// 保管する archive。プロンプトには軽量サマリしか流さない代わりに、必要なら LLM が
     /// list_archive / recall_archive で原文を引き戻せる。</summary>
@@ -87,11 +89,11 @@ public sealed partial class AiChatViewModel : ObservableObject
     public event Action<string>? ErrorAdded;
 
     public AiChatViewModel(
-        LlmClient     llmClient,
-        LlmSettings   settings,
-        string        systemPrompt,
-        string        threadTitle,
-        ThreadToolset threadToolset)
+        LlmClient      llmClient,
+        LlmSettings    settings,
+        string         systemPrompt,
+        string         threadTitle,
+        ThreadToolset? threadToolset)
     {
         _llmClient     = llmClient;
         _settings      = settings;
@@ -125,12 +127,14 @@ public sealed partial class AiChatViewModel : ObservableObject
         _pendingReviewPrompts.Clear();
         StatusMessage = ComposeStatus("AI が応答を生成中…");
 
-        // 3 つの toolset を結合して LLM に提示する。plan 系を先頭、続いて archive 系、最後に thread 系。
+        // toolset を結合して LLM に提示する。plan 系を先頭、続いて archive 系、(あれば) 最後に thread 系。
         // 順序は LLM が「まず計画 → 必要なら過去参照 → スレ読み取り」の優先度を読み取りやすくする狙い。
+        // スレッド非依存のチャット (= _threadToolset null) では thread 系を提示しない。
         var toolDefs = new List<object>();
         toolDefs.AddRange(_planToolset.GetToolDefinitions());
         toolDefs.AddRange(_archive.GetToolDefinitions());
-        toolDefs.AddRange(_threadToolset.GetToolDefinitions());
+        if (_threadToolset is not null)
+            toolDefs.AddRange(_threadToolset.GetToolDefinitions());
 
         // 1 ユーザ送信 = 1 アシスタントバブル。Agent のラウンド数によらず 1 バブルに統合する。
         // displayBuffer は「表示用」の累積で、各ラウンドの LLM テキスト + ラウンド間の <tool-call> マーカーを含む。
@@ -409,15 +413,18 @@ public sealed partial class AiChatViewModel : ObservableObject
                 .Replace("\"", "&quot;");
     }
 
-    /// <summary>tool 名で plan / archive / thread のいずれの toolset に dispatch するかを決める。
-    /// 上から順に試し、最後の thread は常に値を返す。</summary>
+    /// <summary>tool 名で plan / archive / (任意) thread のいずれの toolset に dispatch するかを決める。
+    /// 上から順に試し、thread toolset が無い (= スレッド非依存チャット) 場合は最後に error JSON を返す。</summary>
     private string DispatchTool(string name, string argumentsJson)
     {
         var planResult = _planToolset.TryExecute(name, argumentsJson);
         if (planResult is not null) return planResult;
         var archiveResult = _archive.TryExecute(name, argumentsJson);
         if (archiveResult is not null) return archiveResult;
-        return _threadToolset.Execute(name, argumentsJson);
+        if (_threadToolset is not null) return _threadToolset.Execute(name, argumentsJson);
+        // thread toolset が無いのに thread 系ツールを呼ばれた = LLM が手探りで叩いてきたケース。
+        // 「使えない」を明示して次のラウンドで諦めさせる。
+        return "{\"error\":\"ツール \\\"" + name.Replace("\"", "\\\"") + "\\\" はこのチャットでは利用できません (スレッドにアタッチされていません)\"}";
     }
 
     /// <summary>archive に残す価値があるツール呼び出しか。plan 系 (= 状態変更だけ) と archive 系

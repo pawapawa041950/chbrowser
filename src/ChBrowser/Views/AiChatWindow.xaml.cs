@@ -178,13 +178,14 @@ public partial class AiChatWindow : Window
         TranscriptView.Dispose();
     }
 
-    /// <summary>入力欄のキー処理: Enter で送信、Shift+Enter は通常の改行として通す。
+    /// <summary>入力欄のキー処理: Shift+Enter で送信、通常 Enter は改行 (= AcceptsReturn=True の挙動に任せる)。
     /// IME 変換確定の Enter は <see cref="KeyEventArgs.Key"/> が <see cref="Key.ImeProcessed"/> になり
-    /// <see cref="Key.Enter"/> 判定に引っかからないので、自然に「送信せず変換確定」になる (= 誤送信防止)。</summary>
+    /// <see cref="Key.Enter"/> 判定に引っかからないので、変換確定中の Shift+Enter で誤送信は起きない。</summary>
     private void InputBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift) return; // Shift+Enter = 改行
+        // Shift+Enter のみ送信、それ以外の Enter は通常の改行として通す。
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != ModifierKeys.Shift) return;
 
         e.Handled = true;
         if (_vm.SendCommand.CanExecute(null))

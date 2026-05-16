@@ -43,6 +43,16 @@
                     <MenuItem Header="バージョン情報(_A)..." Click="OpenAbout_Click" />
                 </MenuItem>
             </Menu>
+            <!-- AI チャット起動ボタン: アドレスバーの右に固定配置。スレッドタブが開いていればそのスレを文脈に、
+                 開いていなければスレッド非依存のスタンドアロンチャットを開く (= MainViewModel.OpenAiChatFromTopBar)。 -->
+            <Button DockPanel.Dock="Right"
+                    Margin="0,2,6,2"
+                    Style="{StaticResource ToolbarIconButton}"
+                    Command="{Binding OpenAiChatFromTopBarCommand}"
+                    ToolTip="AI チャット (スレッドを開いていればその内容を文脈に使う)">
+                <TextBlock Text="AI" FontSize="11" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Button>
             <TextBox x:Name="AddressBar"
                      Margin="6,2,6,2"
                      Padding="4,3"
