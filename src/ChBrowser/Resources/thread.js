@@ -2717,23 +2717,25 @@
     // ============================================================
     // サムネイルサイズのドラッグリサイズ。
     // 仕様: image-slot 右下 14px にホバー時、半透明三角ハンドル + nwse-resize カーソル表示。
-    //       そこから mousedown でドラッグ → ドラッグ距離に応じて CSS 変数 --slot-scale を更新
-    //       → 全 image-slot が calc(基準 * scale) で一括追従。
+    //       そこから mousedown でドラッグ → ドラッグ距離に応じて CSS 変数 --slot-scale を
+    //       「そのスロット要素自身」に inline style として書き込む。CSS 変数はカスケードするため、
+    //       :root の既定値 1 を当該スロットだけが上書きする (= 他スロットには波及しない)。
     //       スコープは WebView2 セッション内のみ (= タブを閉じて開き直すと既定値 1.0 に戻る)。
     //
-    // 性能メモ: 何千レスでも CSS 変数 1 個の変更で済むので、走査コストは無い。
-    //          リフローはブラウザ依存だが、img/iframe の中身そのものは再ロードしない。
+    // 性能メモ: 触るのは 1 スロットの inline style のみ。リフロー範囲もそのスロットの
+    //          ブロックに限定されるので、レス数が多くてもコストは一定。
     // ============================================================
     const SLOT_SCALE_MIN = 0.3;
     const SLOT_SCALE_MAX = 3.0;
     const RESIZE_HANDLE_PX = 14;
-    function getSlotScale() {
-        const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--slot-scale'));
+    function getSlotScale(slot) {
+        // inline style 未設定なら :root の既定値 (= 1) を拾う。
+        const v = parseFloat(getComputedStyle(slot).getPropertyValue('--slot-scale'));
         return isFinite(v) && v > 0 ? v : 1;
     }
-    function setSlotScale(v) {
+    function setSlotScale(slot, v) {
         const clamped = Math.max(SLOT_SCALE_MIN, Math.min(SLOT_SCALE_MAX, v));
-        document.documentElement.style.setProperty('--slot-scale', clamped.toFixed(3));
+        slot.style.setProperty('--slot-scale', clamped.toFixed(3));
         return clamped;
     }
 
@@ -2754,7 +2756,7 @@
 
         const startX = e.clientX;
         const startY = e.clientY;
-        const startScale = getSlotScale();
+        const startScale = getSlotScale(slot);
         // スケール 1.0 のときの画像スロット基準サイズ (= CSS の calc 第一項に合わせる)
         const REF = 240;
 
@@ -2763,7 +2765,7 @@
             const dy = ev.clientY - startY;
             // 対角線の x/y 両方の影響を取り入れる: 平均値ベースで滑らかな増減。
             const drag = (dx + dy) / 2;
-            setSlotScale(startScale + drag / REF);
+            setSlotScale(slot, startScale + drag / REF);
         }
         function onUp() {
             document.removeEventListener('mousemove', onMove);
