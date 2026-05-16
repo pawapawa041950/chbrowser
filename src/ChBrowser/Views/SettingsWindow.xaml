@@ -54,6 +54,7 @@
         <DataTemplate x:Key="GeneralTemplate">    <settings:GeneralPanel /> </DataTemplate>
         <DataTemplate x:Key="NetworkTemplate">    <settings:NetworkPanel /> </DataTemplate>
         <DataTemplate x:Key="AuthTemplate">       <settings:AuthPanel /> </DataTemplate>
+        <DataTemplate x:Key="AiTemplate">         <settings:AiPanel /> </DataTemplate>
         <DataTemplate x:Key="FavoritesTemplate">  <settings:FavoritesPanel /> </DataTemplate>
         <DataTemplate x:Key="BoardListTemplate">  <settings:BoardListPanel /> </DataTemplate>
         <DataTemplate x:Key="ThreadListTemplate">    <settings:ThreadListPanel /> </DataTemplate>
@@ -181,6 +182,9 @@
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="認証">
                                         <Setter Property="ContentTemplate" Value="{StaticResource AuthTemplate}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="AI">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource AiTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="お気に入り">
                                         <Setter Property="ContentTemplate" Value="{StaticResource FavoritesTemplate}" />

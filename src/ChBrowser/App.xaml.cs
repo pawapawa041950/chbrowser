@@ -10,6 +10,7 @@ using ChBrowser.Models;
 using ChBrowser.Services.Api;
 using ChBrowser.Services.Donguri;
 using ChBrowser.Services.Image;
+using ChBrowser.Services.Llm;
 using ChBrowser.Services.Storage;
 using ChBrowser.Services.Theme;
 using ChBrowser.ViewModels;
@@ -51,6 +52,9 @@ public partial class App : Application
     /// <see cref="SettingsViewModel.DonguriLoginStatus"/> も更新するために使う。</summary>
     private SettingsViewModel? _currentSettingsVm;
     private ChBrowser.Services.Ng.NgService? _ngService;
+    /// <summary>OpenAI 互換 API クライアント (LLM 連携)。設定画面の接続確認、および将来の
+    /// 要約・翻訳機能で共有して使う。OnStartup 完了前は null。</summary>
+    private LlmClient? _llmClient;
     private ChBrowser.Services.Storage.ShortcutStorage? _shortcutStorage;
     private ChBrowser.Services.Shortcuts.ShortcutManager? _shortcutManager;
 
@@ -202,8 +206,11 @@ public partial class App : Application
         var ngStorage = new NgStorage(paths);
         _ngService    = new ChBrowser.Services.Ng.NgService(ngStorage);
 
+        // LLM 連携 (OpenAI 互換 API)。設定の接続確認 + 将来の AI 機能で共有。
+        _llmClient    = new LlmClient();
+
         var openTabsStorage = new OpenTabsStorage(paths);
-        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths, openTabsStorage);
+        var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths, openTabsStorage, _llmClient);
         _mainVm          = mainVm;
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
@@ -524,6 +531,7 @@ public partial class App : Application
         _urlExpander?.Dispose();
         _imageCache?.Dispose();
         _imageMeta?.Dispose();
+        _llmClient?.Dispose();
         _monazilla?.Dispose();
         base.OnExit(e);
     }
@@ -535,7 +543,7 @@ public partial class App : Application
     /// <summary>SettingsViewModel をアプリ Service への適用コールバック付きで組み立てる。</summary>
     public SettingsViewModel CreateSettingsViewModel()
     {
-        if (_configStorage is null || _imageCache is null || _paths is null || _monazilla is null || _mainVm is null || _themeService is null)
+        if (_configStorage is null || _imageCache is null || _paths is null || _monazilla is null || _mainVm is null || _themeService is null || _llmClient is null)
             throw new InvalidOperationException("App services are not yet initialized");
 
         var vm = new SettingsViewModel(
@@ -552,7 +560,13 @@ public partial class App : Application
             reloadAllCssAction:       () => _mainVm!.ReloadAllPaneCss(_themeService),
             extractDefaultCssAction:  ExtractDefaultThemeFiles,
             clearCookiesAction:       ClearDonguriCookiesNow,
-            loginNowAction:           LoginDonguriNow);
+            loginNowAction:           LoginDonguriNow,
+            // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
+            testLlmConnectionAction:  async settings =>
+            {
+                var result = await _llmClient.TestConnectionAsync(settings).ConfigureAwait(true);
+                return (result.Ok, result.Message);
+            });
         _currentSettingsVm = vm;
         // 起動時試行の最終状態を設定画面にも反映 (= ウィンドウ開いた瞬間に「ログイン済」/「認証失敗 (...)」が見える)。
         if (_mainVm is not null) SetLoginStatus(_mainVm, _mainVm.DonguriLoginStatus);

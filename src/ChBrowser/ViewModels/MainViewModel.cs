@@ -37,6 +37,8 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ChBrowser.Services.Ng.NgService  _ng;
     private readonly DataPaths                        _paths;
     private readonly OpenTabsStorage               _openTabsStorage;
+    /// <summary>LLM 連携クライアント。スレッドの「AI」ボタンからチャットウィンドウを開く際に使う。</summary>
+    private readonly ChBrowser.Services.Llm.LlmClient _llmClient;
 
     // ----- ペイン用コレクション -----
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
@@ -166,6 +168,11 @@ public sealed partial class MainViewModel : ObservableObject
         if (value is not null) _lastActivePane = ActivePane.Thread;
         RefreshAddressBarUrl();
         SyncStatusFromActivePane();
+
+        // AI チャットウィンドウが開いていれば、新しい SelectedThreadTab に合わせて context を切替
+        // (= ウィンドウは開いたまま、タイトル / system prompt / toolset が動的に更新される)。
+        // 実装は MainViewModel.Threads.cs 側 (= _aiChatViewModel フィールドのオーナー)。
+        SwitchAiChatContextTo(value);
     }
 
     private void OnActiveThreadTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -366,7 +373,8 @@ public sealed partial class MainViewModel : ObservableObject
         DonguriService       donguri,
         ChBrowser.Services.Ng.NgService ng,
         DataPaths            paths,
-        OpenTabsStorage   openTabsStorage)
+        OpenTabsStorage   openTabsStorage,
+        ChBrowser.Services.Llm.LlmClient llmClient)
     {
         _bbsmenuClient   = bbsmenuClient;
         _subjectClient   = subjectClient;
@@ -378,6 +386,7 @@ public sealed partial class MainViewModel : ObservableObject
         _ng              = ng;
         _paths           = paths;
         _openTabsStorage = openTabsStorage;
+        _llmClient       = llmClient;
         Favorites        = new FavoritesViewModel(favoritesStorage);
 
         Favorites.Changed += RefreshFavoritesHtml;

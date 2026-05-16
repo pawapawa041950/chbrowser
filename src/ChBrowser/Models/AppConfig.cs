@@ -29,6 +29,21 @@ public sealed record AppConfig
     /// <summary>HTTP タイムアウト (秒)。次回起動時に反映 (HttpClient.Timeout は実行中変更不可のため)。</summary>
     public int TimeoutSec { get; init; } = 30;
 
+    // ---- AI (LLM 連携) ----
+    /// <summary>OpenAI 互換 API のエンドポイント URL。base URL (例: https://api.openai.com/v1) でも
+    /// /chat/completions まで含めた完全 URL でも可。空ならLLM機能は未設定扱い。</summary>
+    public string LlmApiUrl { get; init; } = "";
+
+    /// <summary>LLM API キー (Bearer トークン)。現状 config.json に平文保存。空なら Authorization ヘッダ無しで送る
+    /// (= ローカル LLM サーバ等、認証不要なエンドポイント向け)。</summary>
+    public string LlmApiKey { get; init; } = "";
+
+    /// <summary>使用する LLM のモデル名 (例: gpt-4o-mini)。リクエストの "model" フィールドに入る。</summary>
+    public string LlmModel { get; init; } = "";
+
+    /// <summary>モデルのコンテキストサイズ (トークン数)。将来の要約・翻訳機能で入力長を制御するために保持する。</summary>
+    public int LlmContextSize { get; init; } = 8192;
+
     // ---- 認証 (どんぐりメール認証) ----
     /// <summary>どんぐり (5ch) のメール認証アドレス。空文字なら認証無し (= 通常の acorn だけで投稿)。
     /// 設定がある状態でアプリ起動するとバックグラウンドでログインを試行する。</summary>
