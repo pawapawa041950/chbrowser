@@ -3727,6 +3727,53 @@
                     break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
+                case 'resyncThreadState':
+                    // WebView2 が C# に通知しないまま内部 reload (= ProcessFailed recovery 等) され、
+                    // IIFE state が全部初期値に戻ってしまったケースの復元。C# の ThreadDisplayPane が
+                    // 2 回目以降の 'ready' を検出したときだけ送られる (= 通常フローでは流れない)。
+                    // ペイロードに「現在の C# 側 tab 状態すべて」が入っているので、JS 内部 state を
+                    // 全リセットしてから再初期化する。冪等。
+                    (function () {
+                        closeFrom(0);
+                        const root = document.getElementById('posts');
+                        if (root) root.innerHTML = '';
+                        allPosts            = [];
+                        postsByNumber       = new Map();
+                        currentReverseIndex = new Map();
+                        currentIdMap        = new Map();
+                        currentWatchoiMap   = new Map();
+                        sessionNewPostNumbers.clear();
+                        lastDeltaMark       = null;
+                        markPostNumber      = null;
+                        pendingScrollTarget = null;
+
+                        if (typeof msg.viewMode === 'string'
+                            && Object.prototype.hasOwnProperty.call(VIEW_MODE_STRATEGIES, msg.viewMode)) {
+                            viewMode = msg.viewMode;
+                        }
+                        if (Array.isArray(msg.ownPostNumbers)) {
+                            ownPostNumbers = new Set(msg.ownPostNumbers);
+                        }
+                        if (msg.filter && typeof msg.filter === 'object') {
+                            currentFilter = {
+                                textQuery:   typeof msg.filter.textQuery === 'string' ? msg.filter.textQuery : '',
+                                popularOnly: msg.filter.popularOnly === true,
+                                mediaOnly:   msg.filter.mediaOnly   === true,
+                            };
+                        }
+                        debugLog('resyncThreadState: viewMode=' + viewMode
+                            + ', posts=' + (Array.isArray(msg.posts) ? msg.posts.length : 0)
+                            + ', markPostNumber=' + msg.markPostNumber
+                            + ', scrollTarget=' + msg.scrollTarget);
+                        if (Array.isArray(msg.posts) && msg.posts.length > 0) {
+                            // appendPosts は incremental=false 経路で渡された posts を初期描画する。
+                            // appendPosts 内で markNewPosts / decorateMeta / scrollToTarget 等もまとめて走る。
+                            window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, false);
+                        } else if (typeof msg.markPostNumber === 'number') {
+                            markPostNumber = msg.markPostNumber;
+                        }
+                    })();
+                    break;
                 case 'setFilter':
                     // C# 側 ThreadFilter record の JSON 反映。新条件は currentFilter のフィールドを
                     // 増やすだけで対応できる (= 同時に postMatchesFilter にも条件評価を追加する)。

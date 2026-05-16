@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -61,6 +62,14 @@ public partial class ThreadDisplayPane : UserControl
 
     // ---- WebView2 → JS メッセージ受信 ----
 
+    /// <summary>WebView ごとに「thread.js の notifyReady を一度でも受け取った」フラグを保持する。
+    /// 初回 ready = 通常の初期 nav 完了 (= DP 経由で posts 等が流れてくるので resync 不要)。
+    /// 2 回目以降 ready = WebView 内部 reload (= ProcessFailed recovery / メモリ discard 等で IIFE 再実行) で
+    /// JS state が初期値に戻ったケース。C# は値変化していない DP を再発火しないため、ここで明示的に
+    /// resync を投げて posts / viewMode / filter / 等を再構築する。
+    /// ConditionalWeakTable を使うので、WebView2 が Dispose されればエントリも GC される。</summary>
+    private static readonly ConditionalWeakTable<WebView2, object> _seenInitialReady = new();
+
     private void ThreadViewWebView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         var (type, payload) = WebMessageBridge.TryParseMessage(e);
@@ -71,6 +80,12 @@ public partial class ThreadDisplayPane : UserControl
             return;
         }
         if (WebMessageBridge.TryDispatchCommonMessage(sender, type, payload, "スレッド表示領域")) return;
+
+        if (type == "ready")
+        {
+            HandleThreadReady(sender);
+            return;
+        }
 
         switch (type)
         {
@@ -110,6 +125,27 @@ public partial class ThreadDisplayPane : UserControl
             // 旧 imageRetry / videoDownloadStart 内の ResetThumbFailedState 等はこれに集約。
             case "mediaSlotRetry":     HandleMediaSlotRetry(payload); break;
         }
+    }
+
+    // ---- WebView 内部 reload 検出 → 全 state 再 push ----
+
+    /// <summary>thread.js の <c>notifyReady</c> 受信ハンドラ。WebView ごとに「初回ready 済か」を
+    /// <see cref="_seenInitialReady"/> で追跡し、2 回目以降は WebView 内部 reload
+    /// (= ProcessFailed recovery / メモリ discard 等で IIFE 再実行) と判定して全 state を再 push する。
+    /// 初回は通常の DP 経路で posts 等が流れてくるので resync は不要 (= 二重描画になる)。</summary>
+    private void HandleThreadReady(object sender)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!_seenInitialReady.TryGetValue(wv, out _))
+        {
+            _seenInitialReady.Add(wv, new object());
+            return;
+        }
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (tab.Posts.Count == 0) return; // 何も持っていないなら resync しても意味がない
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[threadReady] {tab.Header}: WebView 内部 reload を検出 → resync (posts={tab.Posts.Count}, viewMode={tab.ViewMode})");
+        _ = ChBrowser.Controls.WebView2Helper.SendThreadResyncAsync(wv, tab);
     }
 
     // ---- 画像 GET 失敗の tracker 記録 / リセット (Step D) ----

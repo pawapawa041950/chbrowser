@@ -182,6 +182,45 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ThreadResync: WebView 内部 reload で JS state が消えたケースの全 state 再 push。
+    //
+    // 通常各種 DP は「値変化時のみ発火」なので、WebView2 が C# に通知しないまま reload
+    // (= ProcessFailed recovery / メモリ圧迫による discard 等) されると、JS の allPosts /
+    // viewMode / filter / 等が初期値に戻ったまま C# は再 push しない真っ白状態に陥る。
+    // ThreadDisplayPane が 2 回目以降の 'ready' 受信で本メソッドを呼び、tab 内の現在 state を
+    // 1 つの resyncThreadState メッセージに束ねて送り JS 側で全再構築させる。
+    // ------------------------------------------------------------
+    internal static System.Threading.Tasks.Task SendThreadResyncAsync(
+        WebView2 wv,
+        ChBrowser.ViewModels.ThreadTabViewModel tab)
+    {
+        var filter = tab.Filter;
+        // enum (ThreadViewMode) は JsonStringEnumConverter(camelCase) によって
+        // "flat" / "tree" / "dedupTree" に変換され、JS 側 VIEW_MODE_STRATEGIES のキーと一致する。
+        var json = JsonSerializer.Serialize(new
+        {
+            type           = "resyncThreadState",
+            viewMode       = tab.ViewMode,
+            posts          = tab.Posts,
+            scrollTarget   = (int?)tab.ScrollTargetPostNumber,
+            markPostNumber = (int?)tab.MarkPostNumber,
+            ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
+            filter = new
+            {
+                textQuery   = filter?.TextQuery ?? "",
+                popularOnly = filter?.PopularOnly == true,
+                mediaOnly   = filter?.MediaOnly   == true,
+            },
+        }, PostJsonOptions);
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[threadResync] serialize: tab.Posts={tab.Posts.Count}, ViewMode={tab.ViewMode}, "
+            + $"MarkPostNumber={tab.MarkPostNumber?.ToString() ?? "null"}, "
+            + $"ScrollTarget={tab.ScrollTargetPostNumber?.ToString() ?? "null"}, "
+            + $"OwnPosts={tab.OwnPostNumbers.Count}");
+        return PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
     // OwnPostsUpdate (スレ表示: 「自分の書き込み」マークのトグル増分通知)
     // ------------------------------------------------------------
 
