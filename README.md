@@ -20,7 +20,7 @@ Windows 用の 5ch.io 専用ブラウザ。
 - Windows 11 : 追加モジュールなしに動作可。
 - (ソースからビルドする場合) : [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)が必要
 
-配布バイナリは .NET 8 ランタイム内包しており、初回起動時に展開処理が走るため少々起動に時間がかかります。
+配布バイナリは .NET 8 ランタイム内包しており、初回起動時に %TEMP% への展開処理が走るため少々起動に時間がかかります (2 回目以降のキャッシュ済み起動は高速)。
 Windows10でもWebView2を入れれば理論上動作しますが、動作確認をとっていません。
 
 ## ビルド
@@ -30,10 +30,16 @@ dotnet publish src/ChBrowser/ChBrowser.csproj `
     -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeAllContentForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true
+    -p:PublishReadyToRun=true
 ```
 
-出力: `src/ChBrowser/bin/Release/net8.0-windows/win-x64/publish/ChBrowser.exe`
+出力: `src/ChBrowser/bin/Release/net8.0-windows/win-x64/publish/ChBrowser.exe` (約 180MB)
+
+ビルドオプションの方針:
+- `PublishSingleFile=true` + `--self-contained true`: 1 つの EXE で配布、.NET ランタイムも同梱 (= 配布先 PC にインストール不要)
+- `IncludeAllContentForSelfExtract=true`: 初回起動時にすべてのコンテンツを `%TEMP%` に展開 (= WPF / WebView2 のリフレクションが安定動作)
+- `PublishReadyToRun=true`: 事前 AOT コンパイル。サイズが 30〜50% 増える代わりに、起動時の JIT コストが減って 2 回目以降の起動が速い
+- 圧縮 (`EnableCompressionInSingleFile`) は付けない: サイズより起動速度を優先
 
 ## 実行 / データの保存場所
 
