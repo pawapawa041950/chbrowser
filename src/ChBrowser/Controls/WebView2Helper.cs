@@ -255,6 +255,18 @@ public static partial class WebView2Helper
         var core = wv.CoreWebView2;
         if (core is null) return;
 
+        // WebView2 のレンダー/ブラウザプロセスがクラッシュ等で落ちた時にここで検知してログ出力。
+        // 全 WebView2 共通の観測専用 hook (= 自動リカバリは state を持つ層側 = ThreadDisplayPane 等で個別に行う)。
+        // 経験上「スレ表示が真っ白になる」事象は RenderProcessExited で起きており、購読していないと無音で停止する。
+        core.ProcessFailed += (s, e) =>
+        {
+            int frames = 0;
+            try { frames = e.FrameInfosForFailedProcess?.Count ?? 0; } catch { /* SDK バージョン差吸収 */ }
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[WebView2.ProcessFailed] kind={e.ProcessFailedKind}, reason={e.Reason}, " +
+                $"exitCode={e.ExitCode}, description='{e.ProcessDescription}', frameInfos={frames}");
+        };
+
         // Phase 2: キャッシュフォルダを HTTPS 仮想ホスト化する (画像 / 動画サムネ / 動画本体すべて共通)。
         // https://chbrowser-cache.local/images/aa/<hash>.jpg
         // https://chbrowser-cache.local/videos/aa/<hash>.mp4

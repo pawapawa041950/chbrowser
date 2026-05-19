@@ -127,6 +127,68 @@ public partial class ThreadDisplayPane : UserControl
         }
     }
 
+    // ---- WebView2 プロセスクラッシュ検出 → 自動 Reload (1 回まで) ----
+
+    /// <summary>WebView ごとの「ProcessFailed → 自動 Reload を何回試みたか」のカウンタ。
+    /// 同じ WebView でクラッシュ → Reload → クラッシュ … を無限に繰り返すと CPU 食う / ログを汚すので、
+    /// 1 回までに制限する。2 回目以降はログのみ残してユーザのタブ閉じ/開き直しに委ねる。
+    /// ConditionalWeakTable なので WebView2 が Dispose されればエントリも GC される。</summary>
+    private static readonly ConditionalWeakTable<WebView2, RetryBox> _processFailedRetries = new();
+    private sealed class RetryBox { public int Count; }
+
+    /// <summary>WebView2 の CoreWebView2 が初期化された直後に呼ばれる (XAML 配線)。
+    /// ここで <c>ProcessFailed</c> を購読し、レンダープロセスがクラッシュした場合に自動で <c>Reload()</c> する。
+    /// Reload 後に JS が再実行 → <c>notifyReady</c> 発火 → <see cref="_seenInitialReady"/> 既登録なので
+    /// <see cref="HandleThreadReady"/> が resync を発火 → state 復元、という連鎖で復活する。</summary>
+    private void ThreadViewWebView_CoreInitialized(object? sender, CoreWebView2InitializationCompletedEventArgs e)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!e.IsSuccess) return;
+        var core = wv.CoreWebView2;
+        if (core is null) return;
+
+        core.ProcessFailed += (s, pe) =>
+        {
+            // (1) 復旧不能なもの (= BrowserProcessExited) は Reload してもダメなのでログのみ。
+            //     ユーザにタブを閉じて開き直してもらうしかない。
+            if (pe.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    "[threadProcessFailed] BrowserProcessExited: WebView2 制御不能、タブを閉じて開き直してください");
+                return;
+            }
+
+            // (2) RenderProcessExited / RenderProcessUnresponsive / FrameRenderProcessExited は Reload で復旧見込みあり。
+            //     ただし無限ループ防止のため WebView ごとに 1 回まで。
+            var box = _processFailedRetries.GetValue(wv, _ => new RetryBox());
+            if (box.Count >= 1)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[threadProcessFailed] kind={pe.ProcessFailedKind}: 既に 1 回 Reload 済 → 諦め (タブを閉じて開き直してください)");
+                return;
+            }
+            box.Count++;
+
+            var header = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[threadProcessFailed] {header}: kind={pe.ProcessFailedKind} → Reload() で自動復旧試行");
+
+            // ProcessFailed は worker thread から来ることがあるので UI スレッドに marshal してから Reload。
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (wv.CoreWebView2 is { } c) c.Reload();
+                }
+                catch (Exception ex)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write(
+                        $"[threadProcessFailed] Reload() 例外: {ex.Message}");
+                }
+            }));
+        };
+    }
+
     // ---- WebView 内部 reload 検出 → 全 state 再 push ----
 
     /// <summary>thread.js の <c>notifyReady</c> 受信ハンドラ。WebView ごとに「初回ready 済か」を
