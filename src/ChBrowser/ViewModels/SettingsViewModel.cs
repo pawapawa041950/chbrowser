@@ -27,6 +27,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _hiDpiMode             = "Unaware";
     [ObservableProperty] private bool   _enableKakikomiLog     = true;
     [ObservableProperty] private bool   _restoreOpenTabsOnStartup = true;
+    /// <summary>(デバッグ用) 自動リカバリを止めて分析ログを出力するか。全般カテゴリ最下部のチェック。</summary>
+    [ObservableProperty] private bool   _debugDisableRecovery  = false;
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
     // AI カテゴリ (LLM 連携)
@@ -205,6 +207,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         HiDpiMode                    = initial.HiDpiMode;
         EnableKakikomiLog            = initial.EnableKakikomiLog;
         RestoreOpenTabsOnStartup  = initial.RestoreOpenTabsOnStartup;
+        DebugDisableRecovery         = initial.DebugDisableRecovery;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
         LlmApiUrl                    = initial.LlmApiUrl;
@@ -342,6 +345,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         HiDpiMode                   = HiDpiMode,
         EnableKakikomiLog           = EnableKakikomiLog,
         RestoreOpenTabsOnStartup = RestoreOpenTabsOnStartup,
+        DebugDisableRecovery        = DebugDisableRecovery,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
         LlmApiUrl                   = LlmApiUrl,

@@ -44,5 +44,16 @@
         <CheckBox Content="終了時に開いていたタブを次回起動時に開く"
                   IsChecked="{Binding RestoreOpenTabsOnStartup, Mode=TwoWay}"
                   Margin="0,0,0,4" />
+
+        <!-- (デバッグ) スレ表示真っ白現象の分析用。ON の間だけ自動リカバリを止めて分析ログを出力する。 -->
+        <Separator Margin="0,20,0,12" />
+        <TextBlock Text="デバッグ" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <CheckBox Content="リカバリ機能を止めてデバッグログを出力する"
+                  IsChecked="{Binding DebugDisableRecovery, Mode=TwoWay}"
+                  Margin="0,0,0,4" />
+        <TextBlock Text="本チェックをONにするとデバッグのためバグ発生時のリカバリ機能を止めます。通常は使用しないでください。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
     </StackPanel>
 </UserControl>

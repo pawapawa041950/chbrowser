@@ -545,6 +545,9 @@ public sealed partial class MainViewModel : ObservableObject
     {
         CurrentConfig = config;
 
+        // (デバッグ) 自動リカバリ停止 + 分析ログのフラグを実行時へ同期 (起動時 + 設定即時反映の両経路を通る)。
+        ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog = config.DebugDisableRecovery;
+
         // タブ幅を即時反映。文字数指定なら 1 文字 ≈ 14px + パディング、px 指定なら値そのまま (下限 60)。
         ThreadListTabWidth = ComputeTabWidth(
             config.ThreadListTabWidthMode, config.ThreadListTabWidthChars, config.ThreadListTabWidthPx);
@@ -559,6 +562,7 @@ public sealed partial class MainViewModel : ObservableObject
             imageSizeThresholdMb  = config.ImageSizeThresholdMb,
             idHighlightThreshold  = config.IdHighlightThreshold,
             metaPopupClickOnly    = config.MetaPopupClickOnly,
+            debug                 = config.DebugDisableRecovery,
         });
 
         // Phase 11b: 3 ペイン向け。各ペインは自分の JSON だけ受け取り、setConfig.openOnSingleClick を解釈する。

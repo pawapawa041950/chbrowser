@@ -32,6 +32,10 @@
             <Separator />
             <MenuItem Header="次スレ候補検索" Click="ThreadTabFindNext_Click" />
             <MenuItem Header="ログ削除"       Click="ThreadTabDeleteLog_Click" />
+            <!-- (デバッグ) 真っ白現象の再現検証用。デバッグチェック ON のときだけ Opened で Visible にする。 -->
+            <Separator Tag="debugSuspend" Visibility="Collapsed" />
+            <MenuItem Tag="debugSuspend" Header="このタブを suspend (デバッグ)"
+                      Click="ThreadTabDebugSuspend_Click" Visibility="Collapsed" />
         </ContextMenu>
 
         <!-- レス番号クリック / 右クリックで開くコンテキストメニュー (Phase 25 で HTML 版から WPF ネイティブに移行)。
@@ -336,6 +340,7 @@
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"
                                   CoreWebView2InitializationCompleted="ThreadViewWebView_CoreInitialized"
+                                  IsVisibleChanged="ThreadViewWebView_IsVisibleChanged"
                                   Unloaded="ThreadViewWebView_Unloaded"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
                 </DataTemplate>

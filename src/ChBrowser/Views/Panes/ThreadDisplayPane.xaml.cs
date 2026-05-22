@@ -147,8 +147,22 @@ public partial class ThreadDisplayPane : UserControl
         var core = wv.CoreWebView2;
         if (core is null) return;
 
+        // (デバッグ) suspend コマンドが対象タブの WebView2 を引けるよう tab→wv を控える。
+        if (wv.DataContext is ThreadTabViewModel tabForReg)
+            _tabToWebView.AddOrUpdate(tabForReg, wv);
+
         core.ProcessFailed += (s, pe) =>
         {
+            // (0) デバッグモード (リカバリ無効) では自動復旧せず、観測ログだけ残す
+            //     (= 真っ白現象を素のまま観測するための解析ビルド相当の挙動を、フラグで切替可能にしたもの)。
+            if (ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog)
+            {
+                var dh = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[threadProcessFailed] {dh}: kind={pe.ProcessFailedKind} → デバッグモードのため自動復旧しません (ログのみ)");
+                return;
+            }
+
             // (1) 復旧不能なもの (= BrowserProcessExited) は Reload してもダメなのでログのみ。
             //     ユーザにタブを閉じて開き直してもらうしかない。
             if (pe.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
@@ -205,9 +219,112 @@ public partial class ThreadDisplayPane : UserControl
         }
         if (wv.DataContext is not ThreadTabViewModel tab) return;
         if (tab.Posts.Count == 0) return; // 何も持っていないなら resync しても意味がない
+        if (ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog)
+        {
+            // デバッグモードでは内部 reload を検知しても resync しない (= リカバリ無効で素の挙動を観測)。
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[threadReady] {tab.Header}: WebView 内部 reload を検出 (デバッグモードのため resync しません)");
+            return;
+        }
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[threadReady] {tab.Header}: WebView 内部 reload を検出 → resync (posts={tab.Posts.Count}, viewMode={tab.ViewMode})");
         _ = ChBrowser.Controls.WebView2Helper.SendThreadResyncAsync(wv, tab);
+    }
+
+    // ---- (デバッグ) タブ可視復帰時のレンダラ生存プローブ + suspend 再現コマンド ----
+
+    /// <summary>(デバッグ) suspend コマンドが対象タブの WebView2 を引くための tab→wv マップ。
+    /// <see cref="ThreadViewWebView_CoreInitialized"/> で AddOrUpdate する。
+    /// ConditionalWeakTable なので tab / wv が GC されればエントリも消える。</summary>
+    private static readonly ConditionalWeakTable<ThreadTabViewModel, WebView2> _tabToWebView = new();
+
+    /// <summary>(デバッグ専用) スレ WebView2 が可視化された瞬間に発火。デバッグモード ON のときだけ、
+    /// 「タブ表示復帰時にレンダラがまだ生きているか」を能動的に確認する。サイレント discard は
+    /// ProcessFailed を出さないので、ここで pull 型に観測しないと検知できない (= 真っ白現象の主犯候補)。</summary>
+    private void ThreadViewWebView_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (!ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog) return; // 平常時は無効
+        if (e.NewValue is not true) return;                                       // 可視化された瞬間のみ
+        if (sender is not WebView2 wv) return;
+
+        var header   = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
+        var liveTabs = (DataContext as MainViewModel)?.ThreadTabs.Count ?? -1;
+
+        // WebView2 系プロセスの本数 / 総ワーキングセット (= メモリ圧迫の裏取り用)。
+        // システム上の msedgewebview2 全体の概算 (他アプリの WebView2 も含みうる点に注意)。
+        long memMb = 0; int procCount = 0;
+        try
+        {
+            foreach (var p in System.Diagnostics.Process.GetProcessesByName("msedgewebview2"))
+            {
+                using (p) { memMb += p.WorkingSet64; procCount++; }
+            }
+            memMb /= (1024 * 1024);
+        }
+        catch { /* プロセス列挙失敗は無視 */ }
+
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[visProbe] {header}: 可視化 (liveTabs={liveTabs}, webview2Proc={procCount}, webview2Mem≈{memMb}MB) → レンダラ生存確認");
+        _ = ProbeRendererAliveAsync(wv, header);
+    }
+
+    /// <summary>(デバッグ専用) ExecuteScript で window.chbDiag() を呼び、レンダラの生存と保持レス数を確認する。
+    /// レンダラが discard / hang していると script はタイムアウトする (= "discard の疑い" として記録)。
+    /// 返り値が <c>null</c> なら「レンダラは応答するが thread.js が居ない (= about:blank 化等)」を意味する。</summary>
+    private static async Task ProbeRendererAliveAsync(WebView2 wv, string header)
+    {
+        try
+        {
+            if (wv.CoreWebView2 is null)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[visProbe] {header}: CoreWebView2=null (未初期化)");
+                return;
+            }
+            var scriptTask = wv.CoreWebView2.ExecuteScriptAsync("window.chbDiag ? window.chbDiag() : null");
+            var winner     = await Task.WhenAny(scriptTask, Task.Delay(2000)).ConfigureAwait(true);
+            if (winner != scriptTask)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[visProbe] {header}: ExecuteScript 2s TIMEOUT → レンダラ無応答 (discard/hang の疑い)");
+                return;
+            }
+            var result = await scriptTask.ConfigureAwait(true); // 戻りは JSON 文字列 (例: {"posts":161,...} / null)
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[visProbe] {header}: ExecuteScript OK result={result}");
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[visProbe] {header}: ExecuteScript 例外 {ex.GetType().Name}: {ex.Message} → レンダラ異常の疑い");
+        }
+    }
+
+    /// <summary>(デバッグ専用) タブ右クリック「このタブを suspend」。対象タブの WebView2 を
+    /// <see cref="CoreWebView2.TrySuspendAsync"/> で suspend し、discard 類似挙動を能動的に再現する。
+    /// TrySuspend は非表示 (Collapsed) タブのみ成功し、可視化で自動 resume される点に注意 (= 真の discard とは差がありうる)。</summary>
+    private void ThreadTabDebugSuspend_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
+        if (!_tabToWebView.TryGetValue(tab, out var wv) || wv.CoreWebView2 is null)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[debugSuspend] {tab.Header}: WebView2 未取得 (suspend 不可)");
+            return;
+        }
+        _ = SuspendTabAsync(wv, tab.Header);
+    }
+
+    private static async Task SuspendTabAsync(WebView2 wv, string header)
+    {
+        try
+        {
+            var ok = await wv.CoreWebView2.TrySuspendAsync().ConfigureAwait(true);
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[debugSuspend] {header}: TrySuspendAsync={ok} (可視化すると自動 resume されます)");
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[debugSuspend] {header}: 例外 {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // ---- 画像 GET 失敗の tracker 記録 / リセット (Step D) ----
@@ -921,6 +1038,14 @@ public partial class ThreadDisplayPane : UserControl
     {
         if (sender is not ContextMenu cm) return;
         if (cm.DataContext is not ThreadTabViewModel tab) return;
+
+        // (デバッグ) suspend 項目 + 区切り線は、デバッグモード ON のときだけ表示。
+        var debug = ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog;
+        foreach (var obj in cm.Items)
+        {
+            if (obj is Control c && (c.Tag as string) == "debugSuspend")
+                c.Visibility = debug ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         foreach (var item in TabClickHelper.EnumerateAllMenuItems(cm))
         {

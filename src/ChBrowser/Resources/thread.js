@@ -321,6 +321,10 @@
         } catch (_) { /* never throw */ }
     }
 
+    // 「スレ表示真っ白」現象の分析用フラグ。設定画面「全般」のデバッグチェック ON 時だけ true
+    // (setConfig.debug で C# から同期)。OFF の間は分析フックは沈黙する。
+    let DEBUG_DIAG = false;
+
 
     // ---------- escape helpers ----------
     function escapeHtml(s) {
@@ -3817,6 +3821,7 @@
                         // モード切替時は開いているポップアップを一旦全閉じ (= 旧モードで開いた残りを片付ける)。
                         closeFrom(0);
                     }
+                    if (typeof msg.debug === 'boolean') DEBUG_DIAG = msg.debug;
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();
                     break;
@@ -3875,6 +3880,34 @@
             }
         });
     }
+
+    // ---------- 「スレ表示真っ白」現象 分析用フック ----------
+    // C# 側 (ThreadDisplayPane) が「タブ可視復帰時」に ExecuteScript で window.chbDiag() を呼び、
+    // レンダラの生存と保持レス数を確認する。レンダラが discard されているとこの呼び出し自体が
+    // タイムアウト/失敗する (= C# 側で "discard の疑い" として記録)。常時公開 (= 軽量・無害)。
+    window.chbDiag = function () {
+        var root = document.getElementById('posts');
+        return {
+            posts: (typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1,
+            dom:   root ? root.childElementCount : -1,
+            ready: document.readyState,
+            vis:   document.visibilityState,
+        };
+    };
+    // レンダラが生きていれば可視/不可視の切替で必ず発火する。逆に discard 後の可視化では発火しない
+    // (= ログの "沈黙" がそのまま discard の証拠になる)。DEBUG_DIAG ON のときだけ出力。
+    document.addEventListener('visibilitychange', function () {
+        if (!DEBUG_DIAG) return;
+        var root = document.getElementById('posts');
+        debugLog('[visChange] state=' + document.visibilityState
+            + ' posts=' + ((typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1)
+            + ' dom=' + (root ? root.childElementCount : -1));
+    });
+    window.addEventListener('pageshow', function (e) {
+        if (!DEBUG_DIAG) return;
+        debugLog('[pageshow] persisted=' + (e && e.persisted)
+            + ' posts=' + ((typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1));
+    });
 
     // ---------- ready signal ----------
     function notifyReady() {

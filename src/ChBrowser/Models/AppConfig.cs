@@ -22,6 +22,11 @@ public sealed record AppConfig
     /// 即時反映 — 設定変更タイミングではなく次回起動・終了で効く。</summary>
     public bool RestoreOpenTabsOnStartup { get; init; } = true;
 
+    /// <summary>(デバッグ用) ON の間だけ「スレ表示真っ白」現象の分析ログを出力し、
+    /// バグ発生時の自動リカバリ (ProcessFailed→Reload / 内部 reload→resync) を止める。
+    /// 既定 OFF。通常運用では使わない。即時反映 (= <see cref="ChBrowser.Services.Logging.DebugFlags"/> と同期)。</summary>
+    public bool DebugDisableRecovery { get; init; } = false;
+
     // ---- 通信 ----
     /// <summary>カスタム User-Agent。空文字なら既定 (Monazilla/1.00 ChBrowser/&lt;ver&gt;)。即時反映。</summary>
     public string UserAgentOverride { get; init; } = "";
