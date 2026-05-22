@@ -224,6 +224,7 @@
                                   ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadListWebView_WebMessageReceived"
+                                  Unloaded="ThreadListWebView_Unloaded"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>

@@ -1,4 +1,5 @@
 # --- Build outputs ---
+doc/
 bin/
 obj/
 [Bb]uild/

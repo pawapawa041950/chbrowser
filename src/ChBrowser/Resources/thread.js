@@ -2926,9 +2926,31 @@
         }
     }
 
+    /** ポップアップを破棄する前に、配下の <video>/<audio> を停止してリソースを解放する。
+     *  DOM から remove するだけでは Chromium が再生 (音声) / デコーダ / ネットワーク / バッファを
+     *  即座に手放さず、メモリ・帯域を保持し続けることがある。そのため明示的に
+     *  pause → src 除去 (<source> 子も) → load() で「ソース無し」状態にして解放を確定させる。
+     *  冪等・never throw。 */
+    function releaseMediaEl(m) {
+        try {
+            m.pause();
+            m.removeAttribute('src');
+            while (m.firstChild) m.removeChild(m.firstChild); // <source> 子要素も除去
+            m.load();                                         // resource selection を空で再実行 → 解放確定
+        } catch (_) { /* never throw */ }
+    }
+    function releaseMediaIn(root) {
+        if (!root) return;
+        if (root.tagName === 'VIDEO' || root.tagName === 'AUDIO') releaseMediaEl(root);
+        if (typeof root.querySelectorAll === 'function') {
+            root.querySelectorAll('video, audio').forEach(releaseMediaEl);
+        }
+    }
+
     function closeFrom(level) {
         while (popups.length > level) {
             const p = popups.pop();
+            releaseMediaIn(p.el); // 再生中の動画/音声を停止しリソース解放 (= 閉じた後の音残り / メモリ保持を防ぐ)
             p.el.remove();
         }
         // 閉じた階層に紐付いていた timer は無効
@@ -3908,6 +3930,32 @@
         debugLog('[pageshow] persisted=' + (e && e.persisted)
             + ' posts=' + ((typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1));
     });
+
+    // ---------- メディアリーク防止オブザーバ ----------
+    // インライン再生中の <video>/<audio> は、再描画 / NG非表示 / ビューモード切替 / resync の
+    // innerHTML='' など多数の経路で #posts から DOM 除去される。これらは closeFrom (ポップアップ) を
+    // 通らないため、除去の瞬間を MutationObserver で一元的に拾い、リソース (デコーダ / ネットワーク /
+    // バッファ) を確実に解放する。追加ノードは無視するので大量 append でもコストは小さい。
+    (function setupMediaReleaseObserver() {
+        if (typeof MutationObserver !== 'function') return;
+        const postsRoot = document.getElementById('posts');
+        if (!postsRoot) {
+            // スクリプトが #posts 構築前に走った場合は DOMContentLoaded 後に再試行。
+            document.addEventListener('DOMContentLoaded', setupMediaReleaseObserver, { once: true });
+            return;
+        }
+        try {
+            const mo = new MutationObserver(function (mutations) {
+                for (const mu of mutations) {
+                    if (!mu.removedNodes || mu.removedNodes.length === 0) continue;
+                    mu.removedNodes.forEach(function (n) {
+                        if (n.nodeType === 1) releaseMediaIn(n); // Element ノードのみ
+                    });
+                }
+            });
+            mo.observe(postsRoot, { childList: true, subtree: true });
+        } catch (_) { /* never throw */ }
+    })();
 
     // ---------- ready signal ----------
     function notifyReady() {

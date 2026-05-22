@@ -9,6 +9,7 @@ using ChBrowser.Models;
 using ChBrowser.Services.WebView2;
 using ChBrowser.ViewModels;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace ChBrowser.Views.Panes;
 
@@ -54,6 +55,25 @@ public partial class ThreadListPane : UserControl
         if (DataContext is not MainViewModel main) return;
         if (main.SelectedThreadListTab?.Board is not { } board) return;
         main.ToggleBoardFavorite(board);
+    }
+
+    // ---- WebView2 のライフサイクル管理 ----
+
+    /// <summary>スレ一覧タブが ThreadListTabs から削除されると、ItemsControl が対応 DataTemplate コンテナを
+    /// 可視ツリーから外し Unloaded が発火する。WebView2 は native HWND / レンダラプロセスを抱える
+    /// IDisposable なので、ここで明示 Dispose しないと「WebView2: ChBrowser thread list」プロセスが
+    /// GC / ファイナライザ任せで残存し、タブを閉じてもメモリ・プロセスが解放されない
+    /// (= スレ表示ペイン側には元々あった処理が、スレ一覧ペイン側に欠落していた)。
+    /// ThreadDisplayPane.ThreadViewWebView_Unloaded と同じ流儀:
+    /// DataContext が ThreadListTabs にまだ存在する場合のみ一時的 unload (= ペイン構造の再構成等) と
+    /// みなして Dispose しない (= 偽陽性で動いている WebView2 を壊さない)。</summary>
+    private void ThreadListWebView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not WebView2 wv) return;
+        var ctx = wv.DataContext as ThreadListTabViewModel;
+        if (ctx is not null && DataContext is MainViewModel main && main.ThreadListTabs.Contains(ctx)) return;
+        try { wv.Dispose(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ThreadListPane] WebView2 Dispose failed: {ex.Message}"); }
     }
 
     // ---- WebView2 → JS メッセージ受信 ----
