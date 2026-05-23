@@ -34,17 +34,22 @@ public partial class AiPanel : UserControl
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        // VM の LlmApiKey が他経路 (= 初期ロード等) で変化したら PasswordBox に反映する。
-        if (e.PropertyName == nameof(SettingsViewModel.LlmApiKey)) SyncFromVm();
+        // VM 側の各 API キーが他経路 (= 初期ロード等) で変化したら PasswordBox に反映する。
+        if (e.PropertyName is nameof(SettingsViewModel.LlmApiKey)
+                           or nameof(SettingsViewModel.WorkerApiKey)) SyncFromVm();
     }
 
-    /// <summary>VM → PasswordBox へ流し込む。<see cref="_suppressSync"/> で循環防止。</summary>
+    /// <summary>VM → 各 PasswordBox へ流し込む。<see cref="_suppressSync"/> で循環防止。
+    /// AI モデル (LlmApiKey) と (分けたときの) 作業モデル (WorkerApiKey) の 2 つを同期する。</summary>
     private void SyncFromVm()
     {
         if (DataContext is not SettingsViewModel vm) return;
-        if (ApiKeyInput.Password == vm.LlmApiKey) return;
         _suppressSync = true;
-        try   { ApiKeyInput.Password = vm.LlmApiKey ?? ""; }
+        try
+        {
+            if (ApiKeyInput.Password       != (vm.LlmApiKey ?? ""))    ApiKeyInput.Password       = vm.LlmApiKey ?? "";
+            if (WorkerApiKeyInput.Password != (vm.WorkerApiKey ?? "")) WorkerApiKeyInput.Password = vm.WorkerApiKey ?? "";
+        }
         finally { _suppressSync = false; }
     }
 
@@ -53,5 +58,12 @@ public partial class AiPanel : UserControl
         if (_suppressSync) return;
         if (DataContext is not SettingsViewModel vm) return;
         vm.LlmApiKey = ApiKeyInput.Password;
+    }
+
+    private void WorkerApiKeyInput_PasswordChanged(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_suppressSync) return;
+        if (DataContext is not SettingsViewModel vm) return;
+        vm.WorkerApiKey = WorkerApiKeyInput.Password;
     }
 }

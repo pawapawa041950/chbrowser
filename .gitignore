@@ -1,5 +1,5 @@
 # --- Build outputs ---
-doc/
+/doc/**
 bin/
 obj/
 [Bb]uild/

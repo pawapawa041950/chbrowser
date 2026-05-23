@@ -91,7 +91,7 @@ public sealed class ThreadToolset
     /// <summary>attached スレの板名 (= プロンプト構築側で参照する)。attached 無しなら空文字。</summary>
     public string BoardName => _attached?.BoardName ?? "";
 
-    /// <summary>attached スレが有るかどうか。BuildAiSystemPrompt がモード分岐に使う。</summary>
+    /// <summary>attached スレが有るかどうか (= スレ文脈ありモードかの分岐に使う)。</summary>
     public bool HasAttached => _attached is not null;
 
     public ThreadToolset(
@@ -430,7 +430,9 @@ public sealed class ThreadToolset
                 function = new
                 {
                     name        = "list_threads",
-                    description = "指定した板のスレッド一覧を返す (subject.txt ベース、勢い順)。" +
+                    description = "指定した板のスレッド一覧を返す (subject.txt ベース)。" +
+                                  "各スレに post_count (レス数) と momentum (勢い = 1 日あたりレス数の概算) が付く。" +
+                                  "「勢いが高い / 伸びているスレを探して」のような依頼には sort=\"momentum\" を指定して上位を取る。" +
                                   "**2 つの使い方を意識して呼び分けること**:\n" +
                                   "(a) **単純な単語マッチで十分な場合** → keyword を指定。例: スレタイにそのまま「初音ミク」と入ってる確率が高いケース。\n" +
                                   "(b) **曖昧 / 略称 / ジャンル判定が必要な場合** → **keyword を省略**して多めに取得し、" +
@@ -448,6 +450,7 @@ public sealed class ThreadToolset
                             board_url = new { type = "string",  description = "対象板の URL (list_boards の board_url をそのまま渡せる)" },
                             keyword   = new { type = "string",  description = "スレタイの部分一致フィルタ (大小文字無視)。曖昧 / 略称 / ジャンル判定が必要なケースでは省略すること (= AI が手動で取捨選択するモード)" },
                             limit     = new { type = "integer", description = $"返す最大件数 (keyword 指定時の既定 {DefaultListLimit}, keyword 省略時の既定 {ThreadsScanDefaultLimit}, 上限 {MaxListLimit})" },
+                            sort      = new { type = "string",  description = "並び順。\"default\" (subject.txt 順) / \"momentum\" (勢い順 = 1 日あたりレス数の多い順) / \"post_count\" (レス数の多い順)。勢いの高いスレを上位に取りたいときは \"momentum\"。" },
                         },
                         required = new[] { "board_url" },
                     },
@@ -1192,6 +1195,11 @@ public sealed class ThreadToolset
         if (args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
             limit = Math.Clamp(lim, 1, MaxListLimit);
 
+        // 並び順: default (subject.txt 順) / momentum (勢い順) / post_count (レス数順)
+        var sortMode = "default";
+        if (args.TryGetProperty("sort", out var sortEl) && sortEl.ValueKind == JsonValueKind.String)
+            sortMode = (sortEl.GetString() ?? "default").Trim().ToLowerInvariant();
+
         var board   = _dataLoader.ResolveBoard(host, dir);
         var threads = await _dataLoader.ListThreadsAsync(board, ct).ConfigureAwait(false);
 
@@ -1201,9 +1209,19 @@ public sealed class ThreadToolset
             filtered = threads.Where(t =>
                 (t.Title ?? "").IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0);
         }
-        var picked    = filtered.Take(limit).ToArray();
+
+        var matchedList = filtered.ToList();
+        var matched     = matchedList.Count;
+
+        IEnumerable<ThreadInfo> ordered = sortMode switch
+        {
+            "momentum"   => matchedList.OrderByDescending(t => ComputeMomentum(t.Key, t.PostCount)),
+            "post_count" => matchedList.OrderByDescending(t => t.PostCount),
+            _            => matchedList,   // default = subject.txt 順 (= 板の既定の並び)
+        };
+
+        var picked    = ordered.Take(limit).ToArray();
         var totalAll  = threads.Count;
-        var matched   = string.IsNullOrEmpty(keyword) ? totalAll : filtered.Count();
         var truncated = picked.Length < matched;
 
         var list = picked.Select(t => new
@@ -1211,6 +1229,7 @@ public sealed class ThreadToolset
             key         = t.Key,
             title       = t.Title,
             post_count  = t.PostCount,
+            momentum    = ComputeMomentum(t.Key, t.PostCount),   // 勢い = 1 日あたりレス数の概算
             order       = t.Order,
             thread_url  = $"https://{board.Host}/test/read.cgi/{board.DirectoryName}/{t.Key}/",
         }).ToArray();
@@ -1236,6 +1255,19 @@ public sealed class ThreadToolset
             hint,
             threads  = list,
         }, JsonOpts);
+    }
+
+    /// <summary>勢い (= 1 日あたりレス数の概算) を計算する。スレ <paramref name="key"/> は作成 epoch(秒)。
+    /// 勢い = post_count ÷ 経過日数。作成直後の異常値を避けるため経過は最低 1 分でクランプする。
+    /// key が数値でない / 取得不能なら 0 を返す。</summary>
+    private static int ComputeMomentum(string key, int postCount)
+    {
+        if (!long.TryParse(key, out var createdSec) || createdSec <= 0) return 0;
+        var nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var ageSec = nowSec - createdSec;
+        if (ageSec < 60) ageSec = 60;   // 立ったばかりのスレで勢いが極端に大きく出るのを防ぐ
+        var perDay = postCount * 86400.0 / ageSec;
+        return (int)System.Math.Round(perDay);
     }
 
     private async Task<string> OpenThreadInAppAsync(string argsJson)

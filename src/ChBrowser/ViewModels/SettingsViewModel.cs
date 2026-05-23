@@ -36,9 +36,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _llmApiKey             = "";
     [ObservableProperty] private string _llmModel              = "";
     [ObservableProperty] private int    _llmContextSize        = 8192;
-    /// <summary>AI パネルに表示する接続確認結果。表示専用で ConfigStorage には保存しない。
+    /// <summary>戦略検討モデル (= 左カラム / メイン) の接続確認結果。表示専用で ConfigStorage には保存しない。
     /// "OK — ..." / "NG — ..." / "確認中…" / "未確認" のいずれかで始まる (= 色分け converter の規約)。</summary>
-    [ObservableProperty] private string _llmConnectionStatus   = "未確認";
+    [ObservableProperty] private string _llmConnectionStatus    = "未確認";
+    /// <summary>作業モデル (= 右カラム) の接続確認結果。表示専用。色分け converter の規約は上と同じ。</summary>
+    [ObservableProperty] private string _workerConnectionStatus = "未確認";
+    // AI エージェント (3 レイヤー・doc/ai-agent-design.md)。メインモデルは Llm* (AI モデル) を流用。
+    [ObservableProperty] private bool   _separateWorkerModel    = false;
+    [ObservableProperty] private string _workerApiUrl           = "";
+    [ObservableProperty] private string _workerApiKey           = "";
+    [ObservableProperty] private string _workerModel            = "";
+    [ObservableProperty] private int    _workerContextSize      = 0;
+    [ObservableProperty] private bool   _allowParallelWorkers   = false;
     // 認証カテゴリ (どんぐりメール認証)
     [ObservableProperty] private string _donguriEmail          = "";
     [ObservableProperty] private string _donguriPassword       = "";
@@ -129,6 +138,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// 最小リクエストを投げ、結果を <see cref="LlmConnectionStatus"/> に反映する。
     /// 実行中は CanExecute=false で再入を防ぐ (AsyncRelayCommand の既定挙動)。</summary>
     public IAsyncRelayCommand TestLlmConnectionCommand { get; }
+    /// <summary>作業モデル (右カラム) の「接続確認」ボタン用。</summary>
+    public IAsyncRelayCommand TestWorkerConnectionCommand { get; }
 
     // ---- Phase 11d: デザイン編集 ----
     public IRelayCommand<string>? OpenCssFileCommand { get; }
@@ -214,6 +225,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         LlmApiKey                    = initial.LlmApiKey;
         LlmModel                     = initial.LlmModel;
         LlmContextSize               = initial.LlmContextSize;
+        SeparateWorkerModel          = initial.SeparateWorkerModel;
+        WorkerApiUrl                 = initial.WorkerApiUrl;
+        WorkerApiKey                 = initial.WorkerApiKey;
+        WorkerModel                  = initial.WorkerModel;
+        WorkerContextSize            = initial.WorkerContextSize;
+        AllowParallelWorkers         = initial.AllowParallelWorkers;
         DonguriEmail                 = initial.DonguriEmail;
         DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
@@ -274,6 +291,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         // AsyncRelayCommand は実行中 CanExecute=false になるので連打 / 再入は自動で防がれる。
         TestLlmConnectionCommand = new AsyncRelayCommand(TestLlmConnectionAsync,
                                                         () => _testLlmConnectionAction is not null);
+        TestWorkerConnectionCommand = new AsyncRelayCommand(TestWorkerConnectionAsync,
+                                                        () => _testLlmConnectionAction is not null);
 
         RefreshCacheSizeDisplay();
     }
@@ -301,6 +320,25 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>作業モデル (右カラム) の「接続確認」本体。実効設定 (= 未入力欄は戦略検討モデルにフォールバック)
+    /// を <see cref="LlmSettings.WorkerFromConfig"/> で組み立ててテストする。</summary>
+    private async System.Threading.Tasks.Task TestWorkerConnectionAsync()
+    {
+        if (_testLlmConnectionAction is null) return;
+        FlushPendingSave();
+        WorkerConnectionStatus = "確認中…";
+        try
+        {
+            var settings = LlmSettings.WorkerFromConfig(ToConfig());
+            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
+            WorkerConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
+        }
+        catch (Exception ex)
+        {
+            WorkerConnectionStatus = $"NG — {ex.Message}";
+        }
+    }
+
     private void OnAnyPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (_suppressSave) return;
@@ -311,7 +349,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(RestartRequired):
             case nameof(CacheSizeDisplay):
             case nameof(DonguriLoginStatus):    // ログイン状態は表示専用 (ConfigStorage に書かない)
-            case nameof(LlmConnectionStatus):   // LLM 接続確認結果も表示専用
+            case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
+            case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -352,6 +391,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         LlmApiKey                   = LlmApiKey,
         LlmModel                    = LlmModel,
         LlmContextSize              = LlmContextSize,
+        SeparateWorkerModel         = SeparateWorkerModel,
+        WorkerApiUrl                = WorkerApiUrl,
+        WorkerApiKey                = WorkerApiKey,
+        WorkerModel                 = WorkerModel,
+        WorkerContextSize           = WorkerContextSize,
+        AllowParallelWorkers        = AllowParallelWorkers,
         DonguriEmail                = DonguriEmail,
         DonguriPassword             = DonguriPassword,
         PopularThreshold            = PopularThreshold,
