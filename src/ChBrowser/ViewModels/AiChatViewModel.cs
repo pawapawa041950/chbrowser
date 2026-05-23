@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
+using ChBrowser.Services.Agent;
 using ChBrowser.Services.Llm;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -42,6 +44,10 @@ public sealed partial class AiChatViewModel : ObservableObject
 
     private readonly LlmClient      _llmClient;
     private readonly LlmSettings    _settings;
+
+    /// <summary>B0 seam: 実行する Agent エンジン (doc/ai-agent-design.md §5)。現状は既存ループを包む
+    /// <see cref="ExistingAgentEngine"/> のみ。新エンジン完成後は config でここを差し替えるだけで切替わる。</summary>
+    private readonly IAgentEngine   _engine;
     /// <summary>スレッドにアタッチされたチャットなら ThreadToolset を保持し、スレッド読み取りツールを提示する。
     /// アタッチされていない (= スレッド非依存) チャットでは <see cref="ThreadToolset.HasAttached"/> = false の
     /// インスタンスを保持する。<see cref="SwitchContext"/> で別 attached / 非 attached に差し替え可能。</summary>
@@ -109,6 +115,10 @@ public sealed partial class AiChatViewModel : ObservableObject
         // system プロンプト (= ツール案内入り) を履歴の先頭に固定。以降 user/assistant/tool が積まれる。
         // SwitchContext で _history[0] を別 system に差し替える運用 (= 履歴は保持しつつ attached だけ切替)。
         _history.Add(new LlmChatMessage("system", systemPrompt));
+
+        // B0 seam: 既存の単一ループ本体 (RunLegacyTurnAsync) を ExistingAgentEngine で包む。
+        // ループ本体はこの VM 内に残したまま委譲するだけ (= 既存コードを移動・改変しない)。
+        _engine = new ExistingAgentEngine(RunLegacyTurnAsync);
 
         SendCommand = new AsyncRelayCommand(SendAsync, () => !string.IsNullOrWhiteSpace(InputText));
 
@@ -213,6 +223,16 @@ public sealed partial class AiChatViewModel : ObservableObject
         if (userText.Length == 0) return;
 
         InputText = "";
+        // B0 seam: 1 ユーザ送信 = エンジン 1 ターン。既定は既存ループ (ExistingAgentEngine)。
+        // 新エンジン完成後は _engine を差し替えるだけで切替わる (doc/ai-agent-design.md §5)。
+        await _engine.RunTurnAsync(userText, CancellationToken.None).ConfigureAwait(true);
+    }
+
+    /// <summary>既存の単一ループ実装 (= 旧 SendAsync の本体)。<see cref="ExistingAgentEngine"/> 経由で呼ばれる。
+    /// 挙動は B0 以前と不変。新エンジンはこれに一切触れず別実装として並走する (doc §5 / §7)。
+    /// <paramref name="ct"/> は B0 時点では既存ループが未対応のため未使用 (将来 D6 で配線)。</summary>
+    private async Task RunLegacyTurnAsync(string userText, CancellationToken ct)
+    {
         UserMessageAdded?.Invoke(userText);
         _history.Add(new LlmChatMessage("user", userText));
         _archive.RecordUserMessage(userText);
