@@ -18,6 +18,14 @@ public interface IAgentHost
     /// <summary>Strategist の plan レベル語り (区画外・折りたたみ作業エリア)。</summary>
     void StreamWork(string deltaMd);
 
+    /// <summary>現在の作業エリアの位置を返す (= rollback 用チェックポイント)。
+    /// ストリーミング中のラウンドが「最終回答」と判明したとき、作業エリアに流した分を巻き戻して
+    /// 本文へ移すために使う (= tool 呼び出しか最終回答かはラウンド完了まで確定しないため)。</summary>
+    int WorkCheckpoint();
+
+    /// <summary><see cref="WorkCheckpoint"/> で得た位置まで作業エリアを巻き戻す。</summary>
+    void RollbackWork(int checkpoint);
+
     /// <summary>dispatch_task 1 件 = 折りたたみ区画を開く (並列で複数可)。</summary>
     IWorkSection BeginWorkSection(string title);
 

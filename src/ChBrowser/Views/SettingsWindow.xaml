@@ -8,8 +8,8 @@
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}"
         Title="ChBrowser 設定"
-        Width="820" Height="560"
-        MinWidth="520" MinHeight="380"
+        Width="860" Height="560"
+        MinWidth="800" MinHeight="380"
         UseLayoutRounding="True"
         ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner">
@@ -110,9 +110,9 @@
         <!-- 中央: 左カテゴリ列 + GridSplitter + 右設定ペイン -->
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="ColCategories" Width="200" MinWidth="140" />
-                <ColumnDefinition Width="4" />
-                <ColumnDefinition Width="*" MinWidth="320" />
+                <!-- カテゴリ列は固定幅 (リサイズ不可)。右ペインのみ伸縮する。 -->
+                <ColumnDefinition x:Name="ColCategories" Width="140" />
+                <ColumnDefinition Width="*" MinWidth="620" />
             </Grid.ColumnDefinitions>
 
             <!-- 左ペイン: カテゴリ ListBox -->
@@ -133,14 +133,8 @@
                 </ListBox>
             </Border>
 
-            <GridSplitter Grid.Column="1"
-                          HorizontalAlignment="Stretch"
-                          VerticalAlignment="Stretch"
-                          ResizeDirection="Columns"
-                          Background="{x:Static SystemColors.ControlBrush}" />
-
             <!-- 右ペイン: ヘッダ + ContentControl で各パネル切替 -->
-            <Grid Grid.Column="2" Background="#FFFFFF">
+            <Grid Grid.Column="1" Background="#FFFFFF">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />

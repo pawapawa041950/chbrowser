@@ -7,77 +7,117 @@
              xmlns:conv="clr-namespace:ChBrowser.Converters"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <!-- ============================================================
+         用語統一 (AI カテゴリ内):
+           ・設定対象 = 「AI モデル」/「モデル」
+           ・2 役割   = 「戦略検討モデル」/「作業モデル」(英語 Strategist/Worker は使わない)
+           ・機能名   = 「AI チャット」
+           ・API 種別 = 「OpenAI 互換 API」
+         ============================================================ -->
     <UserControl.Resources>
         <conv:LlmStatusToBrushConverter x:Key="LlmStatusBrush" />
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <!-- フォーム行ラベル共通スタイル -->
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="Foreground" Value="#444" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
     </UserControl.Resources>
+
     <StackPanel>
 
-        <TextBlock Text="LLM 連携 (OpenAI 互換 API)" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBlock TextWrapping="Wrap"
-                   Foreground="#666"
-                   Margin="0,0,0,12">
-            OpenAI 互換の Chat Completions API に接続するための設定です。
+        <TextBlock Text="AI モデル" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,10">
+            AI チャットが使う OpenAI 互換 API の設定です。
             OpenAI 本体のほか、互換 API を提供するローカル LLM サーバ (LM Studio / Ollama / vLLM 等) も利用できます。
         </TextBlock>
 
-        <!-- API URL -->
-        <TextBlock Text="LLM API URL" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4">
-            base URL (例: https://api.openai.com/v1) でも、/chat/completions まで含む完全 URL でも可。
-        </TextBlock>
-        <TextBox Text="{Binding LlmApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                 Width="500"
-                 HorizontalAlignment="Left"
-                 Margin="0,0,0,12" />
-
-        <!-- API Key (PasswordBox: 肩越し閲覧対策。config.json には平文保存される点は注意書き参照) -->
-        <TextBlock Text="LLM API Key" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <PasswordBox x:Name="ApiKeyInput"
-                     Width="500"
-                     HorizontalAlignment="Left"
-                     PasswordChanged="ApiKeyInput_PasswordChanged"
-                     Margin="0,0,0,4" />
-        <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,0,0,12">
-            ※ API キーは現在 config.json に平文で保存されます。認証不要なローカル LLM サーバなら空欄で構いません。
+        <!-- 戦略検討モデルと作業モデルを分けるトグル (トップに配置) -->
+        <CheckBox Content="戦略検討モデルと作業モデルを分ける"
+                  IsChecked="{Binding SeparateWorkerModel, Mode=TwoWay}"
+                  Margin="0,0,0,2" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,12">
+            ON にすると右側に「作業モデル」の欄が追加され、戦略検討モデルと作業モデルを別々に設定できます。
+            戦略検討モデルは賢いモデル、作業モデルは速いモデルにするのが定石ですが、
+            作業モデルもツール呼び出しに失敗しない程度の賢さは必要です。
         </TextBlock>
 
-        <!-- モデル名 -->
-        <TextBlock Text="LLM 名 (モデル名)" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4">
-            リクエストの "model" に入る値 (例: gpt-4o-mini)。
-        </TextBlock>
-        <TextBox Text="{Binding LlmModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                 Width="320"
-                 HorizontalAlignment="Left"
-                 Margin="0,0,0,12" />
+        <!-- 2 カラム: 左 = モデル (分割時は戦略検討モデル) / 右 = 作業モデル (分割時のみ) -->
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-        <!-- Context Size -->
-        <TextBlock Text="Context Size (トークン数)" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4">
-            モデルのコンテキスト長。今後の要約・翻訳機能で入力長の制御に使います。
-        </TextBlock>
-        <TextBox Text="{Binding LlmContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                 Width="120"
-                 HorizontalAlignment="Left"
-                 Margin="0,0,0,16" />
+            <!-- 左カラム -->
+            <StackPanel Grid.Column="0" Width="260" Margin="0,0,20,0">
+                <!-- 分割時のみ「戦略検討モデル」見出しを出す (非分割時は上の「AI モデル」見出しで足りる) -->
+                <TextBlock Text="戦略検討モデル" FontWeight="SemiBold" Margin="0,0,0,6"
+                           Visibility="{Binding SeparateWorkerModel, Converter={StaticResource BoolToVis}}" />
 
-        <!-- 接続確認 -->
-        <TextBlock Text="接続確認" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <DockPanel HorizontalAlignment="Left" Margin="0,0,0,12">
-            <Button DockPanel.Dock="Right"
-                    Content="接続確認"
-                    Padding="14,4"
-                    Margin="8,0,0,0"
-                    Command="{Binding TestLlmConnectionCommand}"
-                    ToolTip="入力中の値を保存して、OpenAI 互換 API に最小リクエストを送り接続可否を確認します" />
-            <Border Background="#F8F8F8" BorderBrush="#DDD" BorderThickness="1" Padding="10,6"
-                    MinWidth="380">
-                <TextBlock Text="{Binding LlmConnectionStatus}"
-                           TextWrapping="Wrap"
-                           FontWeight="SemiBold"
+                <TextBlock Text="API URL" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding LlmApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Margin="0,0,0,6" />
+                <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
+                <PasswordBox x:Name="ApiKeyInput" PasswordChanged="ApiKeyInput_PasswordChanged" Margin="0,0,0,6" />
+                <TextBlock Text="モデル名 (例: gpt-4o-mini)" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding LlmModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Margin="0,0,0,6" />
+                <TextBlock Text="Context Size (トークン数)" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding LlmContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Width="120" HorizontalAlignment="Left" />
+
+                <Button Content="接続確認" Padding="14,3" HorizontalAlignment="Left" Margin="0,10,0,4"
+                        Command="{Binding TestLlmConnectionCommand}"
+                        ToolTip="このモデルの設定で OpenAI 互換 API に接続できるか確認します" />
+                <TextBlock Text="{Binding LlmConnectionStatus}" TextWrapping="Wrap" FontSize="11"
                            Foreground="{Binding LlmConnectionStatus, Converter={StaticResource LlmStatusBrush}}" />
-            </Border>
-        </DockPanel>
+            </StackPanel>
+
+            <!-- 右カラム: 作業モデル — 分割時のみ表示 -->
+            <StackPanel Grid.Column="1" Width="260"
+                        Visibility="{Binding SeparateWorkerModel, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="作業モデル" FontWeight="SemiBold" Margin="0,0,0,6" />
+
+                <TextBlock Text="API URL" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding WorkerApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Margin="0,0,0,6" />
+                <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
+                <PasswordBox x:Name="WorkerApiKeyInput" PasswordChanged="WorkerApiKeyInput_PasswordChanged" Margin="0,0,0,6" />
+                <TextBlock Text="モデル名" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding WorkerModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Margin="0,0,0,6" />
+                <TextBlock Text="Context Size (0=戦略検討モデルと同じ)" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding WorkerContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Width="120" HorizontalAlignment="Left" />
+
+                <Button Content="接続確認" Padding="14,3" HorizontalAlignment="Left" Margin="0,10,0,4"
+                        Command="{Binding TestWorkerConnectionCommand}"
+                        ToolTip="作業モデルの設定 (空欄は戦略検討モデルを継承) で接続できるか確認します" />
+                <TextBlock Text="{Binding WorkerConnectionStatus}" TextWrapping="Wrap" FontSize="11"
+                           Foreground="{Binding WorkerConnectionStatus, Converter={StaticResource LlmStatusBrush}}" />
+            </StackPanel>
+        </Grid>
+
+        <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,0,0,12">
+            ※ API キーは config.json に平文で保存されます。
+        </TextBlock>
+
+        <!-- 並列実行 -->
+        <Separator Margin="0,16,0,12" />
+        <CheckBox Content="作業モデルの並列実行を許可する"
+                  IsChecked="{Binding AllowParallelWorkers, Mode=TwoWay}"
+                  Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
+            複数の作業を同時に実行して高速化します。クラウドのモデルを利用している場合は ON を推奨します。
+            ローカルのモデルの場合、同時実行に強い環境を組んだことがわかっている方以外は OFF にしてください。
+        </TextBlock>
+
+        <TextBlock TextWrapping="Wrap" Foreground="#999" FontSize="11" Margin="0,0,0,0">
+            ※ 設定の変更は AI チャットウィンドウを開き直すと反映されます。
+        </TextBlock>
 
     </StackPanel>
 </UserControl>

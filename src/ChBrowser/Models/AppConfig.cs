@@ -49,6 +49,30 @@ public sealed record AppConfig
     /// <summary>モデルのコンテキストサイズ (トークン数)。将来の要約・翻訳機能で入力長を制御するために保持する。</summary>
     public int LlmContextSize { get; init; } = 8192;
 
+    // ---- AI エージェント (3 レイヤー・doc/ai-agent-design.md) ----
+    // AI チャットはこの 3 レイヤーエージェントで動く。既定は下記「モデル」(= Strategist 設定) 1 つで
+    // Strategist / Worker 両方を動かし、SeparateWorkerModel=true のとき Worker 設定を別に使う。
+    // 各欄が空なら上の Llm* (LLM 連携) 設定にフォールバックする。
+
+    /// <summary>戦略検討モデルと作業モデルを分けるか。false (既定) のときはメインの「AI モデル」(Llm*) 1 つで
+    /// Strategist / Worker 両方を動かす。true のとき下記 Worker 設定を別に使う。</summary>
+    public bool SeparateWorkerModel { get; init; } = false;
+
+    /// <summary>Worker (実行層) の OpenAI 互換 API URL。Strategist と別エンドポイント可。空なら未設定扱い。
+    /// <see cref="SeparateWorkerModel"/> が true のときだけ使われる。</summary>
+    public string WorkerApiUrl { get; init; } = "";
+    /// <summary>Worker の API キー (Bearer)。空なら Authorization 無しで送る。config.json に平文保存。</summary>
+    public string WorkerApiKey { get; init; } = "";
+    /// <summary>Worker のモデル名。</summary>
+    public string WorkerModel { get; init; } = "";
+    /// <summary>Worker のコンテキストサイズ (トークン数)。0 = メイン LLM (<see cref="LlmContextSize"/>) を継承。</summary>
+    public int WorkerContextSize { get; init; } = 0;
+
+    /// <summary>複数 Worker の並列実行を許可するか (D7)。既定 OFF (= 逐次・安全側)。
+    /// Strategist / Worker を同一ローカル LLM に向けている場合は競合するため OFF 推奨。
+    /// 別エンドポイントに分けている場合は ON で高速化。</summary>
+    public bool AllowParallelWorkers { get; init; } = false;
+
     // ---- 認証 (どんぐりメール認証) ----
     /// <summary>どんぐり (5ch) のメール認証アドレス。空文字なら認証無し (= 通常の acorn だけで投稿)。
     /// 設定がある状態でアプリ起動するとバックグラウンドでログインを試行する。</summary>

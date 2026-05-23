@@ -23,8 +23,9 @@ public enum TaskOutcome
 /// 他 2 つは heavy 判定の記述子。</summary>
 public sealed record Limits(int MaxToolCalls, ScanBreadth ScanBreadth, bool ReadsFullThread)
 {
-    /// <summary>limits 省略時のデフォルト (= light 確定)。doc §4.7。</summary>
-    public static Limits Default { get; } = new(MaxToolCalls: 6, ScanBreadth.Single, ReadsFullThread: false);
+    /// <summary>limits 省略時のデフォルト (= light 確定)。doc §4.7。
+    /// 既定 12 (= heavy 閾値 24 の半分。横断検索でも比較的すぐ予算切れしないよう確保)。</summary>
+    public static Limits Default { get; } = new(MaxToolCalls: 12, ScanBreadth.Single, ReadsFullThread: false);
 }
 
 /// <summary>Strategist → Worker に渡すタスク仕様。doc §2.3 / §4.7 (D12)。</summary>

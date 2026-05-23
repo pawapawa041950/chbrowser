@@ -13,8 +13,10 @@ public sealed class AgentToolContext
     /// <summary>plan の状態 (タスク一覧) と置換/マージのロジック。</summary>
     public PlanToolset Plan { get; }
 
-    /// <summary>スレ読み取り・横断・開く系。スレ非アタッチなら null。</summary>
-    public ThreadToolset? Thread { get; }
+    /// <summary>スレ読み取り・横断・開く系。スレ非アタッチなら null。
+    /// AI チャットの context 切替 (<c>AiChatViewModel.SwitchContext</c>) で差し替えられるよう set 可能。
+    /// <see cref="ToolRuntime"/> はこれを毎回参照するので、差し替えると以降の Worker が新スレを使う。</summary>
+    public ThreadToolset? Thread { get; set; }
 
     /// <summary>セッション共有の archive。並列 Worker から同時追記されるためスレッドセーフ化が要る (§5.3)。</summary>
     public ChatArchive Archive { get; }
