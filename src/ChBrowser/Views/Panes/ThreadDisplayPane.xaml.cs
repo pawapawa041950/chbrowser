@@ -215,6 +215,12 @@ public partial class ThreadDisplayPane : UserControl
         if (!_seenInitialReady.TryGetValue(wv, out _))
         {
             _seenInitialReady.Add(wv, new object());
+            // 初回 ready (= 初期 nav 完了・初回コンテンツ描画) の直後、可視タブなら描画サーフェスの
+            // 再 present を促す。これが「初回表示で真っ白のまま戻らない」現象
+            // (= WebView2 サーフェスを WPF ウィンドウへ合成する airspace/DWM の初回 present 取りこぼし)
+            // への主たる対策点。デバッグ ON 時は素の挙動を観測するためナッジしない。
+            if (!ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog && wv.IsVisible)
+                ScheduleRepresentNudge(wv);
             return;
         }
         if (wv.DataContext is not ThreadTabViewModel tab) return;
@@ -243,29 +249,60 @@ public partial class ThreadDisplayPane : UserControl
     /// ProcessFailed を出さないので、ここで pull 型に観測しないと検知できない (= 真っ白現象の主犯候補)。</summary>
     private void ThreadViewWebView_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (!ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog) return; // 平常時は無効
-        if (e.NewValue is not true) return;                                       // 可視化された瞬間のみ
+        if (e.NewValue is not true) return;       // 可視化された瞬間のみ
         if (sender is not WebView2 wv) return;
 
-        var header   = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
-        var liveTabs = (DataContext as MainViewModel)?.ThreadTabs.Count ?? -1;
-
-        // WebView2 系プロセスの本数 / 総ワーキングセット (= メモリ圧迫の裏取り用)。
-        // システム上の msedgewebview2 全体の概算 (他アプリの WebView2 も含みうる点に注意)。
-        long memMb = 0; int procCount = 0;
-        try
+        // デバッグ ON: 復旧/予防を一切行わず素の挙動を観測する (= プローブだけ走らせる)。
+        if (ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog)
         {
-            foreach (var p in System.Diagnostics.Process.GetProcessesByName("msedgewebview2"))
-            {
-                using (p) { memMb += p.WorkingSet64; procCount++; }
-            }
-            memMb /= (1024 * 1024);
-        }
-        catch { /* プロセス列挙失敗は無視 */ }
+            var header   = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
+            var liveTabs = (DataContext as MainViewModel)?.ThreadTabs.Count ?? -1;
 
-        ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[visProbe] {header}: 可視化 (liveTabs={liveTabs}, webview2Proc={procCount}, webview2Mem≈{memMb}MB) → レンダラ生存確認");
-        _ = ProbeRendererAliveAsync(wv, header);
+            // WebView2 系プロセスの本数 / 総ワーキングセット (= メモリ圧迫の裏取り用)。
+            // システム上の msedgewebview2 全体の概算 (他アプリの WebView2 も含みうる点に注意)。
+            long memMb = 0; int procCount = 0;
+            try
+            {
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("msedgewebview2"))
+                {
+                    using (p) { memMb += p.WorkingSet64; procCount++; }
+                }
+                memMb /= (1024 * 1024);
+            }
+            catch { /* プロセス列挙失敗は無視 */ }
+
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[visProbe] {header}: 可視化 (liveTabs={liveTabs}, webview2Proc={procCount}, webview2Mem≈{memMb}MB) → レンダラ生存確認");
+            _ = ProbeRendererAliveAsync(wv, header);
+            return;
+        }
+
+        // 平常時: 真っ白 (= サーフェスの present 取りこぼし) 対策。別タブから切り戻したときに
+        // 描画サーフェスの再 present を促す (初回表示は HandleThreadReady 側でナッジ済み)。
+        ScheduleRepresentNudge(wv);
+    }
+
+    /// <summary>真っ白現象 (= WebView2 のサーフェスが WPF ウィンドウへ初回 present されない
+    /// airspace/DWM の取りこぼし) への予防策。WebView2 の bounds を 1px だけ縮めて戻すことで、
+    /// WPF → CoreWebView2Controller.Bounds の再設定 → Chromium の再 present を強制する。
+    /// 「変更 → 復元」の間にレイアウト/描画パスを挟む必要があるため Dispatcher 2 段で実施する。
+    /// 1px の高さ変化は視覚的にはほぼ不可視で、レンダラ生存時は無害 (= 余分な再 present が走るだけ)。</summary>
+    private static void ScheduleRepresentNudge(WebView2 wv)
+    {
+        wv.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            // 既に隠れた / 破棄された / 未初期化ならナッジ不要。
+            if (!wv.IsVisible || wv.CoreWebView2 is null) return;
+            var orig    = wv.Margin;
+            var nudged  = new Thickness(orig.Left, orig.Top, orig.Right, orig.Bottom + 1);
+            wv.Margin = nudged;
+            // 復元はレイアウトパスを跨ぐよう Background 優先度で。間に別経路で Margin が
+            // 変わっていたら触らない (= 自分が付けた +1 のままのときだけ戻す)。
+            wv.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (wv.Margin == nudged) wv.Margin = orig;
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /// <summary>(デバッグ専用) ExecuteScript で window.chbDiag() を呼び、レンダラの生存と保持レス数を確認する。
