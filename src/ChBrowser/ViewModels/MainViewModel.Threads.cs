@@ -163,8 +163,10 @@ public sealed partial class MainViewModel
 
     /// <summary>スレ一覧でスレをダブルクリックしたとき呼ばれる。
     /// 既存タブがあればアクティブ化、無ければ新タブを作って dat を取得する。
-    /// <paramref name="stateHint"/> はスレ一覧側で表示していたマーク状態 (Dropped 等) を引き継ぐためのヒント。</summary>
-    public async Task OpenThreadAsync(Board board, ThreadInfo info, LogMarkState? stateHint = null)
+    /// <paramref name="stateHint"/> はスレ一覧側で表示していたマーク状態 (Dropped 等) を引き継ぐためのヒント。
+    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入り一括オープン等の
+    /// 多数追加でペインがチカチカするのを避けるため。ユーザの単発操作経路はデフォルトの true で OK)。</summary>
+    public async Task OpenThreadAsync(Board board, ThreadInfo info, LogMarkState? stateHint = null, bool activate = true)
     {
         // 既存タブがあれば、アクティブにした上で差分取得を走らせる
         foreach (var existing in ThreadTabs)
@@ -173,7 +175,7 @@ public sealed partial class MainViewModel
                 existing.Board.DirectoryName == board.DirectoryName &&
                 existing.ThreadKey           == info.Key)
             {
-                SelectedThreadTab = existing;
+                MaybeActivateThreadTab(existing, activate);
                 await RefreshThreadAsync(existing).ConfigureAwait(true);
                 return;
             }
@@ -200,7 +202,7 @@ public sealed partial class MainViewModel
         tab.State       = stateHint ?? LogMarkState.Cached;
 
         ThreadTabs.Add(tab);
-        SelectedThreadTab = tab;
+        MaybeActivateThreadTab(tab, activate);
 
         try
         {
@@ -1135,12 +1137,13 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>JS の openThread メッセージ (host/dir/key/title 同梱) からスレを開く。
-    /// 通常の板タブ・お気に入りディレクトリ展開タブの両方の経路でこれを呼ぶ。</summary>
-    public Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null)
+    /// 通常の板タブ・お気に入りディレクトリ展開タブの両方の経路でこれを呼ぶ。
+    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入り一括オープン用)。</summary>
+    public Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null, bool activate = true)
     {
         var board = ResolveBoard(host, directoryName, "");
         var info  = new ThreadInfo(key, title, 0, 0); // PostCount/Order は dat 取得後に意味を持たない
-        return OpenThreadAsync(board, info, stateHint);
+        return OpenThreadAsync(board, info, stateHint, activate);
     }
 
     /// <summary>(host, dir, key) で開いている ThreadTab を引く。なければ null。</summary>

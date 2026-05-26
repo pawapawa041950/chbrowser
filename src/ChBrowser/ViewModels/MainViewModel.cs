@@ -140,6 +140,21 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private ThreadListTabViewModel? _selectedThreadListTab;
     [ObservableProperty] private ThreadTabViewModel?     _selectedThreadTab;
 
+    /// <summary>open API 群の <c>activate</c> 引数共通実装。
+    /// <paramref name="activate"/> が true、または対象コレクションが「0 → 1」に遷移する状況
+    /// (= タブが唯一) のときだけ Selected*Tab を切り替える。一括オープン経路 (activate:false) で
+    /// 次々タブが追加されてもペインがチカチカしないよう、ここで一元判定する。</summary>
+    private void MaybeActivateThreadTab(ThreadTabViewModel tab, bool activate)
+    {
+        if (activate || ThreadTabs.Count == 1) SelectedThreadTab = tab;
+    }
+
+    /// <inheritdoc cref="MaybeActivateThreadTab"/>
+    private void MaybeActivateThreadListTab(ThreadListTabViewModel tab, bool activate)
+    {
+        if (activate || ThreadListTabs.Count == 1) SelectedThreadListTab = tab;
+    }
+
     // ステータスバー (= MainViewModel.StatusMessage) はアクティブペイン (Thread / ThreadList) の選択タブの
     // StatusMessage と同期する。タブを切り替えると過去のメッセージが復元され、ペインを切り替えても
     // そのペインの選択タブの最後のメッセージが見える。

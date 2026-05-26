@@ -19,8 +19,9 @@ public sealed partial class MainViewModel
     private const string NextThreadSearchTabIdPrefix = "nextthread:";
 
     /// <summary>板ダブルクリック時に呼ばれる。既存タブがあればそれを使い、
-    /// いずれにしても subject.txt を再取得して新着判定 (緑丸) を反映する。</summary>
-    public async Task LoadThreadListAsync(BoardViewModel boardVm)
+    /// いずれにしても subject.txt を再取得して新着判定 (緑丸) を反映する。
+    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadListTab を切り替えない (= お気に入り一括オープン用)。</summary>
+    public async Task LoadThreadListAsync(BoardViewModel boardVm, bool activate = true)
     {
         var board = boardVm.Board;
 
@@ -40,7 +41,7 @@ public sealed partial class MainViewModel
             };
             ThreadListTabs.Add(tab);
         }
-        SelectedThreadListTab = tab;
+        MaybeActivateThreadListTab(tab, activate);
 
         if (tab.IsBusy) return; // 二重 fetch ガード
 

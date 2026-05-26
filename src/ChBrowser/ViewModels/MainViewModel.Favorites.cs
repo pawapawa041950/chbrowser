@@ -215,14 +215,17 @@ public sealed partial class MainViewModel
 
         StatusMessage = $"お気に入りを一括オープン中... (板 {boards.Count} / スレ {threads.Count})";
 
+        // 一括オープン中は各タブの自動アクティブ化を抑止 (= 連続追加でペインが切り替わるとチカチカするため)。
+        // ※ activate:false はこの一括ループ自身にだけ作用する (= 進行中にユーザが板一覧から開いたタブは
+        // 普通通り activate:true で来るので、ユーザの単発操作はちゃんと選択される)。
         foreach (var fb in boards)
         {
             var board = ResolveBoard(fb.Host, fb.DirectoryName, fb.BoardName);
-            await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
+            await LoadThreadListAsync(new BoardViewModel(board), activate: false).ConfigureAwait(true);
         }
         foreach (var ft in threads)
         {
-            await OpenThreadFromListAsync(ft.Host, ft.DirectoryName, ft.ThreadKey, ft.Title).ConfigureAwait(true);
+            await OpenThreadFromListAsync(ft.Host, ft.DirectoryName, ft.ThreadKey, ft.Title, activate: false).ConfigureAwait(true);
         }
 
         StatusMessage = $"お気に入りオープン完了: 板 {boards.Count} / スレ {threads.Count}";
@@ -523,6 +526,8 @@ public sealed partial class MainViewModel
         }).ToList();
 
         // 結果を完了順ではなく開始順 (toOpen 順) に処理。
+        // 一括追加中はタブ自動アクティブ化を抑止 (activate:false) (= 連続追加でチカチカするため)。
+        // ※ ユーザが進行中に板一覧から開くタブは activate:true で来るので普通に選択される。
         var i = 0;
         foreach (var t in datTasks)
         {
@@ -530,7 +535,7 @@ public sealed partial class MainViewModel
             StatusMessage = $"お気に入りチェック: 更新スレ取得 {i}/{totalUpdate} (完了 {datDone}/{totalUpdate})";
             var (board, info, result, error) = await t.ConfigureAwait(true);
             if (result is null) continue;
-            try { await OpenThreadFromPrefetchedAsync(board, info, result).ConfigureAwait(true); }
+            try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
             catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
         }
 
@@ -539,6 +544,7 @@ public sealed partial class MainViewModel
 
     /// <summary>事前に取得済みの <see cref="DatFetchResult"/> からスレタブを作成 / 既存タブに反映する。
     /// HTTP は呼ばない (= 並列 fetch 済の結果を流し込むだけ)。
+    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入りチェックの一括用)。
     ///
     /// async である理由: 新規タブ作成ブランチで、ThreadTabs.Add 直後に AppendPostsWithNg を 2 回続けると、
     /// WPF が WebView2 を materialize する dispatcher cycle を回す前に LatestAppendBatch が 2 回上書きされ、
@@ -546,7 +552,7 @@ public sealed partial class MainViewModel
     /// <see cref="System.Threading.Tasks.Task.Yield"/> で 1 cycle 譲ると、Add → materialize → binding 確立まで
     /// 進んでから append が走るので問題なく両方届く。
     /// 既存タブブランチは tab が既に bound 済なので race にならない (= 同期処理で十分)。 </summary>
-    private async Task OpenThreadFromPrefetchedAsync(Board board, ThreadInfo info, DatFetchResult result)
+    private async Task OpenThreadFromPrefetchedAsync(Board board, ThreadInfo info, DatFetchResult result, bool activate = true)
     {
         // 既存タブがあれば差分を append して終わり
         var existing = FindThreadTab(board, info.Key);
@@ -594,7 +600,7 @@ public sealed partial class MainViewModel
         tab.State       = LogMarkState.Cached;
 
         ThreadTabs.Add(tab);
-        SelectedThreadTab = tab;
+        MaybeActivateThreadTab(tab, activate);
 
         // ★ race 回避 (1): Background 優先度で待ち、ItemsControl の DataTemplate materialize +
         //    AppendBatch DP の binding 確立 + binding の初期 push まで完了させる。
