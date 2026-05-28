@@ -1263,6 +1263,9 @@ public sealed class ThreadToolset
     private static int ComputeMomentum(string key, int postCount)
     {
         if (!long.TryParse(key, out var createdSec) || createdSec <= 0) return 0;
+        // 5ch お知らせスレは unixtime が 9 で始まる擬似的な将来日付 (2260 年代 = 9e9 秒以降)
+        // で建てられる。勢い計算上はゼロ扱いにする。9 桁の 9xxxxxxxx (1998 年代) はここでは除外。
+        if (createdSec >= 9_000_000_000L) return 0;
         var nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var ageSec = nowSec - createdSec;
         if (ageSec < 60) ageSec = 60;   // 立ったばかりのスレで勢いが極端に大きく出るのを防ぐ
