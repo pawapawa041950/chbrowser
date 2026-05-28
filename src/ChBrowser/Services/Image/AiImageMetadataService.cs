@@ -6,8 +6,11 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace ChBrowser.Services.Image;
 
@@ -164,6 +167,21 @@ public sealed class AiImageMetadataService
         if (chunks.TryGetValue("prompt", out var comfyPrompt))
         {
             var meta = TryParseComfyPrompt(comfyPrompt, "PNG", fileSize, w, h);
+            if (meta is { HasAiData: true }) return meta;
+        }
+
+        // ---- 戦略 3: NovelAI tEXt メタ (Software=NovelAI + Comment JSON / Description) ----
+        if (IsNovelAiChunks(chunks))
+        {
+            var meta = TryParseNovelAiPngTexts(chunks, "PNG", fileSize, w, h);
+            if (meta is { HasAiData: true }) return meta;
+        }
+
+        // ---- 戦略 4: alpha-LSB ステルス (tEXt が剥がされた画像でも NAI/SD WebUI 由来を救う) ----
+        var stealth = TryExtractStealthPngInfo(data);
+        if (!string.IsNullOrEmpty(stealth))
+        {
+            var meta = TryBuildFromStealthPayload(stealth, "PNG", fileSize, w, h);
             if (meta is { HasAiData: true }) return meta;
         }
 
@@ -720,6 +738,340 @@ public sealed class AiImageMetadataService
     private static readonly Regex ParamRegex = new(
         @"\s*(\w[\w \-\/]+):\s*(""(?:\\.|[^\\""])+""|[^,]*)(?:,|$)",
         RegexOptions.Compiled);
+
+    // -----------------------------------------------------------------
+    // NovelAI tEXt メタ
+    //
+    // NovelAI 生成 PNG は以下の tEXt を持つ:
+    //   Title           = "NovelAI generated image"
+    //   Description     = (人間可読の) プロンプト
+    //   Software        = "NovelAI"
+    //   Source          = "NovelAI Diffusion V4.5 C02D4F98" 等 (モデル名 + ハッシュ)
+    //   Generation time = 秒
+    //   Comment         = JSON ({ "prompt", "uc", "steps", "scale", "sampler", "noise_schedule",
+    //                              "seed", "width", "height", "cfg_rescale", "v4_prompt", "signed_hash", ... })
+    // SD WebUI infotext とは別形式なので IsSDWebUIInfotext は通らない (= ここで別経路を用意)。
+    // -----------------------------------------------------------------
+
+    private static bool IsNovelAiChunks(Dictionary<string, string> chunks)
+    {
+        if (chunks.TryGetValue("Software", out var sw)
+            && sw.IndexOf("NovelAI", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (chunks.TryGetValue("Source", out var src)
+            && src.IndexOf("NovelAI", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        return false;
+    }
+
+    private static AiImageMetadata? TryParseNovelAiPngTexts(
+        Dictionary<string, string> chunks, string format, long fileSize, int width, int height)
+    {
+        string? positive = chunks.TryGetValue("Description", out var desc) ? UnLatin1ToUtf8(desc) : null;
+        string? negative = null;
+        string? model    = chunks.TryGetValue("Source",      out var src)  ? UnLatin1ToUtf8(src)  : null;
+        var     parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (chunks.TryGetValue("Comment", out var commentLatin1))
+        {
+            var commentJson = UnLatin1ToUtf8(commentLatin1);
+            ParseNovelAiCommentJson(commentJson, ref positive, ref negative, parameters);
+        }
+
+        if (!parameters.ContainsKey("Size") && width > 0 && height > 0)
+            parameters["Size"] = $"{width}x{height}";
+        if (!string.IsNullOrEmpty(model)) parameters["Model"] = model!;
+        parameters["Generator"] = "NovelAI";
+
+        return new AiImageMetadata
+        {
+            Format      = format,
+            FileSize    = fileSize,
+            Width       = width,
+            Height      = height,
+            Positive    = positive,
+            Negative    = negative,
+            Model       = model,
+            Generator   = "NovelAI",
+            RawInfotext = null, // NovelAI は SD infotext 文字列形式を持たないので「全文表示」は出さない
+            Parameters  = parameters,
+        };
+    }
+
+    private static void ParseNovelAiCommentJson(string json,
+        ref string? positive, ref string? negative, Dictionary<string, string> parameters)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+
+            if (root.TryGetProperty("prompt", out var p) && p.ValueKind == JsonValueKind.String)
+            {
+                var s = p.GetString();
+                if (!string.IsNullOrEmpty(s)) positive = s;
+            }
+            if (root.TryGetProperty("uc", out var u) && u.ValueKind == JsonValueKind.String)
+            {
+                var s = u.GetString();
+                if (!string.IsNullOrEmpty(s)) negative = s;
+            }
+
+            CopyNovelAiParam(root, "steps",          parameters, "Steps");
+            CopyNovelAiParam(root, "scale",          parameters, "CFG scale");
+            CopyNovelAiParam(root, "sampler",        parameters, "Sampler");
+            CopyNovelAiParam(root, "noise_schedule", parameters, "Scheduler");
+            CopyNovelAiParam(root, "seed",           parameters, "Seed");
+            CopyNovelAiParam(root, "cfg_rescale",    parameters, "CFG rescale");
+
+            // width/height が Comment に明示されていれば IHDR より優先 (Comment 値は生成パラメータの真実)。
+            if (root.TryGetProperty("width",  out var wEl) && wEl.ValueKind == JsonValueKind.Number
+             && root.TryGetProperty("height", out var hEl) && hEl.ValueKind == JsonValueKind.Number)
+            {
+                parameters["Size"] = $"{wEl.GetInt32()}x{hEl.GetInt32()}";
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AiImageMeta] NovelAI comment parse failed: {ex.Message}");
+        }
+    }
+
+    private static void CopyNovelAiParam(JsonElement root, string srcKey,
+        Dictionary<string, string> parameters, string outKey)
+    {
+        if (parameters.ContainsKey(outKey)) return;
+        if (!root.TryGetProperty(srcKey, out var v)) return;
+        var s = v.ValueKind switch
+        {
+            JsonValueKind.String => v.GetString(),
+            JsonValueKind.Number => v.ToString(),
+            JsonValueKind.True   => "True",
+            JsonValueKind.False  => "False",
+            _ => null,
+        };
+        if (!string.IsNullOrEmpty(s)) parameters[outKey] = s!;
+    }
+
+    /// <summary>PNG tEXt は仕様上 Latin-1 だが、NovelAI / Comfy 等は UTF-8 バイトをそのまま入れる。
+    /// Latin-1 で復号した文字列をバイト列に戻し、UTF-8 として再解釈できれば置き換える (= 日本語等を救う)。</summary>
+    private static string UnLatin1ToUtf8(string latinDecoded)
+    {
+        if (string.IsNullOrEmpty(latinDecoded)) return latinDecoded;
+        var bytes = Encoding.Latin1.GetBytes(latinDecoded);
+        try
+        {
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+            return utf8.GetString(bytes);
+        }
+        catch
+        {
+            return latinDecoded;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // alpha-LSB ステルス (stealth_pngcomp / stealth_pnginfo)
+    //
+    // 仕様: https://github.com/NovelAI/novelai-image-metadata (nai_meta.py)
+    //   - 各 pixel の alpha LSB を MSB-first で連結したビット列。
+    //   - 重要: ビット順は **列優先 (column-major)**。numpy で alpha.T.reshape(-1) しているため、
+    //     col 0 を上から下、続いて col 1 を上から下、…という順序になる。
+    //     行優先で読むと magic ('stealth_pngcomp') が一致しないので注意。
+    //   - 先頭 15 byte (120 bits) が magic ("stealth_pngcomp" / "stealth_pnginfo")。
+    //   - 続く 32 bits が payload bit length (big-endian)。
+    //   - 続く payload bits が本体。pngcomp なら gzip 圧縮 JSON
+    //     ({Description, Software, Source, Comment, ...} 形式、tEXt と同等の内容)。
+    //     pnginfo なら無圧縮 UTF-8 文字列。
+    // alpha 直書きが無い PNG (color type 0/2/3) には適用しない。
+    // ashen-sensored/sd_webui_stealth_pnginfo (A1111 SD WebUI 拡張) は行優先で書く別仕様だが、
+    // 同じ magic を使うのでこのデコーダで誤検出する可能性はある。実害が出たら別途吸収する。
+    // -----------------------------------------------------------------
+
+    private static string? TryExtractStealthPngInfo(byte[] data)
+    {
+        // IHDR バイト 25 = color type。4 = Grayscale+Alpha / 6 = RGB+Alpha のみが alpha LSB 直書き対象。
+        if (data.Length < 26) return null;
+        int colorType = data[25];
+        if (colorType != 4 && colorType != 6) return null;
+
+        try
+        {
+            using var ms = new MemoryStream(data, writable: false);
+            var decoder = new PngBitmapDecoder(ms,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0) return null;
+            BitmapSource src = decoder.Frames[0];
+
+            if (src.Format != PixelFormats.Bgra32 && src.Format != PixelFormats.Pbgra32)
+                src = new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
+
+            int width  = src.PixelWidth;
+            int height = src.PixelHeight;
+            // 巨大画像でメモリ爆発しないよう上限 (8192x8192 ≒ 256 MiB) を付ける。
+            if ((long)width * height > 64L * 1024 * 1024) return null;
+
+            int stride = width * 4;
+            var pixels = new byte[(long)height * stride];
+            src.CopyPixels(pixels, stride, 0);
+
+            return DecodeStealthAlphaLsb(pixels, width, height);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AiImageMeta] stealth decode failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string? DecodeStealthAlphaLsb(byte[] bgra, int width, int height)
+    {
+        long totalPixels = (long)width * height;
+        if (totalPixels < (15 + 4) * 8) return null; // magic+length に届かない
+
+        // 列優先順 (NovelAI 仕様) で alpha LSB を走査するためのインデクサ。
+        // bit position n → 列 c = n / height, 行 r = n % height。
+        // bgra は行優先 BGRA32 ストレージなので、pixel offset = (r * width + c) * 4 + 3 (alpha)。
+        int bitPos = 0;
+        byte NextAlphaBit()
+        {
+            int bp = bitPos++;
+            int c  = bp / height;
+            int r  = bp % height;
+            return (byte)(bgra[(r * width + c) * 4 + 3] & 1);
+        }
+
+        // 15 byte の magic
+        var magicBuf = new byte[15];
+        for (int b = 0; b < 15; b++)
+        {
+            byte v = 0;
+            for (int k = 0; k < 8; k++) v = (byte)((v << 1) | NextAlphaBit());
+            magicBuf[b] = v;
+        }
+        var magic = Encoding.ASCII.GetString(magicBuf);
+        bool compressed;
+        if (magic == "stealth_pngcomp")      compressed = true;
+        else if (magic == "stealth_pnginfo") compressed = false;
+        else return null; // stealth_rgb* は alpha 経路では拾えないのでスコープ外
+
+        // 32bit BE payload bit length
+        uint payloadBits = 0;
+        for (int k = 0; k < 32; k++) payloadBits = (payloadBits << 1) | NextAlphaBit();
+        // sanity: 0 / 異常に大きい / 残り pixel に収まらない場合は弾く。8 MiB (= 67M bits) を上限とする。
+        if (payloadBits == 0 || payloadBits > 8u * 1024u * 1024u * 8u) return null;
+        if (bitPos + (long)payloadBits > totalPixels) return null;
+        // NovelAI 仕様では bit 数を 8 で整数除算する (= 余りはペイロード末尾の無効ビット)。
+        // 多くは 8 の倍数で書かれるが、念のため切り捨て採用 (= strict alignment 拒否はしない)。
+
+        int payloadByteCount = (int)(payloadBits / 8);
+        var payload = new byte[payloadByteCount];
+        for (int b = 0; b < payloadByteCount; b++)
+        {
+            byte v = 0;
+            for (int k = 0; k < 8; k++) v = (byte)((v << 1) | NextAlphaBit());
+            payload[b] = v;
+        }
+
+        if (!compressed)
+        {
+            try { return Encoding.UTF8.GetString(payload); }
+            catch { return null; }
+        }
+
+        try
+        {
+            using var srcStream  = new MemoryStream(payload, writable: false);
+            using var gz         = new GZipStream(srcStream, CompressionMode.Decompress);
+            using var sinkStream = new MemoryStream();
+            gz.CopyTo(sinkStream);
+            return Encoding.UTF8.GetString(sinkStream.ToArray());
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AiImageMeta] stealth gzip failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>ステルスで取り出した文字列ペイロードを解釈する。
+    /// 形式は実装ごとに以下のいずれか:
+    /// <list type="bullet">
+    /// <item>(a) NovelAI tEXt をそのまま JSON オブジェクト化したもの (Software/Description/Comment 等のキー)</item>
+    /// <item>(b) NovelAI の Comment JSON 直書き (prompt/uc/steps/sampler/seed/...)</item>
+    /// <item>(c) SD WebUI infotext 文字列 ("prompt\nNegative prompt: ...\nSteps: 20, ...")</item>
+    /// </list>
+    /// 既存の SD/NAI パーサに振り分けて <see cref="AiImageMetadata"/> を組み立てる。</summary>
+    private static AiImageMetadata? TryBuildFromStealthPayload(
+        string payload, string format, long fileSize, int width, int height)
+    {
+        var trimmed = payload.TrimStart();
+        if (trimmed.StartsWith("{"))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(payload);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    // (a) tEXt bundle 形式 (Software / Description / Comment が string で並ぶ)
+                    bool looksBundle = root.TryGetProperty("Software",    out _)
+                                    || root.TryGetProperty("Description", out _)
+                                    || root.TryGetProperty("Comment",     out _);
+                    if (looksBundle)
+                    {
+                        var bundle = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var prop in root.EnumerateObject())
+                            if (prop.Value.ValueKind == JsonValueKind.String)
+                                bundle[prop.Name] = prop.Value.GetString() ?? "";
+
+                        if (IsNovelAiChunks(bundle))
+                        {
+                            var m = TryParseNovelAiPngTexts(bundle, format, fileSize, width, height);
+                            if (m is { HasAiData: true }) return m;
+                        }
+                        foreach (var k in new[] { "parameters", "UserComment", "Comment" })
+                        {
+                            if (bundle.TryGetValue(k, out var v) && IsSDWebUIInfotext(v))
+                                return BuildResult(v, format, fileSize, width, height);
+                        }
+                    }
+
+                    // (b) NovelAI Comment 直書き (prompt + uc が同階層)
+                    if (root.TryGetProperty("prompt", out _) && root.TryGetProperty("uc", out _))
+                    {
+                        string? positive = null, negative = null;
+                        var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+                        ParseNovelAiCommentJson(payload, ref positive, ref negative, parameters);
+                        if (width > 0 && height > 0 && !parameters.ContainsKey("Size"))
+                            parameters["Size"] = $"{width}x{height}";
+                        parameters["Generator"] = "NovelAI";
+                        return new AiImageMetadata
+                        {
+                            Format     = format,
+                            FileSize   = fileSize,
+                            Width      = width,
+                            Height     = height,
+                            Positive   = positive,
+                            Negative   = negative,
+                            Generator  = "NovelAI",
+                            Parameters = parameters,
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AiImageMeta] stealth json parse failed: {ex.Message}");
+            }
+        }
+
+        // (c) SD WebUI infotext として試す。BuildResult が IsSDWebUIInfotext を内部で再判定する。
+        if (IsSDWebUIInfotext(payload))
+            return BuildResult(payload, format, fileSize, width, height);
+
+        return null;
+    }
 
     private static (string Positive, string Negative, Dictionary<string, string> Parameters)
         ParseSDWebUIInfotext(string text)
