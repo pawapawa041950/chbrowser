@@ -221,6 +221,8 @@ public partial class App : Application
             _configStorage?.Save(updated);
             _currentSettingsVm?.RefreshBaseline(updated);
         };
+        // 投稿ダイアログの「Cookie 削除」ボタンが叩く経路。ダイアログ自身を確認モーダルの親にする。
+        mainVm.ClearDonguriCookiesCallback = owner => ClearDonguriCookiesNow(owner);
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
 
@@ -568,7 +570,7 @@ public partial class App : Application
             openThemeFolderAction:    () => OpenInExplorer(_themeService.ThemeFolderPath),
             reloadAllCssAction:       () => _mainVm!.ReloadAllPaneCss(_themeService),
             extractDefaultCssAction:  ExtractDefaultThemeFiles,
-            clearCookiesAction:       ClearDonguriCookiesNow,
+            clearCookiesAction:       () => ClearDonguriCookiesNow(),
             loginNowAction:           LoginDonguriNow,
             // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
             testLlmConnectionAction:  async settings =>
@@ -594,14 +596,17 @@ public partial class App : Application
         _ = TryDonguriLoginAsync(_donguriService, _currentConfig, _mainVm);
     }
 
-    /// <summary>設定 → 通信 → 「Cookie をすべて削除」ボタンで呼ばれる。
-    /// 確認ダイアログ → 全 Cookie 削除 + state.json リセット + ステータスバー再描画。
+    /// <summary>設定 → 通信 → 「Cookie をすべて削除」ボタン および 投稿ダイアログ右上の
+    /// 「Cookie 削除」ボタンから呼ばれる。確認ダイアログ → 全 Cookie 削除 + state.json リセット +
+    /// ステータスバー再描画。<paramref name="owner"/> に渡された Window をモーダル親にするので、
+    /// 投稿ダイアログから呼んだときは PostDialog 上に確認ボックスが出る。
     /// メール認証ログイン中だった場合はそれも切れるので、再ログインしたい場合は設定 → 認証で再保存される。</summary>
-    private void ClearDonguriCookiesNow()
+    private void ClearDonguriCookiesNow(Window? owner = null)
     {
         if (_donguriService is null || _mainVm is null) return;
+        var modalOwner = owner ?? MainWindow ?? Current.MainWindow;
         var confirm = MessageBox.Show(
-            MainWindow ?? Current.MainWindow,
+            modalOwner,
             "どんぐりの Cookie (acorn / MonaTicket / メール認証セッション 等) を全て削除します。\n" +
             "削除後の最初の投稿で acorn が新しく発行されます。\n\n削除しますか?",
             "Cookie 削除", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
@@ -616,7 +621,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             Debug.WriteLine($"[App] ClearDonguriCookiesNow failed: {ex.Message}");
-            MessageBox.Show(MainWindow ?? Current.MainWindow,
+            MessageBox.Show(modalOwner,
                 $"削除に失敗しました: {ex.Message}", "Cookie 削除",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }

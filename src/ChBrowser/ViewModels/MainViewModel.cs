@@ -525,6 +525,11 @@ public sealed partial class MainViewModel : ObservableObject
     /// までを一括で面倒見る。null のときは何もしない (テスト等)。</summary>
     public Action<AppConfig>? PersistConfigCallback { get; set; }
 
+    /// <summary>投稿ダイアログの「Cookie 削除」ボタンから呼ばれる。
+    /// App.xaml.cs が起動時にセットして、確認モーダル + 全 Cookie 削除 + ステータス再描画を担う。
+    /// 引数 <c>owner</c> は確認 MessageBox のオーナー (= 普通は呼び出し側 PostDialog 自身)。</summary>
+    public Action<System.Windows.Window?>? ClearDonguriCookiesCallback { get; set; }
+
     /// <summary>「<paramref name="mutator"/> で書き換えた新 AppConfig を CurrentConfig に反映して
     /// ディスクにも保存する」のショートカット。差分が無ければ何もしない (同値の連続保存防止)。</summary>
     public void UpdateAndPersistConfig(Func<AppConfig, AppConfig> mutator)

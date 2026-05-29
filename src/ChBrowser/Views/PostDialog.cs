@@ -42,6 +42,8 @@ public sealed class PostDialog : Window
     private WebView2?           _previewWebView;
     private DispatcherTimer?    _previewDebounceTimer;
     private Button?             _previewToggleBtn;
+    private Button?             _cookieSettingsToggleBtn;
+    private FrameworkElement?   _cookieSettingsPanel;
     private Grid?               _outerGrid;
 
     private readonly PostFormViewModel _vm;
@@ -222,8 +224,9 @@ public sealed class PostDialog : Window
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (1) Name + Mail + sage
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (2) "本文:"
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // (3) message
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (4) error banner
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (5) status + buttons
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (4) Cookie 設定パネル (初期非表示)
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (5) error banner
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (6) status + buttons
 
         // (0) Subject (スレ立て時のみ)。レス書き込みなら row 0 は空 = Auto は 0 高さ。
         if (_vm.IsNewThread)
@@ -260,28 +263,41 @@ public sealed class PostDialog : Window
         sageCheck.SetBinding(ToggleButton_IsCheckedProxy, new Binding(nameof(PostFormViewModel.IsSage)) { Mode = BindingMode.TwoWay });
         Grid.SetColumn(sageCheck, 4); headerRow.Children.Add(sageCheck);
 
-        // 認証モード行 (= 投稿時に送る Cookie 集合の切替) と headerRow を 1 つの StackPanel にまとめて
-        // Grid 行 1 (Auto) にまとめて配置する。メール認証 Lv が高くて目立つのを避けたい時に
-        // 「Cookie だけ送る」「全く送らない」を選べるようにしてある。
-        var authRow = BuildAuthModeRow();
-        authRow.Margin = new Thickness(0, 0, 0, 8);
+        // 認証モード行 + 「Cookie 削除」ボタンは、フッターの「Cookie 設定」トグルで開閉される
+        // パネル (row 4) にまとめてある。ヘッダ行は氏名 / メール / sage だけに絞ってすっきりさせる。
+        Grid.SetRow(headerRow, 1);
+        root.Children.Add(headerRow);
 
-        var headerStack = new StackPanel();
-        headerStack.Children.Add(authRow);
-        headerStack.Children.Add(headerRow);
-        Grid.SetRow(headerStack, 1);
-        root.Children.Add(headerStack);
-
-        // (2) "本文:" ラベル + 右側に「現在行数 / 上限」表示。上限は板の SETTING.TXT の BBS_LINE_NUMBER から
-        //     注入される (= 取得済みでなければ MainViewModel が PostFormViewModel.LineLimit を null にしておき
-        //     ラベル側は「N 行」のみ表示する)。
+        // (2) "本文:" ラベル + 右側に「どんぐり: <現在モード>」表示 + 右端に「現在行数 / 上限」表示。
+        // どんぐり表示はパネルを開かなくても現在の認証モードがひと目で分かるようにするためのインジケータ。
+        // 行数表示の上限は板の SETTING.TXT の BBS_LINE_NUMBER から注入される (= 取得済みでなければ
+        // MainViewModel が PostFormViewModel.LineLimit を null にしておきラベル側は「N 行」のみ表示する)。
         var bodyHeader = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                 // (0) "本文:"
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // (1) spacer
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                 // (2) "どんぐり: ～"
+        bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                 // (3) "N / M 行"
 
         var bodyLabel = new TextBlock { Text = "本文:" };
         Grid.SetColumn(bodyLabel, 0);
         bodyHeader.Children.Add(bodyLabel);
+
+        // どんぐり認証モードのテキスト表示 — AuthMode が変わるたびに動的に更新。
+        var authModeLabel = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground        = Brushes.Gray,
+            FontSize          = 11,
+            Margin            = new Thickness(0, 0, 12, 0),
+            Text              = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode),
+        };
+        _vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(PostFormViewModel.AuthMode))
+                authModeLabel.Text = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode);
+        };
+        Grid.SetColumn(authModeLabel, 2);
+        bodyHeader.Children.Add(authModeLabel);
 
         var lineCountLabel = new TextBlock
         {
@@ -294,7 +310,7 @@ public sealed class PostDialog : Window
         // 上限超過時のみ赤字。LineLimit が null のときは IsOverLineLimit が常に false で灰のまま。
         lineCountLabel.SetBinding(TextBlock.ForegroundProperty,
             new Binding(nameof(PostFormViewModel.IsOverLineLimit)) { Converter = new OverLimitToBrushConverter() });
-        Grid.SetColumn(lineCountLabel, 1);
+        Grid.SetColumn(lineCountLabel, 3);
         bodyHeader.Children.Add(lineCountLabel);
 
         Grid.SetRow(bodyHeader, 2);
@@ -315,7 +331,14 @@ public sealed class PostDialog : Window
         Grid.SetRow(msgBox, 3);
         root.Children.Add(msgBox);
 
-        // (4) エラーバナー (ErrorMessage が空でないとき表示)
+        // (4) Cookie 設定パネル — フッターの「Cookie 設定」ボタンで開閉する折り畳み領域。
+        // 中身は認証モード切替 (どんぐり: なし / 通常 / メール認証) と Cookie 削除ボタン。
+        // 初期状態 Collapsed (= 高さ 0) なので、開かない限り本文 (row 3 / Star) の表示領域を奪わない。
+        _cookieSettingsPanel = BuildCookieSettingsPanel();
+        Grid.SetRow(_cookieSettingsPanel, 4);
+        root.Children.Add(_cookieSettingsPanel);
+
+        // (5) エラーバナー (ErrorMessage が空でないとき表示)
         var errorBanner = new Border
         {
             Background  = new SolidColorBrush(Color.FromRgb(0xFC, 0xE4, 0xE4)),
@@ -337,10 +360,10 @@ public sealed class PostDialog : Window
         {
             Converter = new EmptyStringToVisibilityConverter(),
         });
-        Grid.SetRow(errorBanner, 4);
+        Grid.SetRow(errorBanner, 5);
         root.Children.Add(errorBanner);
 
-        // (5) ステータス + レビュー / 送信 / 取消
+        // (6) ステータス + Cookie 設定 / レビュー / 送信 / 取消
         var footer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -351,6 +374,10 @@ public sealed class PostDialog : Window
         footer.Children.Add(statusText);
 
         var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+
+        _cookieSettingsToggleBtn = new Button { Content = "Cookie 設定", Width = 100, Margin = new Thickness(0, 0, 8, 0) };
+        _cookieSettingsToggleBtn.Click += (_, _) => ToggleCookieSettings();
+        btnPanel.Children.Add(_cookieSettingsToggleBtn);
 
         _previewToggleBtn = new Button { Content = "レビュー表示", Width = 100, Margin = new Thickness(0, 0, 8, 0) };
         _previewToggleBtn.Click += (_, _) => TogglePreview();
@@ -371,7 +398,7 @@ public sealed class PostDialog : Window
         Grid.SetColumn(btnPanel, 1);
         footer.Children.Add(btnPanel);
 
-        Grid.SetRow(footer, 5);
+        Grid.SetRow(footer, 6);
         root.Children.Add(footer);
 
         Loaded += (_, _) =>
@@ -551,6 +578,16 @@ public sealed class PostDialog : Window
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[PostDialog] preview push failed: {ex.Message}"); }
     }
 
+    /// <summary>PostAuthMode を 本文ヘッダの「どんぐり: ～」インジケータ用 日本語ラベルに変換する
+    /// (RadioButton の content と表記を揃える)。</summary>
+    private static string AuthModeDisplayName(PostAuthMode mode) => mode switch
+    {
+        PostAuthMode.None     => "なし",
+        PostAuthMode.Cookie   => "通常",
+        PostAuthMode.MailAuth => "メール認証",
+        _                     => mode.ToString(),
+    };
+
     /// <summary>dat フォーマットの日付文字列を生成 (例: "2026/05/05(火) 12:34:56.78")。
     /// 5ch のレス表示は曜日を日本語 1 文字で出すので、英語の DayOfWeek を ja に変換する。</summary>
     private static string FormatDateLikeDat(DateTime dt)
@@ -559,14 +596,14 @@ public sealed class PostDialog : Window
         return $"{dt:yyyy/MM/dd}({weekday}) {dt:HH:mm:ss}.{(dt.Millisecond / 10):00}";
     }
 
-    /// <summary>「認証: [○なし] [●Cookie] [○メール認証]」の 1 行 RadioButton 群を組み立てる。
+    /// <summary>「どんぐり: [○なし] [●Cookie] [○メール認証]」の RadioButton 群を組み立てる。
     /// VM.AuthMode と双方向同期する (各 RadioButton の Checked イベントで VM 更新、
-    /// VM.PropertyChanged で UI 反映)。</summary>
+    /// VM.PropertyChanged で UI 反映)。Cookie 設定パネルからのみ呼ばれる。</summary>
     private FrameworkElement BuildAuthModeRow()
     {
         const string groupName = "PostAuthModeGroup";
 
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
         var label = new TextBlock
         {
@@ -613,6 +650,60 @@ public sealed class PostDialog : Window
         };
 
         return panel;
+    }
+
+    /// <summary>本文欄とフッターボタンの間に挟まる折り畳み式の「Cookie 設定」パネル。
+    /// 左に認証モード切替 RadioButton 群、右端に「Cookie 削除」ボタン。
+    /// 既定では Collapsed (= 高さ 0) のため、開かない限り本文 (row 3 / Star 行) の領域を奪わない。
+    /// フッターの「Cookie 設定」トグルボタンが <see cref="ToggleCookieSettings"/> を呼んで開閉する。</summary>
+    private FrameworkElement BuildCookieSettingsPanel()
+    {
+        var inner = new Grid();
+        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        inner.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var authRow = BuildAuthModeRow();
+        Grid.SetColumn(authRow, 0);
+        inner.Children.Add(authRow);
+
+        var clearCookieBtn = new Button
+        {
+            Content             = "Cookie 削除",
+            Padding             = new Thickness(8, 2, 8, 2),
+            VerticalAlignment   = VerticalAlignment.Center,
+            ToolTip             = "現在のどんぐり Cookie (acorn / MonaTicket / メール認証セッション 等) を全て削除します。"
+                                + " 削除後の最初の投稿で acorn が新しく発行されます。",
+        };
+        clearCookieBtn.Click += (_, _) =>
+        {
+            if (System.Windows.Application.Current?.MainWindow?.DataContext is MainViewModel mvm)
+            {
+                mvm.ClearDonguriCookiesCallback?.Invoke(this);
+            }
+        };
+        Grid.SetColumn(clearCookieBtn, 1);
+        inner.Children.Add(clearCookieBtn);
+
+        return new Border
+        {
+            Background      = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF5)),
+            BorderBrush     = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8)),
+            BorderThickness = new Thickness(1),
+            Padding         = new Thickness(8, 6, 8, 6),
+            Margin          = new Thickness(0, 8, 0, 0),
+            Visibility      = Visibility.Collapsed,
+            Child           = inner,
+        };
+    }
+
+    /// <summary>フッターの「Cookie 設定」ボタン Click 時。パネルの Visibility をトグルし、
+    /// 開いている間はボタンを押下状態として見せるためタグで分かるようにしておく
+    /// (= 視覚的なフィードバックは標準スタイルの Hover 反転で十分なので、今は文字色変更等はしない)。</summary>
+    private void ToggleCookieSettings()
+    {
+        if (_cookieSettingsPanel is null) return;
+        _cookieSettingsPanel.Visibility =
+            _cookieSettingsPanel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>"ラベル: [ TextBox を残幅で広げる ]" の 1 行を作る (Subject 行に使用)。</summary>
