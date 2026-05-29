@@ -477,6 +477,17 @@ body.slot-resizing * {
 .track-image   .marker { background: #f57c00; }
 .track-video   .marker { background: #7b1fa2; }
 
+/* 人気レスマーカーの強調ティア:
+   - .marker-pop2: 被アンカー数が閾値の 1.5 倍以上 (例: 閾値 3 → 5 件以上)。少し太く、右に少しはみ出す。
+   - .marker-pop3: 被アンカー数が閾値の 2.5 倍以上 (例: 閾値 3 → 8 件以上)。さらに太く、右に大きくはみ出す。
+   隣の URL トラックへはみ出すが pointer-events: none なのでクリックは下のトラックに通る。
+   .track-popular は DOM 順で最初なので、後続兄弟 (track-url 等) の marker が natural document
+   order で上に描画される (= はみ出した人気マーカーは隣トラックのマーカーの「後ろ」に隠れる)。
+   セレクタの先頭に #richScrollbar を入れて基底 `#richScrollbar .marker { height: 2px }` (specificity 1,1,0) より
+   詳細度を上 (1,3,0) にする必要がある — 入れないと基底の height: 2px / right: 0 に上書きされて効かない。 */
+#richScrollbar .track-popular .marker.marker-pop2 { height: 3px; right: -1px; }
+#richScrollbar .track-popular .marker.marker-pop3 { height: 5px; right: -1px; }
+
 /* ---- 「以降新レス」ラベル ---- */
 /* 直前 fetch まで存在しなかった最初のレスの「前」に挿入される細い水平帯。
    リフレッシュで新着が来たときだけ位置が更新される (= ユーザのスクロールでは動かない)。 */

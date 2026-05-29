@@ -1443,6 +1443,14 @@
             if (popular) {
                 const m = document.createElement('div');
                 m.className = 'marker';
+                // 被アンカー数が POPULAR_THRESHOLD の 1.5 倍 / 2.5 倍を超えるとマーカーを段階的に大きくする。
+                // CSS 側で .marker-pop2 / .marker-pop3 として height + 右はみ出しを定義。
+                // POPULAR_THRESHOLD === 0 は除算回避のためガード (実運用では 1 以上だが念のため)。
+                if (POPULAR_THRESHOLD > 0) {
+                    const ratio = refs.length / POPULAR_THRESHOLD;
+                    if (ratio >= 2.5)      m.classList.add('marker-pop3');
+                    else if (ratio >= 1.5) m.classList.add('marker-pop2');
+                }
                 m.style.top = topPercent;
                 popularTrack.appendChild(m);
             }
