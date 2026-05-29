@@ -519,6 +519,22 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>現在の設定値。新規スレタブ生成時の初期 ViewMode 等で参照される。</summary>
     public AppConfig CurrentConfig { get; private set; } = new();
 
+    /// <summary>VM 内部 (= 主に投稿ダイアログのどんぐり認証モード変更) から AppConfig を 1 フィールドだけ
+    /// 更新したい時に呼ぶコールバック。App.xaml.cs が起動時にセットして、
+    /// 「App._currentConfig を差し替え + ConfigStorage.Save + 設定ウィンドウが開いていればベースラインを refresh」
+    /// までを一括で面倒見る。null のときは何もしない (テスト等)。</summary>
+    public Action<AppConfig>? PersistConfigCallback { get; set; }
+
+    /// <summary>「<paramref name="mutator"/> で書き換えた新 AppConfig を CurrentConfig に反映して
+    /// ディスクにも保存する」のショートカット。差分が無ければ何もしない (同値の連続保存防止)。</summary>
+    public void UpdateAndPersistConfig(Func<AppConfig, AppConfig> mutator)
+    {
+        var next = mutator(CurrentConfig);
+        if (Equals(next, CurrentConfig)) return;
+        CurrentConfig = next;
+        PersistConfigCallback?.Invoke(next);
+    }
+
     /// <summary>NgService への外部アクセス (NgWindow から再ロード等を呼ぶため)。</summary>
     public ChBrowser.Services.Ng.NgService NgService => _ng;
 

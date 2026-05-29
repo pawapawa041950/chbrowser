@@ -212,6 +212,15 @@ public partial class App : Application
         var openTabsStorage = new OpenTabsStorage(paths);
         var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths, openTabsStorage, _llmClient);
         _mainVm          = mainVm;
+        // VM 内で AppConfig を 1 フィールドだけ更新 (= 書込ダイアログのどんぐり認証モード保存) する経路。
+        // 設定ウィンドウが開いている時もベースラインを最新化して、次の SettingsViewModel.Save で
+        // この値が古い空文字で上書きされないようにする。
+        mainVm.PersistConfigCallback = updated =>
+        {
+            _currentConfig = updated;
+            _configStorage?.Save(updated);
+            _currentSettingsVm?.RefreshBaseline(updated);
+        };
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
 

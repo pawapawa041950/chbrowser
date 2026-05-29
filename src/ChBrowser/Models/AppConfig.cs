@@ -82,6 +82,12 @@ public sealed record AppConfig
     /// セキュア保管 (DPAPI 等) は後続で検討。空ならログイン試行はスキップ。</summary>
     public string DonguriPassword { get; init; } = "";
 
+    /// <summary>書き込みダイアログのどんぐり認証モード (なし / 通常 / メール認証) を
+    /// セッション間で記憶しておくための値。"None" / "Cookie" / "MailAuth" のいずれか、
+    /// または空文字 (= 未設定 → 現在のログイン状態から自動判定)。
+    /// ユーザがダイアログで RadioButton を切り替えると即座に保存される。</summary>
+    public string LastPostAuthMode { get; init; } = "";
+
     // ---- スレッド ----
     /// <summary>人気レス閾値 (= 被アンカー数 ≥ この値で赤マーカー)。即時反映 (setConfig メッセージ)。</summary>
     public int PopularThreshold { get; init; } = 3;

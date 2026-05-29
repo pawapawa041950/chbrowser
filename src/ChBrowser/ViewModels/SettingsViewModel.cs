@@ -164,7 +164,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action?               _reloadAllCssAction;
     private readonly Action?               _extractDefaultCssAction;
     private readonly DispatcherTimer       _saveTimer;
-    private readonly AppConfig             _initialConfig;
+    /// <summary>パネルが知らない / 編集対象外の AppConfig フィールドを保存時に取りこぼさないための
+    /// ベースライン。ToConfig() は <c>_initialConfig with { …編集対象… }</c> で組み立てるため、
+    /// 例えば PostDialog 側で書き換えた <see cref="AppConfig.LastPostAuthMode"/> 等は維持される。
+    /// 外部 (= MainViewModel 経由で書込ダイアログ操作) で AppConfig が更新された場合は
+    /// <see cref="RefreshBaseline"/> でこの値を最新に張り替える。</summary>
+    private AppConfig                      _initialConfig;
     private bool                           _suppressSave;
 
     public SettingsViewModel(
@@ -378,7 +383,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         catch (Exception ex) { Debug.WriteLine($"[SettingsViewModel] apply failed: {ex.Message}"); }
     }
 
-    public AppConfig ToConfig() => new()
+    public AppConfig ToConfig() => _initialConfig with
     {
         Version                     = 1,
         HiDpiMode                   = HiDpiMode,
@@ -418,6 +423,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         ThreadTabWidthChars     = ThreadTabWidthChars,
         ThreadTabWidthPx        = ThreadTabWidthPx,
     };
+
+    /// <summary>このパネルが感知しない外部経路 (PostDialog のどんぐり認証モード変更等) で
+    /// AppConfig が更新されたときに、保存時のベースラインを最新版に張り替える。
+    /// UI フィールドは触らないので「設定ウィンドウ内でユーザーが入力中の値」は失われない。</summary>
+    public void RefreshBaseline(AppConfig latest) => _initialConfig = latest;
 
     public void RefreshCacheSizeDisplay()
     {

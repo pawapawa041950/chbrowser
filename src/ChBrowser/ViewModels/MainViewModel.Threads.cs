@@ -330,20 +330,43 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>現在のどんぐり Cookie / メール認証ログイン状態から、
-    /// 投稿ダイアログの認証モード初期値を推定する。
-    /// メール認証済み → MailAuth / 通常 (anon) acorn だけ → Cookie / なにもない → None。
+    /// <summary>投稿ダイアログの認証モード初期値を決める。
+    /// 優先順位:
+    /// (1) <see cref="AppConfig.LastPostAuthMode"/> に前回の選択が保存されていればそれを使う。
+    ///     ユーザーが明示的に切り替えたモードを尊重するため、現在のログイン状態とは突き合わせない
+    ///     (= ログアウト状態で MailAuth が保存されていても MailAuth を初期選択する。実際の送信時は
+    ///      cookie が無いので結果的に anon と等価になるが、UI 上のユーザの意図は維持される)。
+    /// (2) 保存値が空 / 不正なら、現在のどんぐり Cookie / メール認証ログイン状態から推定する:
+    ///     メール認証済み → MailAuth / 通常 (anon) acorn だけ → Cookie / なにもない → None。
     /// 新設計では「Cookie モード」は anon スロット (= state.json) を使うため、
     /// jar 側の <see cref="DonguriService.AcornValue"/> ではなく
     /// <see cref="DonguriService.AnonAcornValue"/> で判定する。</summary>
     private PostAuthMode DefaultPostAuthMode()
     {
+        // (1) 保存された前回値を優先
+        if (Enum.TryParse<PostAuthMode>(CurrentConfig.LastPostAuthMode, ignoreCase: false, out var saved))
+            return saved;
+
+        // (2) ログイン状態から推定 (フォールバック)
         // ログイン状態は MainViewModel.DonguriLoginStatus に App.xaml.cs から push される。
         // "ログイン済" を含む文字列なら mail auth Cookie が CookieJar に居ると見做す。
         if (DonguriLoginStatus is { Length: > 0 } s && s.Contains("ログイン済", StringComparison.Ordinal))
             return PostAuthMode.MailAuth;
         if (_donguri.AnonAcornValue is not null) return PostAuthMode.Cookie;
         return PostAuthMode.None;
+    }
+
+    /// <summary>新規に開いた PostFormViewModel に AuthMode 変更フックを仕掛けて、
+    /// ユーザが RadioButton を切り替えた瞬間に <see cref="AppConfig.LastPostAuthMode"/> を更新・保存する。
+    /// ダイアログを <c>OK / Cancel</c> どちらで閉じても、選んだ瞬間の値が次回起動時の初期選択になる。</summary>
+    private void HookPersistAuthMode(PostFormViewModel vm)
+    {
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(PostFormViewModel.AuthMode)) return;
+            var modeStr = vm.AuthMode.ToString();
+            UpdateAndPersistConfig(c => c with { LastPostAuthMode = modeStr });
+        };
     }
 
     /// <summary>スレ表示タブの「書き込み」ボタンから呼ばれる。投稿ダイアログ (PostDialog) を開き、
@@ -631,6 +654,7 @@ public sealed partial class MainViewModel
     private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
     {
         var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode());
+        HookPersistAuthMode(vm);
         if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
         _ = ApplyLineLimitFromSettingAsync(vm, tab.Board);
         var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
@@ -890,6 +914,7 @@ public sealed partial class MainViewModel
         }
         var board = listTab.Board;
         var vm    = new PostFormViewModel(_postClient, board, DefaultPostAuthMode());
+        HookPersistAuthMode(vm);
         _ = ApplyLineLimitFromSettingAsync(vm, board);
         var dlg   = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
