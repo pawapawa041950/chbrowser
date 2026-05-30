@@ -58,6 +58,11 @@ public sealed class NewAgentEngine : IAgentEngine
         "\n" +
         "# 進め方\n" +
         "- あなた自身はスレを直接読まない。情報収集は必ず dispatch_task 経由で Worker にやらせる。\n" +
+        "- Worker はスレ / 板の読み取りに加え、**WEB 検索 (web_search) と WEB ページ取得 (web_fetch)** もできる。" +
+        "5ch の外の最新情報・事実確認・用語や固有名詞の裏取りが要るタスクは、その旨を goal に書いて dispatch_task せよ。\n" +
+        "- **「特定の作品 / 製品 / 人物 / 事象に関するスレを探す」型の依頼で、対象が略称・新しめ・曖昧なとき**は、" +
+        "Worker が web で正体と別名・関連語(キャラ名 / 作者 / 型番 / シリーズ等)を特定してから探す前提で goal を書く" +
+        "(例:「対象を特定 → 正式名称 / 略称 / 関連語で 5ch を横断検索して開く」)。その分 max_tool_calls を web 1〜3 回ぶん多めに取る。\n" +
         "- Worker からは要約 (finding) と evidence id だけが返る (生データは返らない)。\n" +
         "- create_plan / dispatch_task が heavy 判定を返したら、実行前に必ず ask_user で A=実施 / B=軽量版 / C=別案 を提示する。\n" +
         "- タスクが partial / failed のときは finding を読み、別アプローチで dispatch し直すか、計画を revise する。同じ委譲を繰り返さない。\n" +
@@ -75,12 +80,13 @@ public sealed class NewAgentEngine : IAgentEngine
         "- 純粋な質問・要約 (例: 「このスレ要約して」「何が話題?」) は従来どおりテキストで答えてよい。出力先はユーザの意図で選ぶ。\n" +
         "\n" +
         "# タスクの予算 (max_tool_calls) の見積もり ★重要\n" +
-        "Worker はここで指定したツール回数で必ず打ち切られる (= 足りないと partial で途中終了する)。作業量に合わせて指定すること。既定は 12。\n" +
-        "- 単一スレの読解・要約: 4〜8。\n" +
-        "- 単一板でのスレ検索: 6〜10。\n" +
-        "- **板をまたぐ横断 / テーマ検索**: 板ごとに list_threads + 内容確認 + open が要るので、目安は **「板数 × 2 + 余裕3」**。例: 5 板を横断するなら max_tool_calls=14、scan_breadth=many を指定。\n" +
-        "- 足りないと予算切れで途中終了するので、横断時は大きめに取ること。\n" +
-        "- 合計が 24 以上 / 全板 (all_boards) になると heavy 判定 → ask_user 確認が入る (妥当)。広すぎる場合は create_plan で板ごとに分割してもよい。\n" +
+        "Worker はここで指定したツール回数で必ず打ち切られる (= 足りないと partial で途中終了する)。作業量に合わせて指定すること。既定は 36。\n" +
+        "- 単一スレの読解・要約: 12〜24。\n" +
+        "- 単一板でのスレ検索: 18〜30。\n" +
+        "- **板をまたぐ横断 / テーマ検索**: 板ごとに list_threads + 内容確認 + open が要るので、目安は **「板数 × 6 + 余裕9」**。例: 5 板を横断するなら max_tool_calls=39、scan_breadth=many を指定。\n" +
+        "- web_search / web_fetch で地ならしする場合はその回数 (1〜3) も上乗せして見積もること。\n" +
+        "- 足りないと予算切れで途中終了するので、横断時は大きめに取ること (上限は 256)。\n" +
+        "- 合計が 72 以上 / 全板 (all_boards) になると heavy 判定 → ask_user 確認が入る (妥当)。広すぎる場合は create_plan で板ごとに分割してもよい。\n" +
         "\n" +
         "# 背景\n" + contextPreamble;
 }

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ChBrowser.Services.Web;
 
 namespace ChBrowser.Services.Llm;
 
@@ -27,6 +28,7 @@ public static class ToolCatalog
     {
         var list = new List<IAgentToolset>();
         if (thread is not null) list.Add(thread);
+        list.Add(new WebSearchToolset());   // WEB 検索 / ページ取得 (DuckDuckGo)。スレ非アタッチでも使える。
         // 将来の公開ツール群はここに追加する (例: list.Add(favoritesToolset);)。
         return list;
     }

@@ -34,7 +34,7 @@ public sealed class Strategist
 
     private const int MaxRounds   = 32;  // Strategist ターンの安全上限
     private const int MaxDispatch = 3;   // 同一 task id の再委譲上限 (D9)
-    private const int HeavyToolCallThreshold = 24;  // アクティブ依頼の累積コミット予算がこれ以上で heavy (D11/D12)
+    private const int HeavyToolCallThreshold = 72;  // アクティブ依頼の累積コミット予算がこれ以上で heavy (D11/D12)。従来 24 の 3 倍
 
     private sealed record PlanItem(string Id, string Goal, string Hint, Limits Limits);
 
@@ -325,7 +325,7 @@ public sealed class Strategist
         if (el.ValueKind != JsonValueKind.Object) return Limits.Default;
         var max = Limits.Default.MaxToolCalls;
         if (el.TryGetProperty("max_tool_calls", out var m) && m.ValueKind == JsonValueKind.Number && m.TryGetInt32(out var mi))
-            max = System.Math.Clamp(mi, 1, 128);
+            max = System.Math.Clamp(mi, 1, 256);
         var breadth = ScanBreadth.Single;
         if (el.TryGetProperty("scan_breadth", out var b) && b.ValueKind == JsonValueKind.String)
             breadth = ParseBreadth(b.GetString());
@@ -386,7 +386,7 @@ public sealed class Strategist
                             id    = new { type = "string", description = "タスク id (任意・短い識別子)。" },
                             goal  = new { type = "string", description = "このタスクのゴール (自然文)。" },
                             hint  = new { type = "string", description = "解くための文脈ヒント (前タスクの finding 抜粋など)。" },
-                            max_tool_calls    = new { type = "integer", description = "このタスクのツール予算 (既定 6)。" },
+                            max_tool_calls    = new { type = "integer", description = "このタスクのツール予算 (既定 36, 上限 256)。" },
                             scan_breadth      = new { type = "string", description = "single / few / many / all_boards。" },
                             reads_full_thread = new { type = "boolean", description = "スレ全読みか。" },
                         },
@@ -413,7 +413,7 @@ public sealed class Strategist
                 id           = new { type = "string", description = "plan のタスク id (指定時はそのタスクを実行)。" },
                 goal         = new { type = "string", description = "id 未指定時のタスクゴール。" },
                 context_hint = new { type = "string", description = "Worker に渡す文脈ヒント。" },
-                max_tool_calls    = new { type = "integer", description = "ツール予算 (既定 6)。" },
+                max_tool_calls    = new { type = "integer", description = "ツール予算 (既定 36, 上限 256)。" },
                 scan_breadth      = new { type = "string", description = "single / few / many / all_boards。" },
                 reads_full_thread = new { type = "boolean", description = "スレ全読みか。" },
             },
