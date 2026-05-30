@@ -478,6 +478,37 @@ public sealed partial class MainViewModel
     private static string ResolveAiChatTitle(ThreadTabViewModel? tab)
         => string.IsNullOrEmpty(tab?.Title) ? "(スレッド指定なし)" : tab.Title!;
 
+    // ===== MCP サーバ向け公開 (ChBrowser.Services.Mcp.IMcpToolHost) =====
+    // 内蔵 AI チャットの Worker が使うものと同じ 14 ツール (ThreadToolset) を外部 MCP クライアントへ公開する。
+    // ツール定義は attached の有無に依らず一定なので非アタッチ toolset から取得。実行は「現在の選択スレ」に
+    // 束ねた toolset で行い、attached 系ツール (get_thread_state / get_my_posts) や thread_url 省略も
+    // 「今 ChBrowser で表示中のスレ」を対象にする。tab.Posts / open_*_in_app は UI 専有のため UI スレッドで実行。
+
+    /// <inheritdoc/>
+    public IReadOnlyList<object> GetMcpToolDefinitions()
+        => ToolCatalog.Definitions(ToolCatalog.PublicToolsets(BuildToolsetForTab(null)));
+
+    /// <inheritdoc/>
+    public System.Threading.Tasks.Task<string> CallMcpToolAsync(
+        string name, string argumentsJson, System.Threading.CancellationToken ct)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            return CallMcpToolCoreAsync(name, argumentsJson, ct);
+        // バックグラウンドスレッド (MCP の接続処理) から呼ばれる → UI スレッドへマーシャリング。
+        return dispatcher.InvokeAsync(() => CallMcpToolCoreAsync(name, argumentsJson, ct)).Task.Unwrap();
+    }
+
+    /// <summary>UI スレッド上で「現在の選択スレ」に束ねた公開ツール (ToolCatalog) を構築してツールを実行する。
+    /// MCP に出るツール表面は内蔵エージェントと同一 (= カタログ由来)。</summary>
+    private async System.Threading.Tasks.Task<string> CallMcpToolCoreAsync(
+        string name, string argumentsJson, System.Threading.CancellationToken ct)
+    {
+        var toolsets = ToolCatalog.PublicToolsets(BuildToolsetForTab(SelectedThreadTab));
+        var routed = await ToolCatalog.TryExecuteAsync(toolsets, name, argumentsJson, ct).ConfigureAwait(true);
+        return routed ?? System.Text.Json.JsonSerializer.Serialize(new { error = $"未知のツール: {name}" });
+    }
+
     /// <summary>ThreadToolset 用の <see cref="ThreadDataLoader"/> を 1 つ構築する。
     /// flat 板リストの provider はクロージャ経由で <see cref="BoardCategories"/> を常に最新の状態で読む。
     /// LRU キャッシュはこのインスタンスに紐づくので、AI チャットウィンドウごとに独立した会話キャッシュになる。</summary>

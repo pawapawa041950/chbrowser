@@ -23,7 +23,7 @@ namespace ChBrowser.ViewModels;
 /// <item><description><c>MainViewModel.Tabs.cs</c>: タブの close-others/before/after / 設定駆動アクション dispatch</description></item>
 /// <item><description><c>MainViewModel.Favorites.cs</c>: お気に入り (folder/board/thread) 編集・展開・チェック</description></item>
 /// </list></summary>
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services.Mcp.IMcpToolHost
 {
     // ----- サービス参照 (ctor で受け取る) -----
     private readonly BbsmenuClient                    _bbsmenuClient;

@@ -24,8 +24,6 @@ public sealed partial class AiChatViewModel : ObservableObject
     private const long RenderThrottleMs = 80;
 
     private readonly LlmClient        _llmClient;
-    /// <summary>plan 操作の土台。新エンジンは独自 plan を持つため直接は使わないが、共有ツール土台に渡す。</summary>
-    private readonly PlanToolset      _planToolset = new();
     /// <summary>セッション共有 archive (= ツール結果の原文置き場・finding の evidence 参照元)。</summary>
     private readonly ChatArchive      _archive = new();
     /// <summary>新エンジンに渡す共有ツール土台。<see cref="SwitchContext"/> で <see cref="AgentToolContext.Thread"/> を差し替える。</summary>
@@ -71,7 +69,7 @@ public sealed partial class AiChatViewModel : ObservableObject
         ContextSubtitle = ComputeContextSubtitle(threadToolset);
 
         // 共有ツール土台 + 新 3 レイヤーエンジン。会話/finding はエンジン内で永続 (D8)。
-        _agentCtx = new AgentToolContext(_planToolset, _threadToolset, _archive);
+        _agentCtx = new AgentToolContext(_threadToolset, _archive);
         _engine   = new NewAgentEngine(
             host:               this,
             ctx:                _agentCtx,

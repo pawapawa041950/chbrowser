@@ -48,6 +48,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _workerModel            = "";
     [ObservableProperty] private int    _workerContextSize      = 0;
     [ObservableProperty] private bool   _allowParallelWorkers   = false;
+    // MCP サーバ (内蔵ツールを外部 MCP クライアントへ公開・localhost HTTP)
+    [ObservableProperty] private bool   _mcpServerEnabled       = false;
+    [ObservableProperty] private int    _mcpServerPort          = 7393;
     // 認証カテゴリ (どんぐりメール認証)
     [ObservableProperty] private string _donguriEmail          = "";
     [ObservableProperty] private string _donguriPassword       = "";
@@ -236,6 +239,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         WorkerModel                  = initial.WorkerModel;
         WorkerContextSize            = initial.WorkerContextSize;
         AllowParallelWorkers         = initial.AllowParallelWorkers;
+        McpServerEnabled             = initial.McpServerEnabled;
+        McpServerPort                = initial.McpServerPort;
         DonguriEmail                 = initial.DonguriEmail;
         DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
@@ -402,6 +407,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         WorkerModel                 = WorkerModel,
         WorkerContextSize           = WorkerContextSize,
         AllowParallelWorkers        = AllowParallelWorkers,
+        McpServerEnabled            = McpServerEnabled,
+        McpServerPort               = McpServerPort,
         DonguriEmail                = DonguriEmail,
         DonguriPassword             = DonguriPassword,
         PopularThreshold            = PopularThreshold,

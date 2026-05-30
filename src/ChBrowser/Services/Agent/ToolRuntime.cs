@@ -30,11 +30,11 @@ public sealed class ToolRuntime
     /// <summary>現在のスレ toolset (= context 切替で差し替わるので毎回 ctx から読む)。</summary>
     private ThreadToolset? Thread => _ctx.Thread;
 
-    /// <summary>Worker に提示するツール定義。スレ系 + <c>recall_archive</c> (id 指定)。<c>list_archive</c> は含めない。</summary>
+    /// <summary>Worker に提示するツール定義。公開ツール (= <see cref="ToolCatalog"/> 由来・MCP と同一表面)
+    /// + Worker 内部専用の <c>recall_archive</c> (id 指定)。<c>list_archive</c> は含めない。</summary>
     public IReadOnlyList<object> GetWorkerToolDefinitions()
     {
-        var defs = new List<object>();
-        if (Thread is not null) defs.AddRange(Thread.GetToolDefinitions());
+        var defs = new List<object>(ToolCatalog.Definitions(ToolCatalog.PublicToolsets(Thread)));
         defs.Add(RecallArchiveToolDef());
         return defs;
     }
@@ -60,14 +60,16 @@ public sealed class ToolRuntime
                 raw        = _archive.TryExecute(name, args) ?? ErrorJson("recall_archive 実行に失敗");
                 archivable = false;  // 既存 archive の引き戻し → 再記録しない
             }
-            else if (Thread is not null)
-            {
-                raw        = await Thread.ExecuteAsync(name, args, ct).ConfigureAwait(true);
-                archivable = true;   // スレ読み取り結果 = 原文 → archive 対象
-            }
             else
             {
-                return Fail($"ツール \"{name}\" はこのチャットでは利用できません");
+                // 公開ツール (= ToolCatalog 由来・MCP と同一表面) を定義名でルーティングして実行。
+                var routed = await ToolCatalog
+                    .TryExecuteAsync(ToolCatalog.PublicToolsets(Thread), name, args, ct)
+                    .ConfigureAwait(true);
+                if (routed is null)
+                    return Fail($"ツール \"{name}\" はこのチャットでは利用できません");
+                raw        = routed;
+                archivable = true;   // ツール結果 = 原文 → archive 対象
             }
         }
         catch (OperationCanceledException)
@@ -109,7 +111,7 @@ public sealed class ToolRuntime
         }
     }
 
-    /// <summary>recall_archive のツール定義 (= <see cref="ChatArchive.GetToolDefinitions"/> のうち list_archive を除いた片方)。</summary>
+    /// <summary>recall_archive のツール定義 (= Strategist から渡された evidence id を Worker が引き戻すための片方)。</summary>
     private static object RecallArchiveToolDef() => new
     {
         type     = "function",

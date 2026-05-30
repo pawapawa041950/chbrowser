@@ -119,5 +119,32 @@
             ※ 設定の変更は AI チャットウィンドウを開き直すと反映されます。
         </TextBlock>
 
+        <!-- MCP サーバ (内蔵ツールを外部公開) -->
+        <Separator Margin="0,18,0,12" />
+        <TextBlock Text="MCP サーバ (外部公開)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
+            ChBrowser のスレッド読み取り・板/スレ横断・アプリ操作ツール (14 個) を MCP (Model Context Protocol) で
+            外部の MCP クライアント (Claude Desktop / Cursor 等) に公開します。
+            動作中の本体プロセス内で localhost の HTTP サーバを立てて待ち受けます (接続先 URL は
+            <Run FontFamily="Consolas">http://127.0.0.1:&lt;ポート&gt;/mcp</Run>)。
+            外部からは到達できず、localhost 以外の Web オリジンからのアクセスは拒否します。
+        </TextBlock>
+
+        <CheckBox Content="MCP サーバを有効にする"
+                  IsChecked="{Binding McpServerEnabled, Mode=TwoWay}"
+                  Margin="0,0,0,6" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <TextBlock Text="ポート" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBox Text="{Binding McpServerPort, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                     Width="90" />
+        </StackPanel>
+
+        <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,0,0,0">
+            ※ 有効化すると指定ポートを開きます。「全部 (操作系含む)」を公開するため、外部クライアントが
+            スレ/板をアプリに開く操作も可能になります。信頼できるクライアントだけを接続してください。
+            ON/OFF・ポート変更は即時反映されます。
+        </TextBlock>
+
     </StackPanel>
 </UserControl>

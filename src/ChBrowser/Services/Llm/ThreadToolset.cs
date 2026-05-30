@@ -31,7 +31,7 @@ namespace ChBrowser.Services.Llm;
 /// スレ追従更新は反映しない。会話中にレス数や本文が動くと、LLM が一度ツール経由で取得した文脈と
 /// 食い違うため。古さは <c>get_thread_meta</c> の <c>total_posts</c> で読み取れる。</para>
 /// </summary>
-public sealed class ThreadToolset
+public sealed class ThreadToolset : IAgentToolset
 {
     /// <summary>1 度の <c>get_posts</c> で返す最大件数。これを超える要求はエラーにする
     /// (= LLM に「分割して呼んで」と伝えるため)。</summary>

@@ -73,6 +73,20 @@ public sealed record AppConfig
     /// 別エンドポイントに分けている場合は ON で高速化。</summary>
     public bool AllowParallelWorkers { get; init; } = false;
 
+    // ---- MCP サーバ (外部公開) ----
+    // ChBrowser のスレ読み取り / 横断 / 開く 系ツール (14 個) を MCP (Model Context Protocol) で
+    // 外部の MCP クライアント (Claude Desktop / Cursor 等) に公開する。動作中の本体プロセス内で
+    // localhost の HTTP サーバを立て、Streamable HTTP トランスポートで待ち受ける。
+    // 既定 OFF — 有効化するまでポートは一切開かない (= 明示オプトイン)。
+
+    /// <summary>MCP サーバを有効にするか。ON にすると <see cref="McpServerPort"/> で待ち受ける。
+    /// 即時反映 (= トグル / ポート変更で再起動)。既定 OFF。</summary>
+    public bool McpServerEnabled { get; init; } = false;
+
+    /// <summary>MCP サーバの待ち受けポート (localhost のみにバインド)。既定 7393。
+    /// 変更すると即座にサーバを張り替える。</summary>
+    public int McpServerPort { get; init; } = 7393;
+
     // ---- 認証 (どんぐりメール認証) ----
     /// <summary>どんぐり (5ch) のメール認証アドレス。空文字なら認証無し (= 通常の acorn だけで投稿)。
     /// 設定がある状態でアプリ起動するとバックグラウンドでログインを試行する。</summary>

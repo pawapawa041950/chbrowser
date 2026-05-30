@@ -57,6 +57,9 @@ public partial class App : Application
     private LlmClient? _llmClient;
     private ChBrowser.Services.Storage.ShortcutStorage? _shortcutStorage;
     private ChBrowser.Services.Shortcuts.ShortcutManager? _shortcutManager;
+    /// <summary>内蔵ツールを外部 MCP クライアントへ公開する localhost HTTP サーバ。
+    /// AppConfig.McpServerEnabled が ON のときだけ起動 (= 既定 OFF・オプトイン)。</summary>
+    private ChBrowser.Services.Mcp.McpHttpServer? _mcpServer;
 
     /// <summary>WebView 内 JS ブリッジが受信したショートカット/マウス/ジェスチャーを dispatch するために公開 (Phase 16)。</summary>
     public ChBrowser.Services.Shortcuts.ShortcutManager? ShortcutManager => _shortcutManager;
@@ -225,6 +228,9 @@ public partial class App : Application
         mainVm.ClearDonguriCookiesCallback = owner => ClearDonguriCookiesNow(owner);
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
+
+        // MCP サーバ (外部公開): 設定 ON のときだけ起動する (= 既定 OFF・明示オプトイン)。
+        ApplyMcpServerConfig(_currentConfig);
 
         var window = new MainWindow
         {
@@ -539,6 +545,7 @@ public partial class App : Application
         _imageViewerWindow?.Close();
         _ngWindow?.Close();
         _shortcutsWindow?.Close();
+        _mcpServer?.Dispose();
         _urlExpander?.Dispose();
         _imageCache?.Dispose();
         _imageMeta?.Dispose();
@@ -781,6 +788,35 @@ public partial class App : Application
 
         // スレ表示 JS への broadcast (popularThreshold / imageSizeThresholdMb)
         _mainVm?.ApplyConfig(config);
+
+        // MCP サーバの ON/OFF・ポート変更を反映 (= 必要なら張り替え)。
+        ApplyMcpServerConfig(config);
+    }
+
+    /// <summary>AppConfig の MCP サーバ設定 (有効 / ポート) を現在の稼働状態に反映する。
+    /// enabled かつ同一ポートで既に動いていれば no-op。差分があれば停止して張り替える。
+    /// バインド失敗時はサーバ無しで続行する (= UI は落とさない)。</summary>
+    private void ApplyMcpServerConfig(AppConfig config)
+    {
+        if (_mainVm is null) return;
+
+        var wantRunning = config.McpServerEnabled;
+        var port        = config.McpServerPort;
+
+        // 既に望む状態 (起動中・同一ポート) なら触らない。
+        if (_mcpServer is { IsRunning: true } cur && wantRunning && cur.Port == port)
+            return;
+
+        // 差分あり: いったん止めて張り替える。
+        _mcpServer?.Dispose();
+        _mcpServer = null;
+        if (!wantRunning) return;
+
+        var server = new ChBrowser.Services.Mcp.McpHttpServer(_mainVm, port);
+        if (server.Start())
+            _mcpServer = server;
+        else
+            server.Dispose();   // バインド失敗 (= ポート使用中等) は McpHttpServer 内で Debug 出力済み
     }
 
     private static long CalculateCacheBytes(string dir)
