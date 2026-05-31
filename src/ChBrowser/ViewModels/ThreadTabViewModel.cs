@@ -100,6 +100,20 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private IReadOnlyList<int>? _pendingHidePostNumbers;
 
+    /// <summary>NG 判定 AI が「攻撃的 (= スコア >= しきい値)」と判定したレス番号の「全集合」。
+    /// 値が変わると WebView2Helper.AiHiddenPush (= setAiHidden) で JS に送られ、対象レスに
+    /// <c>.ai-ng-hidden</c> クラスが付け外しされる (= 集合に無い番号は再表示される / 可逆)。
+    /// <see cref="PendingHidePostNumbers"/> (= 物理削除) とは別系統。 </summary>
+    [ObservableProperty]
+    private IReadOnlyList<int>? _aiHiddenPostNumbers;
+
+    /// <summary>このスレで AI が出した NG スコア (レス番号 → 1..5)。永続化分の読み戻し + 逐次判定で更新される。
+    /// しきい値と突き合わせて <see cref="AiHiddenPostNumbers"/> を再計算するための元データ。</summary>
+    public Dictionary<int, int> AiScores { get; } = new();
+
+    /// <summary>永続化済みスコア (<c>.aing.json</c>) を一度読み込んだか。スレ再オープン時の二重ロード防止。</summary>
+    public bool AiScoresLoaded { get; set; }
+
     /// <summary>JS に「このレスまでスクロールしてくれ」と push するためのトリガ (Phase 25)。
     /// 5ch.io スレ URL のクリック (= postNo 付き) で本タブにスクロール要求が来た時に、新しい
     /// <see cref="ScrollToPostRequest"/> インスタンスを setter することで AttachedProperty 経由で
@@ -270,6 +284,20 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
             var idx    = Array.IndexOf(values, ViewMode);
             ViewMode   = values[(idx + 1) % values.Length];
         });
+    }
+
+    /// <summary><see cref="AiScores"/> としきい値から「非表示にすべきレス番号集合」を作り直し、
+    /// <see cref="AiHiddenPostNumbers"/> に新インスタンスで代入する (= JS へ setAiHidden が飛ぶ)。
+    /// しきい値 6 以上 (= OFF) の時は空集合 = 全再表示。逐次判定 / しきい値変更のたびに呼ぶ。</summary>
+    public void RecomputeAiHidden(int threshold)
+    {
+        var hidden = new List<int>();
+        if (threshold <= 5)
+        {
+            foreach (var kv in AiScores)
+                if (kv.Value >= threshold) hidden.Add(kv.Key);
+        }
+        AiHiddenPostNumbers = hidden; // 空配列でも push する (= 全クリアの意味になる)
     }
 
     /// <summary>レスを末尾に追加。内部 <see cref="Posts"/> を更新したあと、

@@ -1,8 +1,12 @@
 <Application x:Class="ChBrowser.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:ChBrowser">
+             xmlns:local="clr-namespace:ChBrowser"
+             xmlns:conv="clr-namespace:ChBrowser.Converters">
     <Application.Resources>
+
+        <!-- NG 判定 AI しきい値メニューの ✓ 表示用 (現在のしきい値と各項目の値の一致判定) -->
+        <conv:IntEqualsConverter x:Key="IntEquals" />
 
         <!-- 共通フォント定義: スレ本文ペインは MS P ゴシック (AA 対応) + Segoe UI Emoji フォールバック -->
         <FontFamily x:Key="ThreadFont">MS Pゴシック, Segoe UI Emoji</FontFamily>

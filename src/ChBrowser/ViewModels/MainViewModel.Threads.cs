@@ -46,6 +46,9 @@ public sealed partial class MainViewModel
         }
         if (ReferenceEquals(tab, SelectedThreadTab))
             AboneStatus = $"あぼーん {tab.HiddenCount}";
+
+        // NG 判定 AI: 選択中タブにレスが増えたら、新規分 (= 未判定) の判定を再開する。
+        OnPostsAppendedForAiNg(tab);
     }
 
     // ---- 「自分の書き込みへの返信あり」検出 (= 状態マーク赤化) ----

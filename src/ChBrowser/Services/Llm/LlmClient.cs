@@ -144,7 +144,8 @@ public sealed class LlmClient : IDisposable
         IReadOnlyList<LlmChatMessage> messages,
         Action<string> onDelta,
         IReadOnlyList<object>? tools = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, object?>? extraBody = null)
     {
         if (string.IsNullOrWhiteSpace(settings.ApiUrl))
             return new LlmChatResult(false, "", Array.Empty<LlmToolCall>(), "API URL が未設定です");
@@ -169,30 +170,21 @@ public sealed class LlmClient : IDisposable
         // tools が指定されていれば payload に tools を追加。空なら通常モード。
         // stream_options.include_usage: 対応サーバ (OpenAI / llama.cpp 等) は最終チャンクで usage を返す
         // → 出力トークン数を正確に取れる (= token/s・総トークン表示用)。非対応サーバは無視するだけ。
-        object payload;
+        // payload は Dictionary で組む (= 呼び出し側が extraBody で任意フィールドを足せるように)。
+        var payload = new Dictionary<string, object?>
+        {
+            ["model"]          = settings.Model.Trim(),
+            ["messages"]       = msgObjs,
+            ["stream"]         = true,
+            ["stream_options"] = new { include_usage = true },
+            ["max_tokens"]     = maxTokens,
+        };
         if (tools is { Count: > 0 })
-        {
-            payload = new
-            {
-                model      = settings.Model.Trim(),
-                messages   = msgObjs,
-                stream     = true,
-                stream_options = new { include_usage = true },
-                tools      = tools.ToArray(),
-                max_tokens = maxTokens,
-            };
-        }
-        else
-        {
-            payload = new
-            {
-                model      = settings.Model.Trim(),
-                messages   = msgObjs,
-                stream     = true,
-                stream_options = new { include_usage = true },
-                max_tokens = maxTokens,
-            };
-        }
+            payload["tools"] = tools.ToArray();
+        // extraBody: リーズニング無効化フラグ等を呼び出し側 (NG 判定) が注入する。
+        // 同名キーは上書き。OpenAI 互換サーバ (llama.cpp / vLLM) は未知フィールドを基本的に無視する。
+        if (extraBody is not null)
+            foreach (var kv in extraBody) payload[kv.Key] = kv.Value;
         var json = JsonSerializer.Serialize(payload);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

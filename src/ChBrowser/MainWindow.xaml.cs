@@ -283,6 +283,46 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
+    /// <summary>ステータスバーの「AING判定…」クリック。選択中タブで AI-NG により非表示中のレス No を一覧表示する。
+    /// 非表示レスは画面上では見えない (display:none) ので、ここでは情報表示のみ (ジャンプはしない)。</summary>
+    private void AiNgStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement el) return;
+        if (DataContext is not MainViewModel vm) return;
+
+        var hidden = vm.GetSelectedTabAiNgHidden();
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = el,
+            Placement       = PlacementMode.MousePoint,
+        };
+
+        if (hidden.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "(AI-NG で非表示中のレスはありません)", IsEnabled = false });
+            menu.IsOpen = true;
+            return;
+        }
+
+        menu.Items.Add(new MenuItem { Header = $"AI-NG 非表示中: {hidden.Count} 件", IsEnabled = false });
+        menu.Items.Add(new Separator());
+
+        // 件数が多いとメニューが極端に長くなるので上限を設け、残りは件数だけ示す。
+        const int maxItems = 100;
+        var shown = 0;
+        foreach (var (number, score) in hidden)
+        {
+            if (shown >= maxItems) break;
+            menu.Items.Add(new MenuItem { Header = $"レス No {number} (攻撃度 {score})", IsEnabled = false });
+            shown++;
+        }
+        if (hidden.Count > maxItems)
+            menu.Items.Add(new MenuItem { Header = $"… 他 {hidden.Count - maxItems} 件", IsEnabled = false });
+
+        menu.IsOpen = true;
+    }
+
     /// <summary>NG ルール 1 件をメニュー項目用ラベルに整形。「対象 / 検索方式 / 「パターン」 — N 件」</summary>
     private static string FormatRuleLabel(Models.NgRule rule, int count)
     {

@@ -110,6 +110,10 @@ public sealed class DataPaths
     public string IdxJsonPath(string host, string directoryName, string threadKey)
         => Path.Combine(BoardDir(host, directoryName), threadKey + ".idx.json");
 
+    /// <summary>AI による NG 判定スコア (レス番号 → 1..5) の per-thread 保存先。</summary>
+    public string AiNgScoresPath(string host, string directoryName, string threadKey)
+        => Path.Combine(BoardDir(host, directoryName), threadKey + ".aing.json");
+
     /// <summary>"hayabusa9.5ch.io" → "5ch.io"、"mercury.bbspink.com" → "bbspink.com"。</summary>
     public static string ExtractRootDomain(string host)
     {

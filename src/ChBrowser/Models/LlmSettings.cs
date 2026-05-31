@@ -25,6 +25,11 @@ public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int
                    c.WorkerContextSize > 0 ? c.WorkerContextSize : main.ContextSize);
     }
 
+    /// <summary>NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統) の接続。
+    /// 完全に独立した設定 (フォールバックなし。空なら未設定 = 機能オフ)。</summary>
+    public static LlmSettings NgFromConfig(AppConfig c)
+        => new(c.NgAiApiUrl ?? "", c.NgAiApiKey ?? "", c.NgAiModel ?? "", c.NgAiContextSize);
+
     private static string Pick(string? primary, string? fallback)
         => string.IsNullOrWhiteSpace(primary) ? (fallback ?? "") : primary!;
 }

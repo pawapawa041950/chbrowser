@@ -73,6 +73,32 @@ public sealed record AppConfig
     /// 別エンドポイントに分けている場合は ON で高速化。</summary>
     public bool AllowParallelWorkers { get; init; } = false;
 
+    // ---- NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統) ----
+    // 攻撃的 / 荒らし的なレスを LLM で判定して非表示にする機能用の接続設定。
+    // AI エージェント (Llm* / Worker*) とは独立した別モデルを指定できる (空なら未設定 = 機能オフ)。
+
+    /// <summary>NG 判定 AI の OpenAI 互換 API URL。空なら未設定。</summary>
+    public string NgAiApiUrl { get; init; } = "";
+    /// <summary>NG 判定 AI の API キー (Bearer)。空なら Authorization 無し。config.json に平文保存。</summary>
+    public string NgAiApiKey { get; init; } = "";
+    /// <summary>NG 判定 AI のモデル名。</summary>
+    public string NgAiModel { get; init; } = "";
+    /// <summary>NG 判定 AI のコンテキストサイズ (トークン数)。</summary>
+    public int NgAiContextSize { get; init; } = 8192;
+
+    /// <summary>NG 判定のしきい値。AI が付けた攻撃度スコア (1..5) がこの値以上のレスを非表示にする。
+    /// 6 以上 = 実質オフ (= 何も隠さない)。既定 4 (= 4 と 5 を隠す)。スレ表示ペインのボタンで変更。</summary>
+    public int NgAiThreshold { get; init; } = 4;
+
+    /// <summary>NG 判定の同時実行数 (= 並行で投げる LLM リクエスト本数)。サーバ (llama.cpp / vLLM) の
+    /// 並列デコードを効かせて高速化するためのもの。サーバ側を <c>--parallel</c> でこの値以上にして起動すると効く。
+    /// 既定 4。1 で従来の逐次相当。</summary>
+    public int NgAiConcurrency { get; init; } = 4;
+
+    /// <summary>NG 判定リクエストに「リーズニング無効化のための一般的な設定一式」を付加するか。
+    /// リーズニングモデルだと思考過程の生成で遅くなるため、既定 true。サーバ側で OFF にできているなら不要。</summary>
+    public bool NgAiDisableReasoning { get; init; } = true;
+
     // ---- MCP サーバ (外部公開) ----
     // ChBrowser のスレ読み取り / 横断 / 開く 系ツール (14 個) を MCP (Model Context Protocol) で
     // 外部の MCP クライアント (Claude Desktop / Cursor 等) に公開する。動作中の本体プロセス内で

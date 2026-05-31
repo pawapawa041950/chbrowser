@@ -1,0 +1,65 @@
+<UserControl x:Class="ChBrowser.Views.Settings.AiNgPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             xmlns:conv="clr-namespace:ChBrowser.Converters"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <!-- 「AI NG」カテゴリ: 攻撃的レスの自動非表示 (NG 判定 AI)。AI エージェントとは別系統の独立設定。 -->
+    <UserControl.Resources>
+        <conv:LlmStatusToBrushConverter x:Key="LlmStatusBrush" />
+
+        <!-- フォーム行ラベル共通スタイル -->
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="Foreground" Value="#444" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel>
+
+        <TextBlock Text="NG判定AI" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
+            攻撃的・荒らし的なレスの判定に使う AI モデルです（AI エージェントとは別系統の独立設定）。
+            空欄なら未設定（機能オフ）。1 レスごとの短い判定なので、軽量・高速なモデルが向いています。
+        </TextBlock>
+        <StackPanel Width="260" HorizontalAlignment="Left">
+            <TextBlock Text="NG判定用AIモデル" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock Text="API URL" Style="{StaticResource FieldLabel}" />
+            <TextBox Text="{Binding NgAiApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                     Margin="0,0,0,6" />
+            <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
+            <PasswordBox x:Name="NgAiApiKeyInput" PasswordChanged="NgAiApiKeyInput_PasswordChanged" Margin="0,0,0,6" />
+            <TextBlock Text="モデル名" Style="{StaticResource FieldLabel}" />
+            <TextBox Text="{Binding NgAiModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                     Margin="0,0,0,6" />
+            <TextBlock Text="Context Size (トークン数)" Style="{StaticResource FieldLabel}" />
+            <TextBox Text="{Binding NgAiContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                     Width="120" HorizontalAlignment="Left" />
+            <TextBlock Text="同時実行数 (並列リクエスト本数)" Style="{StaticResource FieldLabel}" Margin="0,6,0,0" />
+            <TextBox Text="{Binding NgAiConcurrency, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                     Width="120" HorizontalAlignment="Left"
+                     ToolTip="NG 判定を何件並行で投げるか (既定 4)。サーバ (llama.cpp 等) を --parallel この値以上で起動すると並列デコードで高速化します。" />
+            <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
+                       Text="※ サーバを --parallel この値以上で起動しないと並列化の効果は出ません (1〜16)。" />
+
+            <CheckBox Content="リーズニングOFFオプションを付加する" Margin="0,10,0,0"
+                      IsChecked="{Binding NgAiDisableReasoning, Mode=TwoWay}" />
+            <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
+                       Text="AI NG処理でLLMのリーズニングが動作すると処理速度が遅くなるため、リーズニングをOFFするための一般的な設定を付加します。基本的にはLLMのサーバ側でリーズニングをOFFして立ち上げるのが望ましいです。" />
+
+            <Button Content="接続確認" Padding="14,3" HorizontalAlignment="Left" Margin="0,10,0,4"
+                    Command="{Binding TestNgAiConnectionCommand}"
+                    ToolTip="この NG 判定 AI の設定で OpenAI 互換 API に接続できるか確認します" />
+            <TextBlock Text="{Binding NgAiConnectionStatus}" TextWrapping="Wrap" FontSize="11"
+                       Foreground="{Binding NgAiConnectionStatus, Converter={StaticResource LlmStatusBrush}}" />
+        </StackPanel>
+        <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,8,0,0">
+            ※ API キーは config.json に平文で保存されます。
+        </TextBlock>
+
+    </StackPanel>
+</UserControl>

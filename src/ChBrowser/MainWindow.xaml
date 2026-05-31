@@ -130,6 +130,12 @@
                            ToolTip="クリックで NG ルール別の内訳を表示"
                            MouseLeftButtonUp="AboneStatus_MouseLeftButtonUp" />
             </StatusBarItem>
+            <StatusBarItem DockPanel.Dock="Right">
+                <TextBlock Text="{Binding AiNgStatus}" Foreground="#6A1B9A"
+                           Cursor="Hand"
+                           ToolTip="NG 判定 AI の処理進捗 (クリックで非表示中のレス No 一覧)"
+                           MouseLeftButtonUp="AiNgStatus_MouseLeftButtonUp" />
+            </StatusBarItem>
             <!-- 残りスペースを埋める StatusMessage (= LastChildFill=true なので最後に置く)。 -->
             <StatusBarItem><TextBlock Text="{Binding StatusMessage}" /></StatusBarItem>
         </StatusBar>

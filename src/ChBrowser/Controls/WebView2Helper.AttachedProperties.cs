@@ -337,6 +337,34 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // AiHiddenPush (スレ表示: AI-NG で隠す/戻すレス番号の「全集合」を push)
+    //
+    // 既存の HidePostsPush (= setHiddenPosts) は DOM から物理削除する不可逆操作だが、
+    // AI-NG はしきい値変更で再表示したいので別チャネルにする。setAiHidden は「現在隠すべき
+    // レス番号の全集合」を毎回送り、JS 側は CSS クラス (.ai-ng-hidden) を集合に合わせて付け外しする
+    // (= 可逆・冪等)。空配列を送ると全解除になる。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty AiHiddenPushProperty =
+        DependencyProperty.RegisterAttached(
+            "AiHiddenPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnAiHiddenPushChanged));
+
+    public static object? GetAiHiddenPush(DependencyObject d) => d.GetValue(AiHiddenPushProperty);
+    public static void    SetAiHiddenPush(DependencyObject d, object? value) => d.SetValue(AiHiddenPushProperty, value);
+
+    private static void OnAiHiddenPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not System.Collections.Generic.IEnumerable<int> nums) return; // null は無視 (= 未設定)
+        var arr = System.Linq.Enumerable.ToArray(nums); // 空配列もそのまま送る (= 全解除)
+        var json = JsonSerializer.Serialize(new { type = "setAiHidden", numbers = arr }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
     // ScrollToPostPush (スレ表示: 指定レス番号までスクロールせよ JS に push)
     //
     // 5ch.io スレ URL クリック (= postNo 付き) で本タブにスクロール要求が来た時に

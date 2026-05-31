@@ -188,6 +188,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         // (= ウィンドウは開いたまま、タイトル / system prompt / toolset が動的に更新される)。
         // 実装は MainViewModel.Threads.cs 側 (= _aiChatViewModel フィールドのオーナー)。
         SwitchAiChatContextTo(value);
+
+        // NG 判定 AI: 選択タブが変わったら、そのタブの既判定分を即反映 + 未判定レスの判定を (再) 開始する。
+        // 実装は MainViewModel.AiNg.cs。
+        StartAiNgFor(value);
     }
 
     private void OnActiveThreadTabPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -614,6 +618,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         {
             type = "setConfig", openOnSingleClick = config.ThreadListOpenOnSingleClick,
         });
+
+        // NG 判定 AI: しきい値を UI ミラーに反映し、選択中タブがあれば即時に再フィルタ / 判定再開する
+        // (= 設定画面でしきい値や接続先を変えた直後にも効く)。
+        AiNgThreshold = config.NgAiThreshold;
+        if (SelectedThreadTab is { } aiNgTab) StartAiNgFor(aiNgTab);
     }
 
     // -----------------------------------------------------------------

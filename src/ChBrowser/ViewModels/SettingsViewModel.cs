@@ -48,6 +48,17 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _workerModel            = "";
     [ObservableProperty] private int    _workerContextSize      = 0;
     [ObservableProperty] private bool   _allowParallelWorkers   = false;
+    // NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統)
+    [ObservableProperty] private string _ngAiApiUrl             = "";
+    [ObservableProperty] private string _ngAiApiKey             = "";
+    [ObservableProperty] private string _ngAiModel              = "";
+    [ObservableProperty] private int    _ngAiContextSize        = 8192;
+    /// <summary>NG 判定の同時実行数 (= 並行で投げる LLM リクエスト本数)。サーバを --parallel この値以上で起動すると並列デコードで高速化。既定 4。</summary>
+    [ObservableProperty] private int    _ngAiConcurrency        = 4;
+    /// <summary>NG 判定リクエストにリーズニング無効化設定一式を付加するか。既定 ON。</summary>
+    [ObservableProperty] private bool   _ngAiDisableReasoning   = true;
+    /// <summary>NG 判定 AI の接続確認結果。表示専用 (ConfigStorage に保存しない)。色分け converter の規約は他と同じ。</summary>
+    [ObservableProperty] private string _ngAiConnectionStatus   = "未確認";
     // MCP サーバ (内蔵ツールを外部 MCP クライアントへ公開・localhost HTTP)
     [ObservableProperty] private bool   _mcpServerEnabled       = false;
     [ObservableProperty] private int    _mcpServerPort          = 7393;
@@ -143,6 +154,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     public IAsyncRelayCommand TestLlmConnectionCommand { get; }
     /// <summary>作業モデル (右カラム) の「接続確認」ボタン用。</summary>
     public IAsyncRelayCommand TestWorkerConnectionCommand { get; }
+    /// <summary>NG 判定 AI の「接続確認」ボタン用。</summary>
+    public IAsyncRelayCommand TestNgAiConnectionCommand { get; }
 
     // ---- Phase 11d: デザイン編集 ----
     public IRelayCommand<string>? OpenCssFileCommand { get; }
@@ -217,6 +230,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
         Categories.Add(new("認証",         "どんぐり (5ch) のメール認証"));
         Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
+        Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作"));
@@ -245,6 +259,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         WorkerModel                  = initial.WorkerModel;
         WorkerContextSize            = initial.WorkerContextSize;
         AllowParallelWorkers         = initial.AllowParallelWorkers;
+        NgAiApiUrl                   = initial.NgAiApiUrl;
+        NgAiApiKey                   = initial.NgAiApiKey;
+        NgAiModel                    = initial.NgAiModel;
+        NgAiContextSize              = initial.NgAiContextSize;
+        NgAiConcurrency              = initial.NgAiConcurrency;
+        NgAiDisableReasoning         = initial.NgAiDisableReasoning;
         McpServerEnabled             = initial.McpServerEnabled;
         McpServerPort                = initial.McpServerPort;
         DonguriEmail                 = initial.DonguriEmail;
@@ -311,6 +331,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                                                         () => _testLlmConnectionAction is not null);
         TestWorkerConnectionCommand = new AsyncRelayCommand(TestWorkerConnectionAsync,
                                                         () => _testLlmConnectionAction is not null);
+        TestNgAiConnectionCommand   = new AsyncRelayCommand(TestNgAiConnectionAsync,
+                                                        () => _testLlmConnectionAction is not null);
 
         RefreshCacheSizeDisplay();
     }
@@ -357,6 +379,28 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>NG 判定 AI の「接続確認」本体。入力中の値を確定してから、その接続設定で接続テストする。</summary>
+    private async System.Threading.Tasks.Task TestNgAiConnectionAsync()
+    {
+        if (_testLlmConnectionAction is null) return;
+        FlushPendingSave();
+        NgAiConnectionStatus = "確認中…";
+        try
+        {
+            var settings = new LlmSettings(
+                (NgAiApiUrl ?? "").Trim(),
+                NgAiApiKey ?? "",
+                (NgAiModel ?? "").Trim(),
+                NgAiContextSize);
+            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
+            NgAiConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
+        }
+        catch (Exception ex)
+        {
+            NgAiConnectionStatus = $"NG — {ex.Message}";
+        }
+    }
+
     private void OnAnyPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (_suppressSave) return;
@@ -369,6 +413,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(DonguriLoginStatus):    // ログイン状態は表示専用 (ConfigStorage に書かない)
             case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
             case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
+            case nameof(NgAiConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -415,6 +460,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         WorkerModel                 = WorkerModel,
         WorkerContextSize           = WorkerContextSize,
         AllowParallelWorkers        = AllowParallelWorkers,
+        NgAiApiUrl                  = NgAiApiUrl,
+        NgAiApiKey                  = NgAiApiKey,
+        NgAiModel                   = NgAiModel,
+        NgAiContextSize             = NgAiContextSize,
+        NgAiConcurrency             = NgAiConcurrency,
+        NgAiDisableReasoning        = NgAiDisableReasoning,
         McpServerEnabled            = McpServerEnabled,
         McpServerPort               = McpServerPort,
         DonguriEmail                = DonguriEmail,

@@ -107,6 +107,45 @@
                         </Style>
                     </StackPanel.Style>
 
+                    <!-- NG 判定 AI のしきい値設定 (= 検索ボックスの右隣)。クリックでしきい値メニューを開く
+                         (どこからを NG とみなすか)。実処理は MainViewModel.SetAiNgThresholdCommand。✓ は現在値に付く。 -->
+                    <Button Style="{StaticResource ToolbarIconButton}"
+                            Click="AiNgThresholdButton_Click"
+                            ToolTip="攻撃的レスの非表示しきい値 (NG 判定 AI)">
+                        <TextBlock Text="🛡" FontSize="13"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="NG 判定 AI のしきい値" IsEnabled="False" />
+                                <Separator />
+                                <MenuItem Header="NGなし"
+                                          IsCheckable="True"
+                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=6, Mode=OneWay}"
+                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="6" />
+                                <MenuItem Header="NG弱(Score5)"
+                                          IsCheckable="True"
+                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=5, Mode=OneWay}"
+                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="5" />
+                                <MenuItem Header="NG中(Score4以上)"
+                                          IsCheckable="True"
+                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=4, Mode=OneWay}"
+                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="4" />
+                                <MenuItem Header="NG強(Score3以上)"
+                                          IsCheckable="True"
+                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=3, Mode=OneWay}"
+                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="3" />
+                                <MenuItem Header="NG特強(Score2以上)"
+                                          IsCheckable="True"
+                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=2, Mode=OneWay}"
+                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="2" />
+                                <Separator />
+                                <MenuItem Header="レスのスコア判定をクリアする"
+                                          Command="{Binding ClearAiNgScoresCommand}"
+                                          ToolTip="このスレの LLM 判定スコアをすべて消去します (再表示され、有効なら判定し直します)" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+
                     <!-- フィルタトグル: 人気レス / 画像レス。両方 ON で OR (= どちらかに該当なら表示)。 -->
                     <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
                                   IsChecked="{Binding SelectedThreadTab.IsPopularFilterOn}"
@@ -241,6 +280,7 @@
                         <TextBlock Text="★" FontSize="14" Foreground="#e6b800"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
+
                 </StackPanel>
 
                 <!-- 絞り込み検索: ヘッダの「タイトル」と「ボタン群」の間の残りスペースを fill する。
@@ -335,6 +375,7 @@
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
                                   ctrl:WebView2Helper.HidePostsPush="{Binding PendingHidePostNumbers}"
+                                  ctrl:WebView2Helper.AiHiddenPush="{Binding AiHiddenPostNumbers}"
                                   ctrl:WebView2Helper.ScrollToPostPush="{Binding PendingScrollToPost}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"

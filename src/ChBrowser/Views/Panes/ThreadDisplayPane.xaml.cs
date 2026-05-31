@@ -28,6 +28,16 @@ public partial class ThreadDisplayPane : UserControl
         Loaded += (_, __) => WireVideoDownloadCompletionToPane();
     }
 
+    /// <summary>NG 判定 AI のしきい値ボタン。左クリックでアタッチ済み ContextMenu (しきい値メニュー) を開く。
+    /// 右クリック用メニューを左クリックで開くだけなので、PlacementTarget をボタン自身に固定して下に出す。</summary>
+    private void AiNgThresholdButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.ContextMenu is null) return;
+        btn.ContextMenu.PlacementTarget = btn;
+        btn.ContextMenu.Placement       = PlacementMode.Bottom;
+        btn.ContextMenu.IsOpen          = true;
+    }
+
     // ---- ペインフォーカス → ViewModel に通知 ----
 
     private void Pane_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)

@@ -3907,8 +3907,27 @@
                     if (Array.isArray(msg.numbers)) hidePostsByNumber(msg.numbers);
                     break;
                 }
+                case 'setAiHidden': {
+                    // AI-NG: 攻撃的判定されたレス番号の「全集合」。CSS クラスで可逆に非表示にする
+                    // (= しきい値変更で集合が変われば再表示される)。DOM からは削除しない。
+                    if (Array.isArray(msg.numbers)) setAiHiddenPosts(msg.numbers);
+                    break;
+                }
             }
         });
+    }
+
+    /// AI-NG: 指定レス番号の集合に合わせて .ai-ng-hidden クラスを付け外しする (可逆・冪等)。
+    function setAiHiddenPosts(numbers) {
+        var set = Object.create(null);
+        for (var i = 0; i < numbers.length; i++) set[numbers[i]] = true;
+        var nodes = document.querySelectorAll('.post[id^="r"]'); // primary インスタンスのみ (id="rN")
+        for (var j = 0; j < nodes.length; j++) {
+            var el = nodes[j];
+            var n = parseInt(el.id.substring(1), 10);
+            if (set[n]) el.classList.add('ai-ng-hidden');
+            else        el.classList.remove('ai-ng-hidden');
+        }
     }
 
     // ---------- 「スレ表示真っ白」現象 分析用フック ----------
