@@ -44,11 +44,8 @@ public partial class AiChatWindow : Window
         InitializeComponent();
 
         // VM の表示更新イベントを購読 (すべて UI スレッド上で発火する)。
-        _vm.UserMessageAdded         += OnUserMessageAdded;
-        _vm.AssistantMessageStarted  += OnAssistantMessageStarted;
-        _vm.AssistantHtmlUpdated     += OnAssistantHtmlUpdated;
-        _vm.AssistantMessageFinished += OnAssistantMessageFinished;
-        _vm.ErrorAdded               += OnErrorAdded;
+        _vm.UserMessageAdded += OnUserMessageAdded;
+        _vm.AssistantEvent   += OnAssistantEvent;
 
         // 「AIチャット」カテゴリのキーバインドをこのウィンドウへ登録 (= 入力欄外フォーカス時の Enter 送信等)。
         _shortcuts?.AttachAiChatWindow(this);
@@ -88,11 +85,9 @@ public partial class AiChatWindow : Window
 
     // ---- VM イベント → シェルへのメッセージ転送 ----
 
-    private void OnUserMessageAdded(string text)      => PostToShell(new { type = "addUser",         text });
-    private void OnAssistantMessageStarted()          => PostToShell(new { type = "startAssistant" });
-    private void OnAssistantHtmlUpdated(string html)  => PostToShell(new { type = "updateAssistant", html });
-    private void OnAssistantMessageFinished()         => PostToShell(new { type = "finishAssistant" });
-    private void OnErrorAdded(string text)            => PostToShell(new { type = "addError",        text });
+    private void OnUserMessageAdded(string text) => PostToShell(new { type = "addUser", text });
+    /// <summary>イベント駆動の表示更新を JS シェルへそのまま中継する (= begin / seg / trunc / section / … )。</summary>
+    private void OnAssistantEvent(object payload) => PostToShell(payload);
 
     /// <summary>表示更新メッセージをシェルに送る。ready 前なら退避キューに積む。</summary>
     private void PostToShell(object message)
@@ -173,11 +168,8 @@ public partial class AiChatWindow : Window
     {
         _shortcuts?.DetachAiChatWindow(this);
 
-        _vm.UserMessageAdded         -= OnUserMessageAdded;
-        _vm.AssistantMessageStarted  -= OnAssistantMessageStarted;
-        _vm.AssistantHtmlUpdated     -= OnAssistantHtmlUpdated;
-        _vm.AssistantMessageFinished -= OnAssistantMessageFinished;
-        _vm.ErrorAdded               -= OnErrorAdded;
+        _vm.UserMessageAdded -= OnUserMessageAdded;
+        _vm.AssistantEvent   -= OnAssistantEvent;
 
         if (TranscriptView.CoreWebView2 is { } core)
         {

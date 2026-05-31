@@ -1,18 +1,31 @@
 <!DOCTYPE html>
 <!--
-  AI チャットウィンドウの会話表示シェル。
-  C# (AiChatWindow) から PostWebMessageAsJson でメッセージを受け取り、チャットバブルを描画する。
-  markdown は C# 側 (Markdig) で HTML 化済みのものが updateAssistant.html として届くので、
-  ここでは innerHTML にそのまま流し込むだけ (= リアルタイム描画は updateAssistant の連続呼び出しで実現)。
+  AI チャットウィンドウの会話表示シェル (イベント駆動・追記式)。
+  C# (AiChatWindow) から PostWebMessageAsJson でセマンティックなイベントを受け取り、安定した DOM ノードに
+  「追記 / 末尾更新」する。旧来の「全文を innerHTML で総入れ替え」方式はクリック握り潰し・選択喪失・
+  折りたたみ喪失・チラつき・O(n^2) 再変換の原因だったため廃止した。
+
+  markdown→HTML はサーバ側 (Markdig, TranscriptStreamer 経由) で「ブロック単位」に変換済みのものが届く。
+  確定済みブロックは一度だけ届いて凍結され、末尾の伸長中ブロックだけが更新される。よってユーザが触る
+  ノード (think の <details> 等) はストリーミング中に作り替えられず、クリック / 選択 / 開閉が常時効く。
 
   C# → JS メッセージ:
-    { type:'addUser',         text }   ユーザ発言バブルを追加 (プレーンテキスト)
-    { type:'startAssistant'  }         空のアシスタントバブルを追加し「現在の応答先」にする
-    { type:'updateAssistant', html }   現在のアシスタントバブルの中身を html で置換 (ストリーミング更新)
-    { type:'finishAssistant' }         「現在の応答先」を確定 (ポインタを解除)
-    { type:'addError',        text }   エラーバブルを追加
+    { type:'addUser',     text }                       ユーザ発言バブルを追加 (プレーンテキスト)
+    { type:'begin' }                                   空のアシスタントバブルを作り「現在の応答先」にする
+    { type:'seg', ch, idx, kind, html|label, failed }  チャネル ch のセグメント idx を upsert
+                                                        kind: 'text' | 'think' (html) / 'tool' (label, failed)
+                                                        ch:   'work' | 'body' | 'sec:<id>'
+    { type:'trunc', ch, keep }                         チャネル ch のセグメント idx>=keep を削除
+    { type:'section', id, title }                      作業エリアに区画 (dispatch_task) を作る
+    { type:'sectionDone', id, status, finding }        区画の見出しに状態アイコン + finding
+    { type:'plan', items:[{text,done}] }               計画チェックリストの更新
+    { type:'summary', text }                           作業エリア折りたたみバーの文言
+    { type:'notice', text }                            非致命の注記 (中断 / 一部失敗) を本文に追記
+    { type:'error',  text }                            現在のバブルを確定しエラーバブルを追加
+    { type:'end' }                                     応答確定 (ストリーミングカーソル除去)
   JS → C# メッセージ:
-    { type:'openExternal',    url  }   バブル内リンクのクリック (= 既定ブラウザで開く要求)
+    { type:'openExternal', url }                       バブル内リンクのクリック (= 既定ブラウザで開く要求)
+    { type:'ready' }                                   シェル初期化完了
 -->
 <html lang="ja">
 <head>
@@ -63,7 +76,7 @@
     white-space: pre-wrap;
   }
   /* ストリーミング中の点滅カーソル風インジケータ。 */
-  .msg.assistant.streaming .body::after {
+  .msg.assistant.streaming .final-body::after {
     content: "▍";
     color: #888;
     animation: blink 1s steps(1) infinite;
@@ -131,9 +144,12 @@
   }
   .msg.assistant .body img { max-width: 100%; height: auto; }
 
-  /* ---- 思考過程ブロック (= 推論モデルの <think>...</think> や reasoning_content) ----
-     - インラインで本文に混ざらないよう枠で囲み、フォントも小さめ・色も控えめにする。
-     - <details>/<summary> で折りたたみ可能。デフォルトは展開 (= ユーザは「いま考え中」が見える)。 */
+  /* テキストセグメントの隣接マージン整理 (= ブロック分割しても余白が崩れないように) */
+  .msg.assistant .body .seg > :first-child { margin-top: 0; }
+  .msg.assistant .body .seg > :last-child  { margin-bottom: 0; }
+  .msg.assistant .body .seg { margin: 6px 0; }
+
+  /* ---- 思考過程ブロック (= 推論モデルの think) ---- */
   .msg.assistant .body details.think-block {
     margin: 6px 0;
     padding: 4px 8px;
@@ -149,20 +165,14 @@
     font-weight: 600;
     font-size: 11px;
     user-select: none;
-    list-style: revert; /* デフォルト三角マーカーを残す */
+    list-style: revert;
   }
-  .msg.assistant .body details.think-block > .think-body {
-    margin-top: 4px;
-    font-style: italic;
-  }
-  /* 思考過程内の段落・リストは少し詰めて表示 (= 本文ほど主張させない) */
+  .msg.assistant .body details.think-block > .think-body { margin-top: 4px; font-style: italic; }
   .msg.assistant .body details.think-block > .think-body > :first-child { margin-top: 0; }
   .msg.assistant .body details.think-block > .think-body > :last-child  { margin-bottom: 0; }
   .msg.assistant .body details.think-block > .think-body p { margin: 3px 0; line-height: 1.45; }
 
-  /* ---- agent work 折りたたみバー (= 思考過程やツール呼び出しを 1 行に畳む) ----
-     最終回答が出始めるまでは「今何をしているか」のサマリだけが見える 1 行のバーになる。
-     ユーザがクリックで展開すれば内側の think / tool-call / 中間テキストを確認できる。 */
+  /* ---- agent work 折りたたみバー ---- */
   .msg.assistant .body details.agent-work {
     margin: 4px 0 8px;
     padding: 0;
@@ -178,23 +188,24 @@
     color: #4b5563;
     font-weight: 500;
     user-select: none;
-    list-style: revert; /* デフォルトの三角マーカーを残す */
+    list-style: revert;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .msg.assistant .body details.agent-work[open] > summary {
-    border-bottom: 1px solid #d8dce4;
-  }
-  .msg.assistant .body details.agent-work > .agent-work-body {
-    padding: 6px 10px 4px;
-  }
-  /* 折りたたみ内側の段落は詰めて表示 (= 本文と差別化) */
+  .msg.assistant .body details.agent-work[open] > summary { border-bottom: 1px solid #d8dce4; }
+  .msg.assistant .body details.agent-work > .agent-work-body { padding: 6px 10px 4px; }
   .msg.assistant .body details.agent-work > .agent-work-body > :first-child { margin-top: 0; }
-  .msg.assistant .body details.agent-work > .agent-work-body > :last-child  { margin-bottom: 0; }
 
-  /* ---- ツール呼び出し行 (= エージェントループで呼んだ tool の表示マーカー) ----
-     1 ユーザ送信 = 1 バブルに統一しているため、ラウンドの境界はこの行で示す。 */
+  /* dispatch_task 区画 */
+  .msg.assistant .body .work-section { margin: 6px 0; }
+  .msg.assistant .body .work-section-head { font-weight: 600; color: #4b5563; font-size: 0.92em; margin: 4px 0 2px; }
+  .msg.assistant .body .work-section-find { color: #555; font-size: 0.9em; margin: 2px 0 6px; }
+  .msg.assistant .body .plan { margin: 4px 0; font-size: 0.9em; color: #4b5563; }
+  .msg.assistant .body .plan .plan-item { line-height: 1.5; }
+  .msg.assistant .body .notice { color: #7a6a20; font-style: italic; margin: 6px 0; }
+
+  /* ---- ツール呼び出し行 ---- */
   .msg.assistant .body .tool-call-line {
     margin: 6px 0;
     padding: 3px 8px;
@@ -206,14 +217,8 @@
     font-family: "Consolas", "Cascadia Mono", "Yu Gothic UI", monospace;
     word-break: break-all;
   }
-  .msg.assistant .body .tool-call-line .tool-call-label {
-    font-weight: 700;
-    margin-right: 8px;
-    color: #1e4070;
-  }
-  .msg.assistant .body .tool-call-line .tool-call-args {
-    color: #2a4a68;
-  }
+  .msg.assistant .body .tool-call-line .tool-call-label { font-weight: 700; margin-right: 8px; color: #1e4070; }
+  .msg.assistant .body .tool-call-line .tool-call-args { color: #2a4a68; }
 </style>
 </head>
 <body>
@@ -222,106 +227,187 @@
 (function () {
   "use strict";
   var messages = document.getElementById("messages");
-  var current = null; // ストリーミング中のアシスタントバブルの .body 要素
-  var detailStates = []; // current バブル内の details の開閉状態 (= 開閉の唯一の真実源・index 対応)
+
+  // 現在のアシスタントバブルの主要ノード
+  var bubble = null, summaryEl = null, workBody = null, planEl = null, sectionsEl = null, finalEl = null;
+  var chSegs = {};       // chId -> [segment node...]
+  var sectionEls = {};   // sectionId -> { root, body, head, find }
 
   // ---- autoscroll: 末尾に張り付くが、ユーザが上にスクロールしたら追従停止する ----
-  // ユーザが末尾近く (= 残り AT_BOTTOM_PX 内) に居る間は autoScrollEnabled=true、
-  // 上にスクロールしたら false にして以降の自動末尾移動を抑制する。
-  // 末尾に戻ってきたら再度 true に復帰し、自動追従が再開する。
   var AT_BOTTOM_PX = 30;
   var autoScrollEnabled = true;
-
   function isNearBottom() {
     return (window.scrollY + window.innerHeight) >= (document.body.scrollHeight - AT_BOTTOM_PX);
   }
-
-  // scroll イベント: 位置を読んで autoScrollEnabled を再判定する。
-  // scrollToBottom 呼出直後にも発火するが、その時は末尾近くなので true のまま (= 問題ない)。
-  window.addEventListener("scroll", function () {
-    autoScrollEnabled = isNearBottom();
-  }, { passive: true });
-
+  window.addEventListener("scroll", function () { autoScrollEnabled = isNearBottom(); }, { passive: true });
   function scrollToBottom() {
-    // ユーザが上にいる場合は触らない (= 読書中の位置を尊重)。
     if (!autoScrollEnabled) return;
     window.scrollTo(0, document.body.scrollHeight);
   }
 
-  // ---- details (= 思考過程 / agent work 折りたたみ) の open 状態を「JS 側の真実源」で管理する ----
-  // ストリーミング中は updateAssistant が毎デルタで innerHTML を丸ごと置換するため、ネイティブ
-  // <details> の open をそのまま頼ると「クリック直後の再描画が状態を巻き戻す」競合が起きていた
-  // (= 押しても開かない / 閉じても閉じない)。対策として開閉はクリックハンドラで横取りして
-  // detailStates[index] を即時更新し、再描画後はこの配列を唯一の真実源として復元する。
-  // (current バブル内の details は出現順 = append 中心なので index 対応は安定。)
-  function applyDetailStates(root) {
-    if (!root) return;
-    var list = root.querySelectorAll("details");
-    for (var i = 0; i < list.length; i++) {
-      if (i < detailStates.length) list[i].open = detailStates[i];
-      else detailStates[i] = list[i].open; // 新規ブロックは HTML の既定 (= 開) を採用して記録
-    }
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
+  function el(tag, cls) { var n = document.createElement(tag); if (cls) n.className = cls; return n; }
 
   function makeBubble(kind, roleLabel) {
-    var msg = document.createElement("div");
-    msg.className = "msg " + kind;
-    var role = document.createElement("div");
-    role.className = "role";
-    role.textContent = roleLabel;
-    var body = document.createElement("div");
-    body.className = "body";
-    msg.appendChild(role);
-    msg.appendChild(body);
-    messages.appendChild(msg);
+    var msg = el("div", "msg " + kind);
+    var role = el("div", "role"); role.textContent = roleLabel;
+    var body = el("div", "body");
+    msg.appendChild(role); msg.appendChild(body); messages.appendChild(msg);
     return { msg: msg, body: body };
   }
 
   function addUser(text) {
     var b = makeBubble("user", "あなた");
-    b.body.textContent = text; // プレーンテキスト (CSS の pre-wrap で改行保持)
-    // ユーザ送信直後は autoscroll を強制再開 (= 新しい応答の頭は必ず見せる)。
+    b.body.textContent = text;
     autoScrollEnabled = true;
     window.scrollTo(0, document.body.scrollHeight);
   }
 
-  function startAssistant() {
-    var b = makeBubble("assistant streaming", "AI");
-    current = b.body;
-    detailStates = []; // 新しいバブルの折りたたみ状態をリセット
+  // ---- アシスタントバブル (イベント駆動) ----
+
+  function begin() {
+    var msg = el("div", "msg assistant streaming");
+    var role = el("div", "role"); role.textContent = "AI";
+    var body = el("div", "body");
+
+    var details = el("details", "agent-work");      // 既定は折りたたみ
+    summaryEl = el("summary"); summaryEl.textContent = "作業中…";
+    var awBody = el("div", "agent-work-body");
+    workBody = el("div", "ch-work");
+    planEl = el("div", "plan");
+    sectionsEl = el("div", "sections");
+    awBody.appendChild(workBody); awBody.appendChild(planEl); awBody.appendChild(sectionsEl);
+    details.appendChild(summaryEl); details.appendChild(awBody);
+
+    finalEl = el("div", "final-body");
+
+    body.appendChild(details); body.appendChild(finalEl);
+    msg.appendChild(role); msg.appendChild(body); messages.appendChild(msg);
+
+    bubble = msg; chSegs = {}; sectionEls = {};
     scrollToBottom();
   }
 
-  function updateAssistant(html) {
-    if (!current) startAssistant();
-    current.innerHTML = html;   // Markdig 生成済み HTML (C# 側で raw HTML は無効化済み)
-    applyDetailStates(current); // 開閉は JS 側の真実源 (detailStates) から復元
-    scrollToBottom();
+  function containerFor(ch) {
+    if (ch === "work") return workBody;
+    if (ch === "body") return finalEl;
+    if (ch && ch.indexOf("sec:") === 0) {
+      var s = sectionEls[ch.slice(4)];
+      return s ? s.body : null;
+    }
+    return null;
   }
 
-  function finishAssistant() {
-    if (current) {
-      // streaming クラスを外してカーソル表示を消す
-      var msg = current.parentElement;
-      if (msg) msg.classList.remove("streaming");
-      current = null;
+  function makeThink() {
+    var d = el("details", "think-block"); d.open = true; d._k = "think";
+    var s = el("summary"); s.textContent = "思考過程";
+    var b = el("div", "think-body");
+    d.appendChild(s); d.appendChild(b);
+    return d;
+  }
+  function makeTool(label, failed) {
+    var d = el("div", "tool-call-line"); d._k = "tool";
+    var l = el("span", "tool-call-label"); l.textContent = "ツール";
+    var a = el("span", "tool-call-args"); a.textContent = (failed ? "⚠ " : "") + (label || "");
+    d.appendChild(l); d.appendChild(a);
+    return d;
+  }
+
+  // idx 位置にノードを配置 (= 既存なら置換、末尾なら追加、隙間は防御的に埋める)。
+  function putAt(cont, arr, idx, node) {
+    if (idx < arr.length) {
+      var old = arr[idx];
+      if (old && old.parentNode === cont) cont.replaceChild(node, old);
+      else cont.appendChild(node);
+      arr[idx] = node;
+    } else {
+      while (arr.length < idx) { var ph = el("div", "seg"); ph._k = "text"; cont.appendChild(ph); arr.push(ph); }
+      cont.appendChild(node); arr[idx] = node;
     }
   }
 
-  function addError(text) {
-    finishAssistant();
+  function seg(m) {
+    if (!bubble) return;
+    var cont = containerFor(m.ch); if (!cont) return;
+    var arr = chSegs[m.ch] || (chSegs[m.ch] = []);
+    var idx = m.idx | 0;
+    var node = arr[idx];
+
+    if (m.kind === "think") {
+      if (!node || node._k !== "think") { node = makeThink(); putAt(cont, arr, idx, node); }
+      node.querySelector(".think-body").innerHTML = m.html || "";
+    } else if (m.kind === "tool") {
+      var fresh = makeTool(m.label || "", !!m.failed);
+      putAt(cont, arr, idx, fresh);
+    } else { // text
+      if (!node || node._k !== "text") { node = el("div", "seg"); node._k = "text"; putAt(cont, arr, idx, node); }
+      node.innerHTML = m.html || "";
+    }
+    scrollToBottom();
+  }
+
+  function trunc(m) {
+    var cont = containerFor(m.ch); var arr = chSegs[m.ch];
+    if (!cont || !arr) return;
+    var keep = m.keep | 0;
+    for (var i = arr.length - 1; i >= keep; i--) {
+      if (arr[i] && arr[i].parentNode === cont) cont.removeChild(arr[i]);
+      arr.pop();
+    }
+  }
+
+  function section(m) {
+    if (!sectionsEl || sectionEls[m.id]) return;
+    var root = el("div", "work-section");
+    var head = el("div", "work-section-head"); head.textContent = "▼ " + (m.title || "");
+    var body = el("div", "section-body");
+    var find = el("div", "work-section-find"); find.style.display = "none";
+    root.appendChild(head); root.appendChild(body); root.appendChild(find);
+    sectionsEl.appendChild(root);
+    sectionEls[m.id] = { root: root, body: body, head: head, find: find, title: m.title || "" };
+    scrollToBottom();
+  }
+  function sectionDone(m) {
+    var s = sectionEls[m.id]; if (!s) return;
+    var icon = m.status === "done" ? "✓" : (m.status === "partial" ? "◐" : "✗");
+    s.head.textContent = icon + " " + s.title;
+    if (m.finding) { s.find.style.display = ""; s.find.textContent = m.finding; }
+    scrollToBottom();
+  }
+
+  function plan(m) {
+    if (!planEl) return;
+    if (!m.items || !m.items.length) { planEl.textContent = ""; return; }
+    planEl.textContent = "";
+    for (var i = 0; i < m.items.length; i++) {
+      var it = m.items[i];
+      var row = el("div", "plan-item");
+      row.textContent = (it.done ? "☑ " : "☐ ") + (it.text || "");
+      planEl.appendChild(row);
+    }
+    scrollToBottom();
+  }
+
+  function summary(m) { if (summaryEl) summaryEl.textContent = m.text || "作業"; }
+
+  function notice(m) {
+    if (!finalEl) return;
+    var n = el("div", "notice"); n.textContent = m.text || "";
+    finalEl.appendChild(n); scrollToBottom();
+  }
+
+  function endTurn() {
+    if (bubble) { bubble.classList.remove("streaming"); bubble = null; }
+  }
+
+  function errorMsg(text) {
+    endTurn();
     var b = makeBubble("error", "エラー");
-    b.body.textContent = text;
+    b.body.textContent = text || "";
     scrollToBottom();
   }
 
   // バブル内リンクのクリックは WebView2 内で遷移させず、C# に「既定ブラウザで開いて」と依頼する。
+  // (think の <details> はネイティブ toggle がそのまま効く — ノードを作り替えないので握り潰されない。)
   document.addEventListener("click", function (e) {
     var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
     if (!a) return;
@@ -332,37 +418,24 @@
     }
   });
 
-  // 折りたたみ (details/summary) の開閉を JS 側で横取りして「常時クリックを受け付ける」ようにする。
-  // ネイティブ toggle はストリーミング再描画と競合して反応しないことがあるため、preventDefault して
-  // 自前で open をトグルし、current バブル内なら真実源 detailStates も即時更新する (= 巻き戻し防止)。
-  document.addEventListener("click", function (e) {
-    var summary = e.target && e.target.closest ? e.target.closest("summary") : null;
-    if (!summary) return;
-    var det = summary.parentElement;
-    if (!det || det.tagName !== "DETAILS") return;
-    e.preventDefault();
-    var willOpen = !det.open;
-    det.open = willOpen;
-    if (current && current.contains(det)) {
-      var list = current.querySelectorAll("details");
-      var idx = Array.prototype.indexOf.call(list, det);
-      if (idx >= 0) detailStates[idx] = willOpen;
-    }
-  });
-
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener("message", function (e) {
       var m = e.data;
       if (!m || typeof m !== "object" || !m.type) return;
       switch (m.type) {
-        case "addUser":         addUser(m.text || ""); break;
-        case "startAssistant":  startAssistant(); break;
-        case "updateAssistant": updateAssistant(m.html || ""); break;
-        case "finishAssistant": finishAssistant(); break;
-        case "addError":        addError(m.text || ""); break;
+        case "addUser":     addUser(m.text || ""); break;
+        case "begin":       begin(); break;
+        case "seg":         seg(m); break;
+        case "trunc":       trunc(m); break;
+        case "section":     section(m); break;
+        case "sectionDone": sectionDone(m); break;
+        case "plan":        plan(m); break;
+        case "summary":     summary(m); break;
+        case "notice":      notice(m); break;
+        case "error":       errorMsg(m.text || ""); break;
+        case "end":         endTurn(); break;
       }
     });
-    // C# 側に「シェル準備完了」を通知 (= 以降のメッセージを安全に送れる)。
     window.chrome.webview.postMessage({ type: "ready" });
   }
 })();

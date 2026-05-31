@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using ChBrowser.Services.Agent;
 using ChBrowser.Services.Llm;
 
@@ -9,176 +8,124 @@ namespace ChBrowser.ViewModels;
 /// <summary>新エージェント (NewAgentEngine) の UI 出力先 (<see cref="IAgentHost"/>) 実装。
 /// doc/ai-agent-design.md §5.2 / §4.9 (D4 / D14 / D15)。
 ///
-/// <para>既存の表示イベント (<see cref="AssistantMessageStarted"/> / <see cref="AssistantHtmlUpdated"/> /
-/// <see cref="AssistantMessageFinished"/> / <see cref="ErrorAdded"/>) と <see cref="MarkdownRenderer"/> を
-/// そのまま再利用する (= ai-chat.html / AiChatWindow は無改造)。</para>
+/// <para><b>イベント駆動・追記式</b>: <see cref="TranscriptStreamer"/> にセマンティックなイベントを渡し、
+/// streamer がチャネル別 (work / body / sec:&lt;id&gt;) にテキストを「ブロック / think / ツール行」へ
+/// 分解して差分イベント (begin/seg/trunc/section/…) を <see cref="AssistantEvent"/> 経由で WebView へ流す。
+/// 確定ブロックは凍結され、末尾の伸長中ブロックだけ再変換されるので、旧来の「全 HTML 総入れ替え」による
+/// クリック握り潰し / 選択喪失 / 折りたたみ喪失 / O(n²) 再変換が解消される。</para>
 ///
-/// <para><b>区画分離 (B5)</b>: 作業エリアは「Strategist の plan レベル語り (<see cref="_hostWork"/>)」と
-/// 「dispatch_task ごとの区画 (<see cref="_sections"/>)」に分かれる。並列実行時に複数 Worker が同時に
-/// ストリームしてもそれぞれ自分の区画バッファに書くのでログが混ざらない。
-/// 実行は UI スレッド上の async 並行 (= 複数 LLM リクエストを同時 in-flight にするがスレッドは増やさない) なので、
-/// バッファアクセスはすべて UI スレッドで直列化される (= ロック不要)。</para></summary>
+/// <para>テキスト delta は <see cref="HostFlush"/> で <see cref="RenderThrottleMs"/> 間引きして送出する。
+/// 区画完了 / 中断 / エラー / 終了などの構造イベントは streamer 側で該当チャネルを確定フラッシュしてから送る。</para></summary>
 public sealed partial class AiChatViewModel : IAgentHost
 {
-    /// <summary>dispatch_task 1 件 = 1 区画のバッファ。</summary>
-    private sealed class SectionBuf
-    {
-        public string        Title   = "";
-        public readonly StringBuilder Body = new();
-        public bool          Done;
-        public TaskOutcome   Status;
-        public string        Finding = "";
-    }
+    private TranscriptStreamer? _streamer;
+    private TranscriptStreamer  Streamer => _streamer ??= new TranscriptStreamer(o => AssistantEvent?.Invoke(o));
 
-    private readonly StringBuilder    _hostWork = new();   // Strategist の plan レベル語り (区画外・境界の前)
-    private readonly List<SectionBuf> _sections = new();   // dispatch_task ごとの区画 (作成順)
-    private readonly StringBuilder    _hostBody = new();   // 可視本文 (最終回答 / ask_user)
-    private bool   _hostBoundarySet;
-    private bool   _hostBubbleStarted;
-    private string _hostSummary = "作業中…";
-    private long   _hostLastRenderTick;
+    private int  _hostSectionCounter;
+    private long _hostLastRenderTick;
 
-    void IAgentHost.Begin()
-    {
-        _hostWork.Clear();
-        _sections.Clear();
-        _hostBody.Clear();
-        _hostBoundarySet    = false;
-        _hostSummary        = "作業中…";
-        _hostBubbleStarted  = true;
-        _hostLastRenderTick = 0;
-        AssistantMessageStarted?.Invoke();
-    }
-
-    void IAgentHost.StreamWork(string deltaMd)
-    {
-        _hostWork.Append(deltaMd);
-        HostRender(false);
-    }
-
-    int IAgentHost.WorkCheckpoint() => _hostWork.Length;
-
-    void IAgentHost.RollbackWork(int checkpoint)
-    {
-        if (checkpoint >= 0 && checkpoint <= _hostWork.Length)
-            _hostWork.Length = checkpoint;
-        HostRender(false);
-    }
-
-    IWorkSection IAgentHost.BeginWorkSection(string title)
-    {
-        var buf = new SectionBuf { Title = title };
-        _sections.Add(buf);
-        HostRender(false);
-        return new HostWorkSection(this, buf);
-    }
-
-    void IAgentHost.PlanUpdated(PlanView plan)
-    {
-        var done = 0;
-        foreach (var i in plan.Items) if (i.Completed) done++;
-        _hostSummary = $"計画 {done}/{plan.Items.Count}";
-        _hostWork.Append("\n\n<tool-call>計画: ")
-                 .Append(done).Append('/').Append(plan.Items.Count).Append(" タスク</tool-call>\n\n");
-        HostRender(false);
-    }
-
-    void IAgentHost.StreamBody(string deltaMd)
-    {
-        _hostBoundarySet = true;   // 最初の本文出力で work↔body 境界を確定
-        _hostBody.Append(deltaMd);
-        HostRender(false);
-    }
-
-    void IAgentHost.Status(string text)
-    {
-        if (!string.IsNullOrEmpty(text)) _hostSummary = text;
-        StatusMessage = text ?? "";
-    }
-
-    void IAgentHost.Notice(string text)
-    {
-        _hostBoundarySet = true;
-        _hostBody.Append("\n\n*").Append(text).Append("*\n\n");
-        HostRender(true);
-    }
-
-    void IAgentHost.Error(string text)
-    {
-        HostRender(true);
-        if (_hostBubbleStarted) AssistantMessageFinished?.Invoke();
-        ErrorAdded?.Invoke(text);
-        StatusMessage      = "";
-        _hostBubbleStarted = false;
-    }
-
-    void IAgentHost.End()
-    {
-        HostRender(true);
-        if (_hostBubbleStarted) AssistantMessageFinished?.Invoke();
-        StatusMessage      = "";
-        _hostBubbleStarted = false;
-    }
-
-    /// <summary>作業エリア (_hostWork + 各区画) + 本文を結合し、境界つきで HTML 化して表示更新する。
-    /// throttle で連続 delta の再レンダを間引く (= 既存ループと同じ <see cref="RenderThrottleMs"/>)。</summary>
-    private void HostRender(bool force)
+    /// <summary>text delta 送出の throttle。構造イベントや完了時は force=true で即時フラッシュ。</summary>
+    private void HostFlush(bool force)
     {
         var now = Environment.TickCount64;
         if (!force && now - _hostLastRenderTick < RenderThrottleMs) return;
         _hostLastRenderTick = now;
-
-        var work = new StringBuilder();
-        work.Append(_hostWork);
-        foreach (var s in _sections)
-        {
-            work.Append("\n\n<tool-call>▼ ").Append(EscapeHtml(s.Title)).Append("</tool-call>\n\n");
-            work.Append(s.Body);
-            if (s.Done)
-            {
-                var icon = s.Status switch
-                {
-                    TaskOutcome.Done    => "✓",
-                    TaskOutcome.Partial => "◐",
-                    _                   => "✗",
-                };
-                work.Append("\n\n<tool-call>").Append(icon).Append(' ').Append(EscapeHtml(s.Finding)).Append("</tool-call>\n\n");
-            }
-        }
-
-        var workStr  = work.ToString();
-        var combined = workStr + _hostBody.ToString();
-        int? boundary = _hostBoundarySet ? workStr.Length : null;
-        AssistantHtmlUpdated?.Invoke(MarkdownRenderer.ToHtml(combined, _hostSummary, boundary));
+        Streamer.Flush();
     }
 
-    /// <summary>1 タスク = 1 区画。自分の <see cref="SectionBuf"/> にだけ書き込むので、
-    /// 並列実行で複数 Worker が同時にストリームしてもログが混ざらない (B5)。</summary>
+    void IAgentHost.Begin()
+    {
+        _hostSectionCounter = 0;
+        _hostLastRenderTick = 0;
+        Streamer.Begin();
+    }
+
+    void IAgentHost.StreamWork(string deltaMd)
+    {
+        Streamer.WorkText(deltaMd);
+        HostFlush(false);
+    }
+
+    int IAgentHost.WorkCheckpoint() => Streamer.WorkCheckpoint();
+
+    void IAgentHost.RollbackWork(int checkpoint) => Streamer.RollbackWork(checkpoint);
+
+    IWorkSection IAgentHost.BeginWorkSection(string title)
+    {
+        var id = "s" + (++_hostSectionCounter);
+        Streamer.BeginSection(id, title);
+        return new HostWorkSection(this, id);
+    }
+
+    void IAgentHost.PlanUpdated(PlanView plan)
+    {
+        var items = new List<(string, bool)>(plan.Items.Count);
+        var done = 0;
+        foreach (var i in plan.Items) { if (i.Completed) done++; items.Add((i.Goal, i.Completed)); }
+        Streamer.Plan(items);
+        Streamer.Summary($"計画 {done}/{plan.Items.Count}");
+    }
+
+    void IAgentHost.StreamBody(string deltaMd)
+    {
+        Streamer.BodyText(deltaMd);
+        HostFlush(false);
+    }
+
+    void IAgentHost.Status(string text)
+    {
+        StatusMessage = text ?? "";
+        if (!string.IsNullOrEmpty(text)) Streamer.Summary(text);
+    }
+
+    void IAgentHost.Notice(string text)
+    {
+        HostFlush(true);          // 保留中の本文を先に確定してから注記を追記
+        Streamer.Notice(text);
+    }
+
+    void IAgentHost.Error(string text)
+    {
+        Streamer.Error(text);     // FlushAll + error イベント (JS が現バブル確定 + エラーバブル追加)
+        StatusMessage = "";
+    }
+
+    void IAgentHost.End()
+    {
+        Streamer.End();           // FlushAll + end イベント
+        StatusMessage = "";
+    }
+
+    /// <summary>1 タスク = 1 区画。自分の section id にだけ書き込むので、並列実行で複数 Worker が
+    /// 同時にストリームしてもログが混ざらない (B5)。</summary>
     private sealed class HostWorkSection : IWorkSection
     {
         private readonly AiChatViewModel _vm;
-        private readonly SectionBuf      _buf;
+        private readonly string          _id;
 
-        public HostWorkSection(AiChatViewModel vm, SectionBuf buf) { _vm = vm; _buf = buf; }
+        public HostWorkSection(AiChatViewModel vm, string id) { _vm = vm; _id = id; }
 
         public void Stream(string deltaMd)
         {
-            _buf.Body.Append(deltaMd);
-            _vm.HostRender(false);
+            _vm.Streamer.SectionText(_id, deltaMd);
+            _vm.HostFlush(false);
         }
 
         public void ToolMarker(string label, bool failed)
         {
-            _buf.Body.Append("\n\n<tool-call>").Append(failed ? "⚠ " : "").Append(EscapeHtml(label)).Append("</tool-call>\n\n");
-            _vm.HostRender(false);
+            _vm.Streamer.SectionTool(_id, label, failed);
+            _vm.HostFlush(false);
         }
 
         public void Complete(TaskOutcome status, string finding)
         {
-            _buf.Done    = true;
-            _buf.Status  = status;
-            _buf.Finding = finding;
-            _vm.HostRender(true);
+            var s = status switch
+            {
+                TaskOutcome.Done    => "done",
+                TaskOutcome.Partial => "partial",
+                _                   => "failed",
+            };
+            _vm.Streamer.SectionComplete(_id, s, finding);
         }
     }
 }

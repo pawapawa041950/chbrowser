@@ -48,14 +48,11 @@ public sealed partial class AiChatViewModel : ObservableObject
     // ---- Window (WebView2 シェル) が購読する表示更新イベント (すべて UI スレッド上で発火) ----
     /// <summary>ユーザ発言を 1 件追加 (プレーンテキスト)。</summary>
     public event Action<string>? UserMessageAdded;
-    /// <summary>アシスタント応答バブルの生成。</summary>
-    public event Action? AssistantMessageStarted;
-    /// <summary>アシスタント応答バブルの中身を更新 (引数は markdown を HTML 化したもの)。</summary>
-    public event Action<string>? AssistantHtmlUpdated;
-    /// <summary>アシスタント応答バブルの確定。</summary>
-    public event Action? AssistantMessageFinished;
-    /// <summary>エラーバブルを 1 件追加。</summary>
-    public event Action<string>? ErrorAdded;
+    /// <summary>イベント駆動の表示更新 (= ai-chat.html のセマンティックプロトコル: begin / seg / trunc /
+    /// section / sectionDone / plan / summary / notice / error / end)。引数は JSON 化される匿名オブジェクト。
+    /// 旧「全 HTML を innerHTML 置換」方式は廃止し、<see cref="ChBrowser.Services.Llm.TranscriptStreamer"/> 経由で
+    /// 確定ブロックは凍結・末尾だけ更新する追記式に刷新した。</summary>
+    public event Action<object>? AssistantEvent;
 
     public AiChatViewModel(
         LlmClient      llmClient,

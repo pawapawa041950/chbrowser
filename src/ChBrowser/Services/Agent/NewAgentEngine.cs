@@ -77,6 +77,8 @@ public sealed class NewAgentEngine : IAgentEngine
         "- そういう依頼では、dispatch_task の goal に **「見つけた結果を open_thread_list_in_app でスレ一覧ペインに表示するところまで」** を必ず含める" +
         "(単一スレなら open_thread_in_app、板なら open_board_in_app)。\n" +
         "- 最終回答は「『〜』としてスレッド一覧に N 件表示しました」のような **短い完了報告**にする (結果の本体はアプリ側に出ているので、長い列挙は不要)。\n" +
+        "- **ただし完了報告は finding の確証に基づくこと。** dispatch_task の status が partial / failed のとき、または finding に「アプリへ表示した確証」(例: 『open_thread_list_in_app で N 件表示』『N 件をタブに開いた』) が無いときは、**『表示しました』と書いてはいけない**。" +
+        "見つからなかった / 開けなかった事実を正直に伝え、可能なら別の板・別表記 (正式名称 / 略称 / 作者 / キャラ名) で再 dispatch する。憶測で完了を報告しないこと。\n" +
         "- 純粋な質問・要約 (例: 「このスレ要約して」「何が話題?」) は従来どおりテキストで答えてよい。出力先はユーザの意図で選ぶ。\n" +
         "\n" +
         "# タスクの予算 (max_tool_calls) の見積もり ★重要\n" +

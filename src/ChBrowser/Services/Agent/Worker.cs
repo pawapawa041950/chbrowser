@@ -42,9 +42,11 @@ public sealed class Worker
         var toolDefs = new List<object>(_runtime.GetWorkerToolDefinitions()) { SubmitResultToolDef() };
 
         var maxCalls    = System.Math.Max(1, spec.Limits.MaxToolCalls);
-        var maxRounds   = maxCalls + 5;   // think-only / 予算超過の促し に余裕を持たせる
+        var maxRounds   = maxCalls + 8;   // think-only / 予算超過の促し に余裕を持たせる
         var toolCalls   = 0;
         var evidenceIds = new List<string>();
+        var emptyRounds = 0;              // 「ツールも本文も無い (= think だけ)」停滞ラウンドの連続数
+        const int MaxEmptyRounds = 3;     // これを超えたら partial で打ち切り (= 誤って done にしない)
 
         for (var round = 0; round < maxRounds; round++)
         {
@@ -55,13 +57,33 @@ public sealed class Worker
                 return Finish(section, new TaskResult(spec.Id, TaskOutcome.Failed,
                     $"Worker の LLM 呼び出しに失敗: {result.Error}", evidenceIds, toolCalls));
 
-            // ツールなしテキスト = 終端。寛容フォールバックで done の finding とみなす (D10)。
+            // ツールなしラウンド。
             if (result.ToolCalls.Count == 0)
             {
                 var (text, _) = ChatArchive.SplitThink(result.Content ?? "");
-                var finding = string.IsNullOrWhiteSpace(text) ? "(本文なし)" : text.Trim();
-                return Finish(section, new TaskResult(spec.Id, TaskOutcome.Done, finding, evidenceIds, toolCalls));
+                // 本文がある = 最終回答テキストを submit_result の代わりに返した寛容ケース → done (D10)。
+                if (!string.IsNullOrWhiteSpace(text))
+                    return Finish(section, new TaskResult(spec.Id, TaskOutcome.Done, text.Trim(), evidenceIds, toolCalls));
+
+                // 本文が空 (= 思考だけ / 完全に空) の停滞ラウンドは done にしない。
+                // ここを done 扱いにすると「open_*_in_app を呼ぶ前に finding『(本文なし)』で完了」して
+                // 「表示しました」と誤報告する原因になる。継続を促し、続くようなら partial で正直に返す。
+                emptyRounds++;
+                if (emptyRounds >= MaxEmptyRounds)
+                    return Finish(section, new TaskResult(spec.Id, TaskOutcome.Partial,
+                        "ツールも本文も無いラウンド (思考のみ) が続いたため打ち切り。タスクは未達 — 必要なツール呼び出し / アプリ反映ができていない。",
+                        evidenceIds, toolCalls));
+
+                messages.Add(new("assistant", result.Content ?? ""));
+                messages.Add(new("user",
+                    "まだ完了していません。思考だけで応答を終えないこと。必要なツールを呼ぶ" +
+                    "(結果をアプリに出すタスクなら open_thread_list_in_app / open_thread_in_app / open_board_in_app を実際に呼ぶ)" +
+                    "か、本当に完了したなら submit_result(status, finding) を必ず呼んでください。"));
+                continue;
             }
+
+            // 進捗があったので停滞カウンタをリセット。
+            emptyRounds = 0;
 
             // assistant の tool_calls ラウンドを履歴に記録。
             messages.Add(new("assistant", result.Content ?? "") { ToolCalls = result.ToolCalls });

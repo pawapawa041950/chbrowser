@@ -102,6 +102,15 @@ internal static class MarkdownRenderer
         return RenderFlat(s);
     }
 
+    /// <summary>イベント駆動レンダ (<see cref="TranscriptStreamer"/>) 用に、harmony 正規化を内部公開する。</summary>
+    internal static string NormalizeHarmony(string s) => NormalizeHarmonyMarkers(s ?? "");
+
+    /// <summary>イベント駆動レンダ用に「1 ブロック分の markdown を安全な pipeline で HTML 化」を内部公開する
+    /// (= <see cref="DisableHtml"/> 済みなので raw HTML はリテラル化され XSS 安全)。think/tool マーカーは
+    /// 含まない素の markdown 前提 (= 構造は <see cref="TranscriptStreamer"/> 側でセグメント化済み)。</summary>
+    internal static string RenderMarkdownBlock(string md)
+        => string.IsNullOrEmpty(md) ? "" : Markdown.ToHtml(md, Pipeline);
+
     /// <summary>HTML の <c>&lt;summary&gt;</c> 等に安全に埋め込むためのエスケープ。</summary>
     private static string EscapeHtml(string s)
     {
