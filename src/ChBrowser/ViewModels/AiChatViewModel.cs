@@ -54,14 +54,19 @@ public sealed partial class AiChatViewModel : ObservableObject
     /// 確定ブロックは凍結・末尾だけ更新する追記式に刷新した。</summary>
     public event Action<object>? AssistantEvent;
 
+    /// <summary>AI 向けの板/スレ使い分け説明 (ユーザ編集)。文脈プリアンブルに注入する。空なら注入しない。</summary>
+    private readonly string _aiBoardGuide;
+
     public AiChatViewModel(
         LlmClient      llmClient,
         string         threadTitle,
         ThreadToolset? threadToolset,
-        AppConfig      config)
+        AppConfig      config,
+        string         aiBoardGuide = "")
     {
         _llmClient      = llmClient;
         _threadToolset  = threadToolset;
+        _aiBoardGuide   = aiBoardGuide ?? "";
         ThreadTitle     = string.IsNullOrEmpty(threadTitle) ? "(スレッド指定なし)" : threadTitle;
         ContextSubtitle = ComputeContextSubtitle(threadToolset);
 
@@ -117,6 +122,12 @@ public sealed partial class AiChatViewModel : ObservableObject
             ? $"現在「{ThreadTitle}」というスレッドを文脈にしています。"
             : "特定スレッドには非アタッチです。");
         sb.Append("板やスレッドはツールで横断的に参照できます。");
+        if (!string.IsNullOrWhiteSpace(_aiBoardGuide))
+        {
+            sb.Append("\n\n# 板/スレの使い分け (ユーザ提供メモ)\n");
+            sb.Append("関連スレを探すときの板選びにこのメモを優先的に参考にすること。板名は list_boards で実 URL に解決する。\n");
+            sb.Append(_aiBoardGuide.Trim());
+        }
         return sb.ToString();
     }
 

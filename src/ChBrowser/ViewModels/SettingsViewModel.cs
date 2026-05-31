@@ -149,6 +149,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     public IRelayCommand           OpenThemeFolderCommand   { get; }
     public IRelayCommand           ReloadAllCssCommand      { get; }
     public IRelayCommand           ExtractDefaultCssCommand { get; }
+    /// <summary>AI カテゴリ「板/スレ説明テキストを開く」ボタン。</summary>
+    public IRelayCommand           OpenAiBoardGuideCommand  { get; }
 
     private readonly ConfigStorage         _storage;
     private readonly Action<AppConfig>     _applyCallback;
@@ -158,6 +160,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action                _restartNowAction;
     private readonly Action?               _clearCookiesAction;
     private readonly Action?               _loginNowAction;
+    /// <summary>AI カテゴリ「板/スレ説明テキストを開く」用。null ならボタン無効化。</summary>
+    private readonly Action?               _openAiBoardGuideAction;
     /// <summary>AI カテゴリの接続確認用コールバック。App が LlmClient を束ねて注入する。
     /// null のときは接続確認ボタンを無効化する。</summary>
     private readonly Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? _testLlmConnectionAction;
@@ -189,9 +193,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action?           extractDefaultCssAction  = null,
         Action?           clearCookiesAction       = null,
         Action?           loginNowAction           = null,
+        Action?           openAiBoardGuideAction   = null,
         Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null)
     {
         _storage                 = storage;
+        _openAiBoardGuideAction  = openAiBoardGuideAction;
         _initialConfig           = initial;
         _applyCallback           = applyCallback;
         _getCacheBytes           = getCacheBytes;
@@ -287,6 +293,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                                                     () => _reloadAllCssAction is not null);
         ExtractDefaultCssCommand = new RelayCommand(() => _extractDefaultCssAction?.Invoke(),
                                                     () => _extractDefaultCssAction is not null);
+        OpenAiBoardGuideCommand  = new RelayCommand(() => _openAiBoardGuideAction?.Invoke(),
+                                                    () => _openAiBoardGuideAction is not null);
         ClearCookiesCommand      = new RelayCommand(() => _clearCookiesAction?.Invoke(),
                                                     () => _clearCookiesAction is not null);
         // 「今すぐログイン」: まず未保存の入力を確定 (= debounce 待ちをスキップして即 SaveAndApply) してから login。

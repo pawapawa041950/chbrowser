@@ -57,6 +57,9 @@ public partial class App : Application
     private LlmClient? _llmClient;
     private ChBrowser.Services.Storage.ShortcutStorage? _shortcutStorage;
     private ChBrowser.Services.Shortcuts.ShortcutManager? _shortcutManager;
+    /// <summary>AI 向けの板/スレ使い分け説明 (ユーザ編集テキスト)。設定の「説明テキストを開く」と
+    /// AI チャット文脈への注入で共有する。</summary>
+    private ChBrowser.Services.Storage.AiBoardGuideStorage? _aiBoardGuide;
     /// <summary>内蔵ツールを外部 MCP クライアントへ公開する localhost HTTP サーバ。
     /// AppConfig.McpServerEnabled が ON のときだけ起動 (= 既定 OFF・オプトイン)。</summary>
     private ChBrowser.Services.Mcp.McpHttpServer? _mcpServer;
@@ -215,6 +218,9 @@ public partial class App : Application
         var openTabsStorage = new OpenTabsStorage(paths);
         var mainVm       = new MainViewModel(bbsmenu, subjectTxt, settingTxt, dat, threadIndex, favoritesStorage, postClient, donguriService, _ngService, paths, openTabsStorage, _llmClient);
         _mainVm          = mainVm;
+        // AI 向け板ガイド (ユーザ編集テキスト) — AI チャットを開くたびに読み込んで文脈に注入する。
+        _aiBoardGuide    = new ChBrowser.Services.Storage.AiBoardGuideStorage(paths);
+        mainVm.AiBoardGuide = _aiBoardGuide;
         // VM 内で AppConfig を 1 フィールドだけ更新 (= 書込ダイアログのどんぐり認証モード保存) する経路。
         // 設定ウィンドウが開いている時もベースラインを最新化して、次の SettingsViewModel.Save で
         // この値が古い空文字で上書きされないようにする。
@@ -588,6 +594,7 @@ public partial class App : Application
             extractDefaultCssAction:  ExtractDefaultThemeFiles,
             clearCookiesAction:       () => ClearDonguriCookiesNow(),
             loginNowAction:           LoginDonguriNow,
+            openAiBoardGuideAction:   OpenAiBoardGuideFile,
             // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
             testLlmConnectionAction:  async settings =>
             {
@@ -667,6 +674,18 @@ public partial class App : Application
             });
         }
         catch (Exception ex) { Debug.WriteLine($"[App] OpenCssFile failed: {ex.Message}"); }
+    }
+
+    /// <summary>AI 向け板ガイドのテキストファイルを (無ければ既定文で作って) 関連付けエディタで開く。</summary>
+    private void OpenAiBoardGuideFile()
+    {
+        if (_aiBoardGuide is null) return;
+        try
+        {
+            _aiBoardGuide.EnsureExists();
+            Process.Start(new ProcessStartInfo { FileName = _aiBoardGuide.FilePath, UseShellExecute = true });
+        }
+        catch (Exception ex) { Debug.WriteLine($"[App] OpenAiBoardGuideFile failed: {ex.Message}"); }
     }
 
     /// <summary>NG 設定ウィンドウをモードレス + シングルトンで開く (Phase 13)。

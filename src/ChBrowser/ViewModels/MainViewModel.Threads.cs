@@ -400,6 +400,9 @@ public sealed partial class MainViewModel
     /// 「AIチャット」カテゴリのキーバインド (送信 / 改行) を参照 / 自己アタッチさせる。</summary>
     public ChBrowser.Services.Shortcuts.ShortcutManager? Shortcuts { get; set; }
 
+    /// <summary>AI 向け板ガイド (ユーザ編集テキスト・App が注入)。AI チャットを開くたびに読み込んで文脈へ。</summary>
+    public ChBrowser.Services.Storage.AiBoardGuideStorage? AiBoardGuide { get; set; }
+
     /// <summary>ショートカット「AIチャット: 送信」から呼ばれる。開いている AI チャットの送信を発火する。</summary>
     public void TriggerAiChatSend()
     {
@@ -431,7 +434,8 @@ public sealed partial class MainViewModel
 
         var toolset = BuildToolsetForTab(tab);
         var title   = ResolveAiChatTitle(tab);
-        var vm      = new AiChatViewModel(_llmClient, title, toolset, CurrentConfig);
+        var guide   = AiBoardGuide?.Load() ?? "";   // 開くたびに最新の説明テキストを読み込む
+        var vm      = new AiChatViewModel(_llmClient, title, toolset, CurrentConfig, guide);
         var window       = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow, Shortcuts);
         _aiChatWindow    = window;
         _aiChatViewModel = vm;

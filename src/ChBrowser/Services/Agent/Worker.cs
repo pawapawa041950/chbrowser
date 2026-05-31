@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ChBrowser.Models;
 using ChBrowser.Services.Llm;
 
@@ -61,24 +62,31 @@ public sealed class Worker
             if (result.ToolCalls.Count == 0)
             {
                 var (text, _) = ChatArchive.SplitThink(result.Content ?? "");
-                // 本文がある = 最終回答テキストを submit_result の代わりに返した寛容ケース → done (D10)。
-                if (!string.IsNullOrWhiteSpace(text))
+                // 本文に <tool_call> マーカーが混ざる = ツール呼び出しをテキストで書いてしまい未実行のケース
+                // (例: Gemma×llama.cpp が <tool_call|> を本文に吐く)。これを done にすると「表示しました」誤報告になる。
+                var toolAttempt = TextToolMarkerRe.IsMatch(text);
+
+                // 本文がある (かつツール書き損じでない) = 最終回答テキストを submit_result の代わりに返した寛容ケース → done (D10)。
+                if (!toolAttempt && !string.IsNullOrWhiteSpace(text))
                     return Finish(section, new TaskResult(spec.Id, TaskOutcome.Done, text.Trim(), evidenceIds, toolCalls));
 
-                // 本文が空 (= 思考だけ / 完全に空) の停滞ラウンドは done にしない。
-                // ここを done 扱いにすると「open_*_in_app を呼ぶ前に finding『(本文なし)』で完了」して
-                // 「表示しました」と誤報告する原因になる。継続を促し、続くようなら partial で正直に返す。
+                // 停滞ラウンド (思考だけ / 空 / ツール書き損じ) は done にしない。継続を促し、続くなら partial で正直に返す。
                 emptyRounds++;
                 if (emptyRounds >= MaxEmptyRounds)
                     return Finish(section, new TaskResult(spec.Id, TaskOutcome.Partial,
-                        "ツールも本文も無いラウンド (思考のみ) が続いたため打ち切り。タスクは未達 — 必要なツール呼び出し / アプリ反映ができていない。",
+                        toolAttempt
+                            ? "ツール呼び出しが実行されないまま停滞 (= <tool_call> をテキストとして出力)。タスク未達 — アプリ反映ができていない。"
+                            : "ツールも本文も無いラウンド (思考のみ) が続いたため打ち切り。タスクは未達 — 必要なツール呼び出し / アプリ反映ができていない。",
                         evidenceIds, toolCalls));
 
                 messages.Add(new("assistant", result.Content ?? ""));
-                messages.Add(new("user",
-                    "まだ完了していません。思考だけで応答を終えないこと。必要なツールを呼ぶ" +
-                    "(結果をアプリに出すタスクなら open_thread_list_in_app / open_thread_in_app / open_board_in_app を実際に呼ぶ)" +
-                    "か、本当に完了したなら submit_result(status, finding) を必ず呼んでください。"));
+                messages.Add(new("user", toolAttempt
+                    ? "前回の応答ではツール呼び出しが実行されませんでした (<tool_call> をテキストとして書いたため)。" +
+                      "ツールは必ず通常の function calling 機能で呼んでください (テキストに書かない)。" +
+                      "どうしてもテキストで表現する場合は <tool_call>{\"name\":\"ツール名\",\"arguments\":{…}}</tool_call> の形で JSON を必ず含めること。"
+                    : "まだ完了していません。思考だけで応答を終えないこと。必要なツールを呼ぶ" +
+                      "(結果をアプリに出すタスクなら open_thread_list_in_app / open_thread_in_app / open_board_in_app を実際に呼ぶ)" +
+                      "か、本当に完了したなら submit_result(status, finding) を必ず呼んでください。"));
                 continue;
             }
 
@@ -207,6 +215,10 @@ public sealed class Worker
         },
     };
 
+    /// <summary>本文に紛れ込んだ <c>&lt;tool_call&gt;</c> / <c>&lt;/tool_call&gt;</c> マーカー検出用
+    /// (= ツール呼び出しをテキストで書いてしまい未実行のラウンドを done にしないため)。</summary>
+    private static readonly Regex TextToolMarkerRe = new(@"</?tool_call\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -220,20 +232,18 @@ public sealed class Worker
         "あなたはタスク実行ワーカー (Worker) です。与えられた 1 つのタスクだけを、ツールを使って遂行します。\n" +
         "\n" +
         "ルール:\n" +
-        "- 提供された読み取りツールで、タスク達成に必要な情報「だけ」を集める。無駄なツール呼び出しはしない。\n" +
-        "- 集め終えたら必ず submit_result を呼んで終了する。status は done/partial/failed、finding は結果の要約 (3 文程度・日本語)。\n" +
+        "- ツールは必ず function calling 機能で呼ぶこと。本文に <tool_call>{...}</tool_call> 等のテキストで書いても実行されない。\n" +
+        "- 提供されたツールで、タスク達成に必要な情報「だけ」を集める。無駄なツール呼び出しはしない。\n" +
+        "- 集め終えたら必ず submit_result を呼んで終了する (= これがタスクの終端。呼ばないと完了扱いにならない)。\n" +
         "- **ツール予算 (上記の最大回数) を厳守する。** 予算を使い切る前に submit_result を呼ぶこと。残り 1 回になったら必ず submit_result(status=partial) で締める。\n" +
         "- 一覧系ツール (list_boards / list_threads) はできるだけ keyword や limit で絞る (全件取得は文脈を圧迫し予算も消費する)。既に取得済みの一覧を同じ引数で取り直さない。\n" +
         "- 板をまたいで調べる場合は board ごとに list_threads を 1 回ずつ回してよいが、予算内に収まる板数に絞ること (収まらなければ partial で「どこまで調べたか」を finding に書く)。\n" +
         "- **タスクが結果を『アプリに表示 / 開く』ことを含む場合は、調べて終わりにせず、open_thread_list_in_app (複数) / open_thread_in_app (単一) / open_board_in_app (板) で実際にアプリのペインに反映してから submit_result する。** テキスト報告だけで済ませない。finding には「何件をどのタブに出したか」を書く。\n" +
-        "- **不明・曖昧な語のグラウンディング ★重要:** 依頼の中心となる固有名詞・略称・作品/製品/人物名などは、推測で 5ch 検索に突っ込まない。" +
-        "正式名称・別名(略称 / 英語表記)・主要な関連語(キャラ名 / 作者 / シリーズ / メーカー / 型番 等)を**確信を持って**挙げられるならそのまま使ってよいが、" +
-        "少しでも怪しい(略称や新語に見える / 自分の知識が古い可能性 / 解釈が複数ありうる / 最初のスレ検索が空振りした)なら、" +
-        "まず web_search で正体を特定する(必要なら web_fetch で裏取り)。" +
-        "特定できたら『正式名称＋よく使う略称＋関連語』に展開し、複数の語で板 / スレを横断検索する。" +
-        "5ch のスレタイは略称・関連語で立つことが多い(例: ダンジョン飯 → \"ダン飯\" / 作者 \"九井諒子\" / キャラ名)。" +
-        "1 語で空振りしても別語・別板で再検索する(空振り = 語が足りない信号)。" +
-        "推測で空振りするより先に 1〜2 回 web で地ならしする方が結局速い。ただし既によく知っている語をいちいち調べ直さない(予算の無駄)。\n" +
+        "- **不明・曖昧な語の扱い:** 対象の別名・関連語・対象板が context_hint で与えられていれば、まずそれを使って検索する。" +
+        "与えられておらず、かつ自分でも確信が持てない語 (略称 / 新語 / 解釈が割れる / 最初のスレ検索が空振り) のときだけ、" +
+        "web_search で正体を特定し『正式名称＋略称＋関連語(キャラ名/作者等)』に展開してから検索する (必要なら web_fetch)。" +
+        "5ch のスレタイは略称・関連語で立つことが多い(例: ダンジョン飯 → \"ダン飯\" / 作者 \"九井諒子\")。" +
+        "1 語で空振りしても別語・別板で再検索する。確信のある語をいちいち調べ直さない(予算の無駄)。\n" +
         "- 達成不能と判断したら submit_result(status=failed) を呼び、finding に理由を書く。\n" +
         "- あなたはユーザと対話できない (確認や質問はできない)。判断は自分で行う。\n" +
         "- 思考は簡潔に。";

@@ -205,6 +205,10 @@
   .msg.assistant .body .plan .plan-item { line-height: 1.5; }
   .msg.assistant .body .notice { color: #7a6a20; font-style: italic; margin: 6px 0; }
 
+  /* 回答欄末尾の計測表示 (小さく薄め) */
+  .msg.assistant .body .metrics { margin-top: 6px; color: #aaa; font-size: 10px; line-height: 1.45; }
+  .msg.assistant .body .metrics .metrics-line { white-space: nowrap; }
+
   /* ---- ツール呼び出し行 ---- */
   .msg.assistant .body .tool-call-line {
     margin: 6px 0;
@@ -229,7 +233,7 @@
   var messages = document.getElementById("messages");
 
   // 現在のアシスタントバブルの主要ノード
-  var bubble = null, summaryEl = null, workBody = null, planEl = null, sectionsEl = null, finalEl = null;
+  var bubble = null, summaryEl = null, workBody = null, planEl = null, sectionsEl = null, finalEl = null, metricsEl = null;
   var chSegs = {};       // chId -> [segment node...]
   var sectionEls = {};   // sectionId -> { root, body, head, find }
 
@@ -279,8 +283,9 @@
     details.appendChild(summaryEl); details.appendChild(awBody);
 
     finalEl = el("div", "final-body");
+    metricsEl = el("div", "metrics");   // 回答欄末尾の計測 (TTFT / 推論 / 合計 / token/s / 総トークン)
 
-    body.appendChild(details); body.appendChild(finalEl);
+    body.appendChild(details); body.appendChild(finalEl); body.appendChild(metricsEl);
     msg.appendChild(role); msg.appendChild(body); messages.appendChild(msg);
 
     bubble = msg; chSegs = {}; sectionEls = {};
@@ -389,6 +394,18 @@
 
   function summary(m) { if (summaryEl) summaryEl.textContent = m.text || "作業"; }
 
+  function metrics(m) {
+    if (!metricsEl) return;
+    var f = function (x) { return (typeof x === "number" ? x : 0).toFixed(2); };
+    metricsEl.textContent = "";
+    var l1 = el("div", "metrics-line");
+    l1.textContent = "TTFT " + f(m.ttft) + "s  推論 " + f(m.reasoning) + "s  合計 " + f(m.total) + "s";
+    var l2 = el("div", "metrics-line");
+    l2.textContent = f(m.tps) + " tok/s  " + (m.tokens | 0) + " tokens";
+    metricsEl.appendChild(l1); metricsEl.appendChild(l2);
+    scrollToBottom();
+  }
+
   function notice(m) {
     if (!finalEl) return;
     var n = el("div", "notice"); n.textContent = m.text || "";
@@ -431,6 +448,7 @@
         case "sectionDone": sectionDone(m); break;
         case "plan":        plan(m); break;
         case "summary":     summary(m); break;
+        case "metrics":     metrics(m); break;
         case "notice":      notice(m); break;
         case "error":       errorMsg(m.text || ""); break;
         case "end":         endTurn(); break;

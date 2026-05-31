@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ChBrowser.Services.Llm;
 
@@ -59,6 +60,10 @@ public sealed class TranscriptStreamer
 
     /// <summary>作業エリア折りたたみバーの文言を更新する。</summary>
     public void Summary(string text) => _send(new { type = "summary", text });
+
+    /// <summary>回答欄末尾に出す計測値 (秒・token/s・総トークン)。表示整形は JS 側。</summary>
+    public void Metrics(double ttftSec, double reasoningSec, double totalSec, double tokensPerSec, long tokens)
+        => _send(new { type = "metrics", ttft = ttftSec, reasoning = reasoningSec, total = totalSec, tps = tokensPerSec, tokens });
 
     public void Notice(string text)  => _send(new { type = "notice", text });
     public void Error(string text)   { FlushAll(); _send(new { type = "error", text }); }
@@ -240,10 +245,22 @@ public sealed class TranscriptStreamer
         }
 
         /// <summary>1 テキスト塊を think とテキストブロックに分解して <paramref name="outList"/> へ追加する。</summary>
+        // 本文に漏れたツール呼び出しマーカーを表示から除去する (= Gemma×llama.cpp 等が <tool_call|> を本文に吐くケース)。
+        // ブロック (JSON 付き) ごと除去 → 残骸の単独タグも除去。実行は LlmClient のサルベージ / function calling 側の仕事。
+        private static readonly Regex ToolCallBlockRe = new(
+            @"<tool_call\b[^>]*>[\s\S]*?</tool_call\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ToolCallStrayRe = new(
+            @"</?tool_call\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static void SegmentText(string raw, List<Seg> outList)
         {
             if (string.IsNullOrEmpty(raw)) return;
             raw = MarkdownRenderer.NormalizeHarmony(raw);
+            if (raw.IndexOf("tool_call", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                raw = ToolCallBlockRe.Replace(raw, "");
+                raw = ToolCallStrayRe.Replace(raw, "");
+            }
 
             var i = 0;
             while (i < raw.Length)

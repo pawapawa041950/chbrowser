@@ -24,6 +24,45 @@ public sealed partial class AiChatViewModel : IAgentHost
     private int  _hostSectionCounter;
     private long _hostLastRenderTick;
 
+    // 計測 (回答欄末尾に TTFT / 推論 / 合計 / token/s / 総トークンを表示する)。
+    private readonly ChBrowser.Services.Llm.AgentTurnMetrics _turnMetrics = new();
+    private long _turnStartTick;
+    private long _turnFirstDeltaTick;
+
+    /// <summary>最初の delta 到達時刻を 1 度だけ記録する (= TTFT 用)。</summary>
+    private void HostMarkFirstDelta()
+    {
+        if (_turnFirstDeltaTick == 0) _turnFirstDeltaTick = Environment.TickCount64;
+    }
+
+    /// <summary>このターンの計測値を集計して metrics イベントを送る。</summary>
+    private void HostEmitMetrics()
+    {
+        var now      = Environment.TickCount64;
+        var totalMs  = _turnStartTick > 0 ? now - _turnStartTick : 0;
+        var ttftMs   = _turnFirstDeltaTick > 0 ? _turnFirstDeltaTick - _turnStartTick : totalMs;
+        var reasonMs = _turnMetrics.ReasoningMs;
+        var tokens   = _turnMetrics.CompletionTokens;
+        var genMs    = _turnMetrics.GenMs;
+        var tps      = genMs > 0 ? tokens * 1000.0 / genMs : 0.0;
+        Streamer.Metrics(ttftMs / 1000.0, reasonMs / 1000.0, totalMs / 1000.0, tps, tokens);
+    }
+
+    // 作業バー (agent-work の summary) に出す進捗カウンタ。値が変わるたびに summary を更新する。
+    private int _hostTaskDone;       // 完了した区画 (dispatch_task) 数
+    private int _hostSectionsBegun;  // 開始した区画数
+    private int _hostPlanCount;      // 直近の plan のタスク総数 (= 宣言済み)
+    private int _hostToolUses;       // ツール使用回数 (= ToolMarker の発火数)
+
+    /// <summary>作業バー文言を組み立てて更新する。<paramref name="finished"/> でラベルを「思考工程」に切替える。
+    /// 総タスク数は「宣言済み plan 数」と「実際に開始した区画数」の大きい方 (= fast-path で plan が無くても出る)。</summary>
+    private void HostUpdateSummary(bool finished)
+    {
+        var label = finished ? "思考工程" : "作業中…";
+        var total = System.Math.Max(_hostSectionsBegun, _hostPlanCount);
+        Streamer.Summary($"{label}　タスク {_hostTaskDone}/{total}　ツール使用回数 {_hostToolUses}");
+    }
+
     /// <summary>text delta 送出の throttle。構造イベントや完了時は force=true で即時フラッシュ。</summary>
     private void HostFlush(bool force)
     {
@@ -37,11 +76,19 @@ public sealed partial class AiChatViewModel : IAgentHost
     {
         _hostSectionCounter = 0;
         _hostLastRenderTick = 0;
+        _hostTaskDone = _hostSectionsBegun = _hostPlanCount = _hostToolUses = 0;
+        // 計測リセット + LlmClient に集計先を設定。
+        _turnMetrics.Reset();
+        _turnStartTick      = Environment.TickCount64;
+        _turnFirstDeltaTick = 0;
+        _llmClient.ActiveMetrics = _turnMetrics;
         Streamer.Begin();
+        HostUpdateSummary(false);
     }
 
     void IAgentHost.StreamWork(string deltaMd)
     {
+        HostMarkFirstDelta();
         Streamer.WorkText(deltaMd);
         HostFlush(false);
     }
@@ -53,29 +100,32 @@ public sealed partial class AiChatViewModel : IAgentHost
     IWorkSection IAgentHost.BeginWorkSection(string title)
     {
         var id = "s" + (++_hostSectionCounter);
+        _hostSectionsBegun++;
         Streamer.BeginSection(id, title);
+        HostUpdateSummary(false);
         return new HostWorkSection(this, id);
     }
 
     void IAgentHost.PlanUpdated(PlanView plan)
     {
         var items = new List<(string, bool)>(plan.Items.Count);
-        var done = 0;
-        foreach (var i in plan.Items) { if (i.Completed) done++; items.Add((i.Goal, i.Completed)); }
+        foreach (var i in plan.Items) items.Add((i.Goal, i.Completed));
         Streamer.Plan(items);
-        Streamer.Summary($"計画 {done}/{plan.Items.Count}");
+        _hostPlanCount = plan.Items.Count;
+        HostUpdateSummary(false);
     }
 
     void IAgentHost.StreamBody(string deltaMd)
     {
+        HostMarkFirstDelta();
         Streamer.BodyText(deltaMd);
         HostFlush(false);
     }
 
     void IAgentHost.Status(string text)
     {
+        // 1 行ステータスは WPF ステータスバーへ。作業バー文言は進捗カウンタ (HostUpdateSummary) が担う。
         StatusMessage = text ?? "";
-        if (!string.IsNullOrEmpty(text)) Streamer.Summary(text);
     }
 
     void IAgentHost.Notice(string text)
@@ -86,12 +136,16 @@ public sealed partial class AiChatViewModel : IAgentHost
 
     void IAgentHost.Error(string text)
     {
+        HostUpdateSummary(true);  // ラベルを「思考工程」に
+        HostEmitMetrics();
         Streamer.Error(text);     // FlushAll + error イベント (JS が現バブル確定 + エラーバブル追加)
         StatusMessage = "";
     }
 
     void IAgentHost.End()
     {
+        HostUpdateSummary(true);  // ラベルを「思考工程」に
+        HostEmitMetrics();
         Streamer.End();           // FlushAll + end イベント
         StatusMessage = "";
     }
@@ -107,13 +161,16 @@ public sealed partial class AiChatViewModel : IAgentHost
 
         public void Stream(string deltaMd)
         {
+            _vm.HostMarkFirstDelta();
             _vm.Streamer.SectionText(_id, deltaMd);
             _vm.HostFlush(false);
         }
 
         public void ToolMarker(string label, bool failed)
         {
+            _vm._hostToolUses++;
             _vm.Streamer.SectionTool(_id, label, failed);
+            _vm.HostUpdateSummary(false);
             _vm.HostFlush(false);
         }
 
@@ -125,7 +182,9 @@ public sealed partial class AiChatViewModel : IAgentHost
                 TaskOutcome.Partial => "partial",
                 _                   => "failed",
             };
+            _vm._hostTaskDone++;
             _vm.Streamer.SectionComplete(_id, s, finding);
+            _vm.HostUpdateSummary(false);
         }
     }
 }

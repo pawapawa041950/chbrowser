@@ -67,6 +67,10 @@ public sealed class DataPaths
     /// <summary>アプリ全体設定 (Phase 11)。<see cref="ChBrowser.Models.AppConfig"/> の保存先。</summary>
     public string ConfigJsonPath    => Path.Combine(AppDir, "config.json");
 
+    /// <summary>AI 向けの「各板/スレの使い分け説明」をユーザが自由に書くテキストファイル。
+    /// AI チャットを開くと読み込まれ、Strategist / Worker の文脈に注入される (= 板選びの精度向上)。</summary>
+    public string AiBoardGuidePath  => Path.Combine(AppDir, "ai-board-guide.txt");
+
     /// <summary>終了時に開いていたタブ一覧 (= スレ一覧タブ + スレタブの両方、それぞれ並び順を維持) の永続化先。
     /// 起動時に <see cref="ChBrowser.Models.AppConfig.RestoreOpenTabsOnStartup"/> が true なら
     /// このファイルを読み、保存されていた順番で各タブを再オープンする。</summary>

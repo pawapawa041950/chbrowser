@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
@@ -66,6 +67,10 @@ public sealed class LlmClient : IDisposable
     private static readonly TimeSpan ChatTimeout = TimeSpan.FromMinutes(5);
 
     private readonly HttpClient _http;
+
+    /// <summary>設定すると、各 <see cref="ChatStreamAsync"/> 完了時に当該呼び出しの計測 (推論時間 / 生成時間 /
+    /// 出力トークン数) をここへ加算する (= 1 ターン分を Strategist + 全 Worker で合算)。null なら計測しない。</summary>
+    public AgentTurnMetrics? ActiveMetrics { get; set; }
 
     public LlmClient()
     {
@@ -162,6 +167,8 @@ public sealed class LlmClient : IDisposable
         var maxTokens = ComputeMaxTokens(settings.ContextSize);
 
         // tools が指定されていれば payload に tools を追加。空なら通常モード。
+        // stream_options.include_usage: 対応サーバ (OpenAI / llama.cpp 等) は最終チャンクで usage を返す
+        // → 出力トークン数を正確に取れる (= token/s・総トークン表示用)。非対応サーバは無視するだけ。
         object payload;
         if (tools is { Count: > 0 })
         {
@@ -170,6 +177,7 @@ public sealed class LlmClient : IDisposable
                 model      = settings.Model.Trim(),
                 messages   = msgObjs,
                 stream     = true,
+                stream_options = new { include_usage = true },
                 tools      = tools.ToArray(),
                 max_tokens = maxTokens,
             };
@@ -181,6 +189,7 @@ public sealed class LlmClient : IDisposable
                 model      = settings.Model.Trim(),
                 messages   = msgObjs,
                 stream     = true,
+                stream_options = new { include_usage = true },
                 max_tokens = maxTokens,
             };
         }
@@ -188,6 +197,7 @@ public sealed class LlmClient : IDisposable
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(ChatTimeout);
+        var sw = System.Diagnostics.Stopwatch.StartNew();   // 計測: 生成時間 / 推論時間 (AgentTurnMetrics 用)
         try
         {
             using var req = BuildRequest(endpoint, json, settings.ApiKey);
@@ -225,6 +235,10 @@ public sealed class LlmClient : IDisposable
             const string ThinkClose = "</think>";
             var inReasoning = false;
 
+            // 計測: 推論 (reasoning_content) の開始/終了と、usage 由来の出力トークン数。
+            long reasoningStartMs = -1, reasoningEndMs = -1;
+            var  completionTokens = -1;
+
             string? line;
             // SSE: "data: {json}" 行が delta、"data: [DONE]" で終端。空行・コメント行は読み飛ばす。
             while ((line = await reader.ReadLineAsync(cts.Token).ConfigureAwait(true)) is not null)
@@ -234,6 +248,9 @@ public sealed class LlmClient : IDisposable
                 var data = line.Substring(5).Trim();
                 if (data.Length == 0) continue;
                 if (data == "[DONE]") break;
+
+                // usage は最終チャンク (choices 空 + usage) で来ることが多いので、chunk ごとに拾う。
+                if (TryParseCompletionTokens(data, out var usageCt)) completionTokens = usageCt;
 
                 if (!TryParseStreamChunk(data, out var contentDelta, out var reasoningDelta, out var toolDeltas))
                     continue;
@@ -246,6 +263,8 @@ public sealed class LlmClient : IDisposable
                         full.Append(ThinkOpen);
                         onDelta(ThinkOpen);
                     }
+                    if (reasoningStartMs < 0) reasoningStartMs = sw.ElapsedMilliseconds;
+                    reasoningEndMs = sw.ElapsedMilliseconds;
                     full.Append(reasoningDelta);
                     onDelta(reasoningDelta);
                 }
@@ -254,6 +273,7 @@ public sealed class LlmClient : IDisposable
                     if (inReasoning)
                     {
                         inReasoning = false;
+                        reasoningEndMs = sw.ElapsedMilliseconds; // 本文開始 = 推論終了
                         full.Append(ThinkClose);
                         onDelta(ThinkClose);
                     }
@@ -277,7 +297,33 @@ public sealed class LlmClient : IDisposable
                 .Select(a => new LlmToolCall(a.Id ?? "", a.Name!, a.Arguments.ToString()))
                 .ToArray();
 
-            return new LlmChatResult(true, full.ToString(), toolCalls, null);
+            var content = full.ToString();
+
+            // 計測をターン集計へ加算 (Strategist + 各 Worker の合算)。
+            var genMs       = (int)sw.ElapsedMilliseconds;
+            var reasoningMs = reasoningStartMs >= 0 ? (int)System.Math.Max(0, reasoningEndMs - reasoningStartMs) : 0;
+            var tokens      = completionTokens >= 0 ? completionTokens : EstimateTokens(content);
+            ActiveMetrics?.Add(reasoningMs, genMs, tokens);
+
+            // 一部のモデル / サーバ (例: Gemma を llama.cpp で tool 提示) は、ツール呼び出しを OpenAI の
+            // tool_calls ではなく本文に <tool_call>{json}</tool_call> のテキストとして吐くことがある。
+            // その場合ここでサルベージして本物の tool_calls に変換し、本文からトークンを除去する
+            // (= 未実行のまま「成功」と誤判定されるのを防ぐ)。
+            if (toolCalls.Length == 0 && content.IndexOf("tool_call", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var (cleaned, salvaged) = SalvageEmbeddedToolCalls(content);
+                if (salvaged.Count > 0)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write(
+                        $"[LlmClient] 本文埋め込みのツール呼び出しを {salvaged.Count} 件サルベージ: {string.Join(", ", salvaged.ConvertAll(c => c.Name))}");
+                    return new LlmChatResult(true, cleaned, salvaged, null);
+                }
+                // 抽出できなかった = 形式不明。次回の正確な対応のため生データをログに残す。
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    "[LlmClient] tool_call らしきテキストを検出したが JSON 抽出に失敗。raw content: " + Truncate(content, 1200));
+            }
+
+            return new LlmChatResult(true, content, toolCalls, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -288,6 +334,74 @@ public sealed class LlmClient : IDisposable
             return new LlmChatResult(false, "", Array.Empty<LlmToolCall>(), $"通信エラー: {ex.Message}");
         }
     }
+
+    // ---- 本文埋め込みツール呼び出しのサルベージ (tool_calls 未パース対策) ----
+
+    /// <summary><c>&lt;tool_call ...&gt; {json} &lt;/tool_call&gt;</c> ブロック (Hermes / llama.cpp 系の汎用形式)。
+    /// 開きタグの余分な属性や末尾 <c>|</c> (<c>&lt;tool_call|&gt;</c>) も許容する。閉じが無い末尾は別途救済。</summary>
+    private static readonly Regex ToolCallBlockRe = new(
+        @"<tool_call\b[^>]*>\s*([\s\S]*?)\s*</tool_call\b[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /// <summary>閉じタグの無い末尾の <c>&lt;tool_call&gt; {json}</c> (ストリーミング途中で切れたケース)。</summary>
+    private static readonly Regex ToolCallOpenTailRe = new(
+        @"<tool_call\b[^>]*>\s*(\{[\s\S]*)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /// <summary>残骸の単独 <c>&lt;tool_call&gt;</c> / <c>&lt;/tool_call&gt;</c> トークン (表示に漏らさないため除去)。</summary>
+    private static readonly Regex ToolCallStrayRe = new(
+        @"</?tool_call\b[^>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>本文に埋め込まれたツール呼び出し JSON を抽出し、(トークン除去後の本文, 呼び出し列) を返す。
+    /// JSON は <c>{ "name": "...", "arguments"|"parameters": {...} }</c> を想定。</summary>
+    private static (string Cleaned, List<LlmToolCall> Calls) SalvageEmbeddedToolCalls(string content)
+    {
+        var calls = new List<LlmToolCall>();
+        foreach (Match m in ToolCallBlockRe.Matches(content))
+            if (TryParseToolJson(m.Groups[1].Value, out var name, out var argsJson))
+                calls.Add(new LlmToolCall(NewCallId(), name, argsJson));
+
+        // 閉じタグ無しの末尾だけのケース (ブロックが 1 件も取れなかったときに限り試す)。
+        if (calls.Count == 0)
+        {
+            var tail = ToolCallOpenTailRe.Match(content);
+            if (tail.Success && TryParseToolJson(tail.Groups[1].Value, out var name, out var argsJson))
+                calls.Add(new LlmToolCall(NewCallId(), name, argsJson));
+        }
+
+        var cleaned = ToolCallBlockRe.Replace(content, "");
+        cleaned = ToolCallStrayRe.Replace(cleaned, "");
+        return (cleaned.Trim(), calls);
+    }
+
+    /// <summary><c>{ "name":..., "arguments"|"parameters"|"args":... }</c> から name と引数 JSON を取り出す。
+    /// 引数が文字列ならそのまま、オブジェクトなら raw JSON 文字列にする。name 欠落 / 不正 JSON は false。</summary>
+    private static bool TryParseToolJson(string json, out string name, out string argsJson)
+    {
+        name = ""; argsJson = "{}";
+        var trimmed = (json ?? "").Trim();
+        if (trimmed.Length == 0 || trimmed[0] != '{') return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("name", out var n) || n.ValueKind != JsonValueKind.String) return false;
+            name = n.GetString() ?? "";
+            if (name.Length == 0) return false;
+            foreach (var key in new[] { "arguments", "parameters", "args" })
+            {
+                if (root.TryGetProperty(key, out var a))
+                {
+                    argsJson = a.ValueKind == JsonValueKind.String ? (a.GetString() ?? "{}") : a.GetRawText();
+                    break;
+                }
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static string NewCallId() => "call_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
     /// <summary>1 つの tool_call を index 単位で組み立てるためのバッファ。
     /// id / name は最初の chunk にしか入らず、arguments は chunk ごとに文字列として連結される。</summary>
@@ -314,6 +428,37 @@ public sealed class LlmClient : IDisposable
         if (!string.IsNullOrEmpty(td.Name) && string.IsNullOrEmpty(a.Name)) a.Name = td.Name;
         if (!string.IsNullOrEmpty(td.Arguments)) a.Arguments.Append(td.Arguments);
     }
+
+    /// <summary>SSE chunk から出力トークン数を取り出す (= <c>usage.completion_tokens</c>、無ければ
+    /// llama.cpp の <c>timings.predicted_n</c>)。最終チャンク (choices 空 + usage) で来ることが多い。</summary>
+    private static bool TryParseCompletionTokens(string data, out int tokens)
+    {
+        tokens = 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (root.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object
+                && u.TryGetProperty("completion_tokens", out var ctEl) && ctEl.ValueKind == JsonValueKind.Number
+                && ctEl.TryGetInt32(out var ct) && ct > 0)
+            {
+                tokens = ct; return true;
+            }
+            if (root.TryGetProperty("timings", out var t) && t.ValueKind == JsonValueKind.Object
+                && t.TryGetProperty("predicted_n", out var pn) && pn.ValueKind == JsonValueKind.Number
+                && pn.TryGetInt32(out var pnv) && pnv > 0)
+            {
+                tokens = pnv; return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>usage が取れないサーバ向けの出力トークン概算 (文字数ベース・粗い)。</summary>
+    private static int EstimateTokens(string content)
+        => string.IsNullOrEmpty(content) ? 0 : (int)System.Math.Ceiling(content.Length / 3.0);
 
     /// <summary>SSE の 1 chunk JSON から (content delta, reasoning_content delta, tool_calls delta) を取り出す。
     /// 全部 / どれか / 全部無し (= role だけの先頭 chunk) のどのパターンもありうる。

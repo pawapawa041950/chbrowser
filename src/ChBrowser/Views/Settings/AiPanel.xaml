@@ -119,6 +119,18 @@
             ※ 設定の変更は AI チャットウィンドウを開き直すと反映されます。
         </TextBlock>
 
+        <!-- AI 向けの板/スレ説明 (ユーザ編集テキスト) -->
+        <Separator Margin="0,18,0,12" />
+        <TextBlock Text="AI への板/スレの説明" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
+            あなたが普段使う各板やスレの使い分けをテキストにまとめておくと、AI が関連スレを探すときの板選びに使います
+            (例:「放映中アニメは○○板」「生成AIは△△板」など)。下のボタンでテキストを開いて自由に編集してください。
+            内容は AI チャットウィンドウを開き直すと反映されます。
+        </TextBlock>
+        <Button Content="説明テキストを開く" Padding="14,3" HorizontalAlignment="Left" Margin="0,0,0,4"
+                Command="{Binding OpenAiBoardGuideCommand}"
+                ToolTip="data/app/ai-board-guide.txt を関連付けエディタで開きます (無ければ既定文で作成)" />
+
         <!-- MCP サーバ (内蔵ツールを外部公開) -->
         <Separator Margin="0,18,0,12" />
         <TextBlock Text="MCP サーバ (外部公開)" FontWeight="SemiBold" Margin="0,0,0,4" />

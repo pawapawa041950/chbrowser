@@ -275,18 +275,21 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "search_posts",
-                    description = "本文中にキーワードを含むレスを検索し、ヒットしたレス番号と短い抜粋を返す。大小文字無視。" +
+                    description = "本文中にキーワードを含むレスを検索し、ヒットしたレス番号と短い抜粋を返す。大小文字無視 + 全角/半角ゆれ吸収 (あいまい一致)。" +
+                                  "複数キーワードは keywords 配列で渡す (既定は OR = いずれか含めばヒット、match_all=true で AND)。" +
                                   "thread_url 省略時は attached スレ。",
                     parameters  = new
                     {
                         type       = "object",
                         properties = new
                         {
-                            keyword    = new { type = "string",  description = "検索したい部分文字列" },
+                            keyword    = new { type = "string",  description = "検索キーワード (単一)。複数なら keywords を使う。" },
+                            keywords   = new { type = "array", description = "複数キーワード。既定 OR (いずれか含めばヒット)。", items = new { type = "string" } },
+                            match_all  = new { type = "boolean", description = "true で AND (全キーワードを含むレスのみ)。既定 false (OR)。" },
                             limit      = new { type = "integer", description = $"返す最大ヒット数 (既定 {DefaultSearchLimit}, 上限 {MaxSearchLimit})" },
                             thread_url = ThreadUrlParam(),
                         },
-                        required = new[] { "keyword" },
+                        required = Array.Empty<string>(),
                     },
                 },
             },
@@ -417,8 +420,10 @@ public sealed class ThreadToolset : IAgentToolset
                         type       = "object",
                         properties = new
                         {
-                            keyword = new { type = "string",  description = "板名・カテゴリ名の部分一致フィルタ (大小文字無視)。テーマ検索で複数板候補を見たい場合は省略すること。" },
-                            limit   = new { type = "integer", description = $"返す最大件数 (keyword 指定時の既定 {DefaultListLimit}, keyword 省略時の既定 {BoardsScanDefaultLimit}, 上限 {MaxListLimit})" },
+                            keyword = new { type = "string",  description = "板名・カテゴリ名の部分一致フィルタ (単一・大小文字無視 + 全角/半角ゆれ吸収)。テーマ検索で複数板候補を見たい場合は省略すること。" },
+                            keywords = new { type = "array", description = "複数キーワードで板名/カテゴリを絞る (既定 OR = いずれか一致)。", items = new { type = "string" } },
+                            match_all = new { type = "boolean", description = "true で AND。既定 false (OR)。" },
+                            limit   = new { type = "integer", description = $"返す最大件数 (keyword/keywords 指定時の既定 {DefaultListLimit}, 省略時の既定 {BoardsScanDefaultLimit}, 上限 {MaxListLimit})" },
                         },
                         required = Array.Empty<string>(),
                     },
@@ -448,8 +453,10 @@ public sealed class ThreadToolset : IAgentToolset
                         properties = new
                         {
                             board_url = new { type = "string",  description = "対象板の URL (list_boards の board_url をそのまま渡せる)" },
-                            keyword   = new { type = "string",  description = "スレタイの部分一致フィルタ (大小文字無視)。曖昧 / 略称 / ジャンル判定が必要なケースでは省略すること (= AI が手動で取捨選択するモード)" },
-                            limit     = new { type = "integer", description = $"返す最大件数 (keyword 指定時の既定 {DefaultListLimit}, keyword 省略時の既定 {ThreadsScanDefaultLimit}, 上限 {MaxListLimit})" },
+                            keyword   = new { type = "string",  description = "スレタイの部分一致フィルタ (単一)。複数語で探すなら keywords を使う。大小文字無視 + 全角/半角ゆれ吸収。曖昧 / 略称 / ジャンル判定が必要で取りこぼしを避けたいなら省略 (= AI が手動で取捨選択する scan モード)。" },
+                            keywords  = new { type = "array", description = "**複数キーワードでのスレタイ検索 (既定 OR = いずれか含めばヒット)。** 例: 作品のキャラ名を並べて関連スレを拾う [\"ダン飯\",\"マルシル\",\"ライオス\",\"センシ\"]。", items = new { type = "string" } },
+                            match_all = new { type = "boolean", description = "true で AND (全キーワードをスレタイに含むもののみ)。既定 false (OR)。" },
+                            limit     = new { type = "integer", description = $"返す最大件数 (keyword/keywords 指定時の既定 {DefaultListLimit}, 省略時の既定 {ThreadsScanDefaultLimit}, 上限 {MaxListLimit})" },
                             sort      = new { type = "string",  description = "並び順。\"default\" (subject.txt 順) / \"momentum\" (勢い順 = 1 日あたりレス数の多い順) / \"post_count\" (レス数の多い順)。勢いの高いスレを上位に取りたいときは \"momentum\"。" },
                         },
                         required = new[] { "board_url" },
@@ -546,6 +553,71 @@ public sealed class ThreadToolset : IAgentToolset
         type = "string",
         description = "対象スレッドの URL (省略時は attached スレッド)。他スレを読みたいときに渡す。例: https://news.5ch.io/test/read.cgi/news/1234567890/",
     };
+
+    // ---- 複数キーワード / OR・AND / あいまい (NFKC + 大小無視) マッチの共通ヘルパ ----
+
+    /// <summary>検索用の正規化: NFKC (全角/半角・互換文字を統一) + 小文字化。
+    /// 例: 全角英数字や半角カナのゆれを吸収する (= あいまい一致)。</summary>
+    private static string NormalizeForSearch(string s)
+        => string.IsNullOrEmpty(s) ? "" : s.Normalize(System.Text.NormalizationForm.FormKC).ToLowerInvariant();
+
+    /// <summary><c>keyword</c> (単一文字列) と <c>keywords</c> (配列) の両方からキーワードを集める。
+    /// 後方互換のため keyword も受ける。空白のみ / 重複は除く。1 件も無ければ空 (= scan / 全件)。</summary>
+    private static List<string> CollectKeywords(JsonElement args)
+    {
+        var list = new List<string>();
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            if (args.TryGetProperty("keyword", out var k) && k.ValueKind == JsonValueKind.String)
+            {
+                var s = k.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) list.Add(s!.Trim());
+            }
+            if (args.TryGetProperty("keywords", out var ks) && ks.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in ks.EnumerateArray())
+                    if (e.ValueKind == JsonValueKind.String)
+                    {
+                        var s = e.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) list.Add(s!.Trim());
+                    }
+            }
+        }
+        return list.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary><c>match_all</c>=true (= AND) か。既定 false (= OR: いずれか含めば一致)。</summary>
+    private static bool ReadMatchAll(JsonElement args)
+        => args.ValueKind == JsonValueKind.Object
+        && args.TryGetProperty("match_all", out var m) && m.ValueKind == JsonValueKind.True;
+
+    /// <summary>正規化済みハヤスタックが、正規化済みキーワード群に OR / AND で一致するか。
+    /// キーワードが空なら常に true (= フィルタ無し)。</summary>
+    private static bool MatchesKeywords(string normalizedHaystack, IReadOnlyList<string> normalizedKeywords, bool matchAll)
+    {
+        if (normalizedKeywords.Count == 0) return true;
+        if (matchAll)
+        {
+            foreach (var k in normalizedKeywords)
+                if (normalizedHaystack.IndexOf(k, StringComparison.Ordinal) < 0) return false;
+            return true;
+        }
+        foreach (var k in normalizedKeywords)
+            if (normalizedHaystack.IndexOf(k, StringComparison.Ordinal) >= 0) return true;
+        return false;
+    }
+
+    /// <summary>キーワード列を検索用に正規化したリストにする (空要素は除去)。</summary>
+    private static List<string> NormalizeKeywords(IReadOnlyList<string> keywords)
+    {
+        var list = new List<string>(keywords.Count);
+        foreach (var k in keywords)
+        {
+            var n = NormalizeForSearch(k);
+            if (n.Length > 0) list.Add(n);
+        }
+        return list;
+    }
 
     /// <summary>LLM が呼んできたツールを実行し、結果 JSON を文字列で返す (async 版)。
     /// cross-thread ロードに伴うディスク I/O / 必要時はネット取得が走るため Task ベース。</summary>
@@ -736,10 +808,9 @@ public sealed class ThreadToolset : IAgentToolset
     {
         if (!TryParseObject(argsJson, out var args))
             return ErrorJson("引数 JSON のパースに失敗");
-        if (!args.TryGetProperty("keyword", out var kwEl) || kwEl.ValueKind != JsonValueKind.String)
-            return ErrorJson("keyword が指定されていません");
-        var keyword = kwEl.GetString() ?? "";
-        if (keyword.Length == 0) return ErrorJson("keyword が空です");
+        var keywords = CollectKeywords(args);
+        if (keywords.Count == 0) return ErrorJson("keyword または keywords が指定されていません");
+        var matchAll = ReadMatchAll(args);
 
         var limit = DefaultSearchLimit;
         if (args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
@@ -753,8 +824,17 @@ public sealed class ThreadToolset : IAgentToolset
         foreach (var p in ctx.Posts)
         {
             var body = CleanBody(p.Body);
-            var idx  = body.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) continue;
+            // 各キーワードの最初の出現位置 (大小無視)。OR/AND 判定 + スニペット起点に使う。
+            var hits     = new List<string>();
+            var firstIdx = -1;
+            foreach (var kw in keywords)
+            {
+                var i = body.IndexOf(kw, StringComparison.OrdinalIgnoreCase);
+                if (i >= 0) { hits.Add(kw); if (firstIdx < 0 || i < firstIdx) firstIdx = i; }
+            }
+            var ok = matchAll ? hits.Count == keywords.Count : hits.Count > 0;
+            if (!ok) continue;
+            if (firstIdx < 0) firstIdx = 0;
 
             string snippet;
             if (body.Length <= SearchSnippetMax)
@@ -764,7 +844,7 @@ public sealed class ThreadToolset : IAgentToolset
             else
             {
                 var half  = SearchSnippetMax / 2;
-                var sstart = Math.Max(0, idx - half);
+                var sstart = Math.Max(0, firstIdx - half);
                 var slen  = Math.Min(SearchSnippetMax, body.Length - sstart);
                 snippet = body.Substring(sstart, slen);
                 if (sstart > 0) snippet = "…" + snippet;
@@ -777,6 +857,7 @@ public sealed class ThreadToolset : IAgentToolset
                 name    = p.Name,
                 id      = p.Id,
                 date    = p.DateText,
+                matched = hits,
                 snippet = snippet,
             });
             if (matches.Count >= limit) { truncated = true; break; }
@@ -784,7 +865,8 @@ public sealed class ThreadToolset : IAgentToolset
 
         return JsonSerializer.Serialize(new
         {
-            keyword,
+            keywords,
+            match = matchAll ? "all" : "any",
             total_matches_returned = matches.Count,
             truncated,
             matches,
@@ -1077,15 +1159,14 @@ public sealed class ThreadToolset : IAgentToolset
     private string ListBoards(string argsJson)
     {
         TryParseObject(argsJson, out var args);
-        string? keyword = null;
-        if (args.ValueKind == JsonValueKind.Object &&
-            args.TryGetProperty("keyword", out var kwEl) && kwEl.ValueKind == JsonValueKind.String)
-        {
-            keyword = kwEl.GetString();
-        }
+        var keywords     = CollectKeywords(args);
+        var matchAll     = ReadMatchAll(args);
+        var nkw          = NormalizeKeywords(keywords);
+        var keywordLabel = string.Join(matchAll ? " AND " : " / ", keywords);
+        var isScanMode   = nkw.Count == 0;
 
         // keyword 指定の有無で既定件数を切り替える (= scan モードは全板返却が原則)。
-        var defaultLimit = string.IsNullOrEmpty(keyword) ? BoardsScanDefaultLimit : DefaultListLimit;
+        var defaultLimit = isScanMode ? BoardsScanDefaultLimit : DefaultListLimit;
         var limit        = defaultLimit;
         if (args.ValueKind == JsonValueKind.Object &&
             args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
@@ -1095,18 +1176,19 @@ public sealed class ThreadToolset : IAgentToolset
 
         var all = _dataLoader.ListBoardsSnapshot();
         IEnumerable<Board> filtered = all;
-        if (!string.IsNullOrEmpty(keyword))
+        if (!isScanMode)
         {
+            // 板名 / カテゴリ / dir のいずれかに一致すれば、その語を「含む」とみなす (OR/AND は語間)。
             filtered = all.Where(b =>
-                (b.BoardName    ?? "").IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                (b.CategoryName ?? "").IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                (b.DirectoryName?? "").IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0);
+            {
+                var fields = NormalizeForSearch((b.BoardName ?? "") + "\n" + (b.CategoryName ?? "") + "\n" + (b.DirectoryName ?? ""));
+                return MatchesKeywords(fields, nkw, matchAll);
+            });
         }
         var picked    = filtered.Take(limit).ToArray();
         var totalAll  = all.Count;
-        var matched   = string.IsNullOrEmpty(keyword) ? totalAll : filtered.Count();
+        var matched   = isScanMode ? totalAll : filtered.Count();
         var truncated = picked.Length < matched;
-        var isScanMode = string.IsNullOrEmpty(keyword);
 
         // scan モード時のヒント: AI に「カテゴリ単位で関連を pick、漏れなく複数カテゴリを跨いで」と促す。
         var hint = isScanMode
@@ -1117,7 +1199,7 @@ public sealed class ThreadToolset : IAgentToolset
               "1 カテゴリ 1 板に絞らない (= 同テーマでも複数の category や複数の板に分散しているのが普通)。" +
               "返値の categories は CategoryOrder 順で並んでいる。" +
               (truncated ? $" 全 {matched} 件中 {picked.Length} 件のみ。続きが必要なら limit={MaxListLimit} で再取得可。" : "")
-            : $"キーワード検索モード (\"{keyword}\")。テーマ検索で複数板候補を見たい場合は keyword 省略で再取得すること。";
+            : $"キーワード検索モード (\"{keywordLabel}\")。テーマ検索で複数板候補を見たい場合は keyword/keywords 省略で再取得すること。";
 
         if (isScanMode)
         {
@@ -1167,7 +1249,8 @@ public sealed class ThreadToolset : IAgentToolset
             matched,
             returned = boards.Length,
             truncated,
-            keyword  = keyword ?? "",
+            keywords,
+            match    = matchAll ? "all" : "any",
             mode     = "keyword",
             hint,
             boards,
@@ -1185,12 +1268,14 @@ public sealed class ThreadToolset : IAgentToolset
         if (!_dataLoader.TryParseBoardUrl(url, out var host, out var dir))
             return ErrorJson($"board_url の解釈に失敗: \"{url}\" (5ch.io / bbspink.com の板 URL である必要があります)");
 
-        string? keyword = null;
-        if (args.TryGetProperty("keyword", out var kwEl) && kwEl.ValueKind == JsonValueKind.String)
-            keyword = kwEl.GetString();
+        var keywords     = CollectKeywords(args);
+        var matchAll     = ReadMatchAll(args);
+        var nkw          = NormalizeKeywords(keywords);
+        var keywordLabel = string.Join(matchAll ? " AND " : " / ", keywords);
+        var isScanMode   = nkw.Count == 0;
 
         // keyword 指定の有無で既定件数を切り替える (= 曖昧検索モードでは多めに返す)。
-        var defaultLimit = string.IsNullOrEmpty(keyword) ? ThreadsScanDefaultLimit : DefaultListLimit;
+        var defaultLimit = isScanMode ? ThreadsScanDefaultLimit : DefaultListLimit;
         var limit        = defaultLimit;
         if (args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
             limit = Math.Clamp(lim, 1, MaxListLimit);
@@ -1204,10 +1289,10 @@ public sealed class ThreadToolset : IAgentToolset
         var threads = await _dataLoader.ListThreadsAsync(board, ct).ConfigureAwait(false);
 
         IEnumerable<ThreadInfo> filtered = threads;
-        if (!string.IsNullOrEmpty(keyword))
+        if (!isScanMode)
         {
-            filtered = threads.Where(t =>
-                (t.Title ?? "").IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0);
+            // スレタイを正規化 (NFKC + 大小無視) して OR/AND マッチ。キャラ名を並べた OR 検索などに使う。
+            filtered = threads.Where(t => MatchesKeywords(NormalizeForSearch(t.Title ?? ""), nkw, matchAll));
         }
 
         var matchedList = filtered.ToList();
@@ -1235,12 +1320,13 @@ public sealed class ThreadToolset : IAgentToolset
         }).ToArray();
 
         // モード判定 hint: keyword なしで呼ばれた = AI が自分で取捨選択するべきスキャンモード。
-        var hint = string.IsNullOrEmpty(keyword)
+        var hint = isScanMode
             ? $"スキャンモード (= keyword 無し)。タイトル {list.Length} 件を返した。" +
               "これらを自分で読んで、ユーザの依頼するテーマに関連すると判断したスレだけを open_thread_list_in_app の threads 配列に詰めること。" +
               "略称・連想・ジャンル判定は AI の知識で行う (例: スレタイ \"PS5\" → ソニー製品関連、スレタイ \"ダン飯\" → ダンジョン飯関連)。" +
               (truncated ? $" 全 {matched} 件中 {list.Length} 件のみ。続きが必要なら limit={MaxListLimit} で再取得可。" : "")
-            : $"キーワード検索モード (\"{keyword}\")。単語の部分一致のみなので、略称 / 連想含むテーマ検索の場合は keyword 省略で再取得すること。";
+            : $"キーワード検索モード (\"{keywordLabel}\"・{(matchAll ? "AND" : "OR")})。" +
+              "取りこぼすなら別表記/関連語を keywords に足すか、keyword/keywords 省略で scan して手動選別する。";
 
         return JsonSerializer.Serialize(new
         {
@@ -1250,8 +1336,9 @@ public sealed class ThreadToolset : IAgentToolset
             matched,
             returned = list.Length,
             truncated,
-            keyword  = keyword ?? "",
-            mode     = string.IsNullOrEmpty(keyword) ? "scan" : "keyword",
+            keywords,
+            match    = matchAll ? "all" : "any",
+            mode     = isScanMode ? "scan" : "keyword",
             hint,
             threads  = list,
         }, JsonOpts);
