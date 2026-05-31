@@ -26,6 +26,7 @@ public sealed class ShortcutManager
 {
     private readonly Window _mainWindow;
     private Window? _viewerWindow;
+    private Window? _aiChatWindow;
     private ShortcutSettings? _lastSettings;
     private readonly Dictionary<string, Action<object?>> _handlers;
     // KeyBinding は Window 単位に登録し再 Apply 時にクリーンアップする。
@@ -111,8 +112,39 @@ public sealed class ShortcutManager
         if (_lastSettings is not null) Apply(_lastSettings);
     }
 
-    private Window? GetWindowForCategory(string category)
-        => category == "ビューアウィンドウ" ? _viewerWindow : _mainWindow;
+    /// <summary>AI チャットウィンドウ (= 別 Window) を ShortcutManager に登録する。
+    /// "AIチャット" カテゴリの KeyBinding がここへ登録される (= 入力欄外にフォーカスがある時の Enter 送信等)。
+    /// 入力欄 (TextBox) 上のキーは window 側 PreviewKeyDown が <see cref="GetBindingsForCategory"/> を引いて
+    /// 自前で処理するため、ここの KeyBinding は補助的。マウス系は非対応。</summary>
+    public void AttachAiChatWindow(Window aiChatWindow)
+    {
+        if (ReferenceEquals(_aiChatWindow, aiChatWindow)) return;
+        _aiChatWindow = aiChatWindow;
+        if (!_appliedKeyBindingsByWindow.ContainsKey(aiChatWindow))
+            _appliedKeyBindingsByWindow[aiChatWindow] = new();
+        if (_lastSettings is not null) Apply(_lastSettings);
+    }
+
+    /// <summary>AI チャットウィンドウを登録解除する (= ウィンドウを閉じたとき)。
+    /// 当該ウィンドウの KeyBinding を撤去し、参照を切って GetWindowForCategory が以降 null を返すようにする
+    /// (= MainWindow へ AI 用 KeyBinding が漏れないように)。</summary>
+    public void DetachAiChatWindow(Window aiChatWindow)
+    {
+        if (!ReferenceEquals(_aiChatWindow, aiChatWindow)) return;
+        if (_appliedKeyBindingsByWindow.TryGetValue(aiChatWindow, out var kbs))
+        {
+            foreach (var kb in kbs) aiChatWindow.InputBindings.Remove(kb);
+            _appliedKeyBindingsByWindow.Remove(aiChatWindow);
+        }
+        _aiChatWindow = null;
+    }
+
+    private Window? GetWindowForCategory(string category) => category switch
+    {
+        "ビューアウィンドウ" => _viewerWindow,
+        CategoryResolver.AiChatCategory => _aiChatWindow,
+        _ => _mainWindow,
+    };
 
     /// <summary>キーボードショートカット用の登録対象ウィンドウ列。
     /// 通常カテゴリは 1 ウィンドウだけ、「全体」は MainWindow + (attached なら) ViewerWindow の両方に登録して

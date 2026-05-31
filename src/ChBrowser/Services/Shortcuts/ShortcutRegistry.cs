@@ -88,5 +88,11 @@ public static class ShortcutRegistry
         new ShortcutAction("viewer.rotate_left",    "ビューアウィンドウ", "左に90度回転", "",         "Shift+ホイールアップ",  ""),
         new ShortcutAction("viewer.toggle_details", "ビューアウィンドウ", "画像詳細ペインを表示/非表示", "Tab", "Ctrl+左クリック",   ""),
         new ShortcutAction("viewer.fullscreen",     "ビューアウィンドウ", "全画面表示の切替", "F11",      "ダブルクリック",        ""),
+
+        // AI チャットウィンドウ (= 入力欄のキー操作)。マウス / ジェスチャーは非対応 (= キーボードのみ・
+        // CategoryResolver で編集不可)。既定は Enter で送信 / Shift+Enter で改行。
+        // ※ Enter キーの WPF 上の正準名は "Return" (= Key.Enter.ToString() が "Return" を返す)。
+        new ShortcutAction("ai_chat.send",    "AIチャット", "メッセージを送信", "Return",       "", ""),
+        new ShortcutAction("ai_chat.newline", "AIチャット", "改行を挿入",       "Shift+Return", "", ""),
     };
 }

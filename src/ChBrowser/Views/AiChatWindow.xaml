@@ -60,7 +60,7 @@
         </Border>
 
         <!-- 入力欄: 既定 1 行表示、テキスト量に応じて自動拡張 (MinLines/MaxLines)。
-             Shift+Enter で送信、通常 Enter は改行 (= IME 変換確定の誤送信もここで防ぐ)。
+             Enter で送信、Shift+Enter で改行 (= IME 変換確定の誤送信もここで防ぐ)。
              TextBox 自身は枠なし (BorderThickness=0)、外側の Border で CornerRadius を持って角丸を出す。 -->
         <Border Grid.Row="3"
                 Background="{x:Static SystemColors.ControlBrush}"
@@ -90,8 +90,8 @@
                              Background="Transparent"
                              Padding="0"
                              FontFamily="Yu Gothic UI, Meiryo, Segoe UI"
-                             KeyDown="InputBox_KeyDown"
-                             ToolTip="Shift+Enter で送信 / Enter で改行" />
+                             PreviewKeyDown="InputBox_PreviewKeyDown"
+                             ToolTip="Enter で送信 / Shift+Enter で改行" />
                 </Border>
 
                 <Button Grid.Column="1"

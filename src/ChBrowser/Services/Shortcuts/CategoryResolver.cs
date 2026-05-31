@@ -29,6 +29,9 @@ public static class CategoryResolver
     /// タブ移動操作と競合しがちなため、このカテゴリでは固定でジェスチャー不可とする。</summary>
     public const string ThreadListTabsCategory = "スレ一覧のタブ領域";
 
+    /// <summary>AI チャットウィンドウのカテゴリ。入力欄のキー操作専用 (= マウス / ジェスチャーは不可)。</summary>
+    public const string AiChatCategory = "AIチャット";
+
     /// <summary>ChBrowser がディスパッチ対象にしうる全カテゴリ。
     /// <see cref="ShortcutManager.Apply"/> の「全体」マージ対象として使う
     /// (ShortcutRegistry に登録の無いカテゴリ — 現状の お気に入りペイン / 板一覧ペイン — にも
@@ -47,14 +50,14 @@ public static class CategoryResolver
     };
 
     /// <summary>マウス入力 (= 修飾キー + クリック / ホイール) を当該カテゴリに割り当てて良いか。
-    /// 「全体」は通常 UI 操作と衝突しやすいためマウス入力不可。</summary>
+    /// 「全体」は通常 UI 操作と衝突しやすいためマウス入力不可。「AIチャット」はキーボード専用。</summary>
     public static bool IsMouseEditable(string category)
-        => category != GlobalCategory;
+        => category != GlobalCategory && category != AiChatCategory;
 
     /// <summary>マウスジェスチャーを当該カテゴリに割り当てて良いか。
-    /// 「スレ一覧のタブ領域」はタブストリップ上の右ドラッグ判定が不安定なため不可。</summary>
+    /// 「スレ一覧のタブ領域」はタブストリップ上の右ドラッグ判定が不安定なため不可。「AIチャット」はキーボード専用。</summary>
     public static bool IsGestureEditable(string category)
-        => category != ThreadListTabsCategory;
+        => category != ThreadListTabsCategory && category != AiChatCategory;
 
     public static string Resolve(DependencyObject? source)
     {

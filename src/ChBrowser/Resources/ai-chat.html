@@ -223,6 +223,7 @@
   "use strict";
   var messages = document.getElementById("messages");
   var current = null; // ストリーミング中のアシスタントバブルの .body 要素
+  var detailStates = []; // current バブル内の details の開閉状態 (= 開閉の唯一の真実源・index 対応)
 
   // ---- autoscroll: 末尾に張り付くが、ユーザが上にスクロールしたら追従停止する ----
   // ユーザが末尾近く (= 残り AT_BOTTOM_PX 内) に居る間は autoScrollEnabled=true、
@@ -247,23 +248,19 @@
     window.scrollTo(0, document.body.scrollHeight);
   }
 
-  // ---- details (= 思考過程 / agent work 折りたたみ) の open 状態を更新越しに保持する ----
-  // 出現順 (DOM 順) で open フラグの配列を保存しておき、innerHTML 置換後に同じ index の
-  // details へ復元する。ストリーミングは追加方向が中心なので「ユーザが開いた details」と
-  // 「更新後の同位置 details」は概ね対応する (= 完全一致ではないがユーザの開閉意図は維持される)。
-  function captureDetailsOpenStates(root) {
-    var states = [];
-    if (!root) return states;
+  // ---- details (= 思考過程 / agent work 折りたたみ) の open 状態を「JS 側の真実源」で管理する ----
+  // ストリーミング中は updateAssistant が毎デルタで innerHTML を丸ごと置換するため、ネイティブ
+  // <details> の open をそのまま頼ると「クリック直後の再描画が状態を巻き戻す」競合が起きていた
+  // (= 押しても開かない / 閉じても閉じない)。対策として開閉はクリックハンドラで横取りして
+  // detailStates[index] を即時更新し、再描画後はこの配列を唯一の真実源として復元する。
+  // (current バブル内の details は出現順 = append 中心なので index 対応は安定。)
+  function applyDetailStates(root) {
+    if (!root) return;
     var list = root.querySelectorAll("details");
-    for (var i = 0; i < list.length; i++) states.push(list[i].open);
-    return states;
-  }
-
-  function restoreDetailsOpenStates(root, states) {
-    if (!root || !states || states.length === 0) return;
-    var list = root.querySelectorAll("details");
-    var n = Math.min(list.length, states.length);
-    for (var i = 0; i < n; i++) list[i].open = states[i];
+    for (var i = 0; i < list.length; i++) {
+      if (i < detailStates.length) list[i].open = detailStates[i];
+      else detailStates[i] = list[i].open; // 新規ブロックは HTML の既定 (= 開) を採用して記録
+    }
   }
 
   function escapeHtml(s) {
@@ -297,15 +294,14 @@
   function startAssistant() {
     var b = makeBubble("assistant streaming", "AI");
     current = b.body;
+    detailStates = []; // 新しいバブルの折りたたみ状態をリセット
     scrollToBottom();
   }
 
   function updateAssistant(html) {
     if (!current) startAssistant();
-    // ユーザが手動で開閉した details の open 状態を救出 → 上書き後に同位置 details へ復元。
-    var savedStates = captureDetailsOpenStates(current);
-    current.innerHTML = html; // Markdig 生成済み HTML (C# 側で raw HTML は無効化済み)
-    restoreDetailsOpenStates(current, savedStates);
+    current.innerHTML = html;   // Markdig 生成済み HTML (C# 側で raw HTML は無効化済み)
+    applyDetailStates(current); // 開閉は JS 側の真実源 (detailStates) から復元
     scrollToBottom();
   }
 
@@ -333,6 +329,24 @@
     var url = a.getAttribute("href") || "";
     if (url && window.chrome && window.chrome.webview) {
       window.chrome.webview.postMessage({ type: "openExternal", url: url });
+    }
+  });
+
+  // 折りたたみ (details/summary) の開閉を JS 側で横取りして「常時クリックを受け付ける」ようにする。
+  // ネイティブ toggle はストリーミング再描画と競合して反応しないことがあるため、preventDefault して
+  // 自前で open をトグルし、current バブル内なら真実源 detailStates も即時更新する (= 巻き戻し防止)。
+  document.addEventListener("click", function (e) {
+    var summary = e.target && e.target.closest ? e.target.closest("summary") : null;
+    if (!summary) return;
+    var det = summary.parentElement;
+    if (!det || det.tagName !== "DETAILS") return;
+    e.preventDefault();
+    var willOpen = !det.open;
+    det.open = willOpen;
+    if (current && current.contains(det)) {
+      var list = current.querySelectorAll("details");
+      var idx = Array.prototype.indexOf.call(list, det);
+      if (idx >= 0) detailStates[idx] = willOpen;
     }
   });
 

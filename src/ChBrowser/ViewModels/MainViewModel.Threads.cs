@@ -396,6 +396,17 @@ public sealed partial class MainViewModel
     private ChBrowser.Views.AiChatWindow? _aiChatWindow;
     private AiChatViewModel?              _aiChatViewModel;
 
+    /// <summary>ショートカットマネージャ (App が起動時に注入)。AI チャットウィンドウへ渡して
+    /// 「AIチャット」カテゴリのキーバインド (送信 / 改行) を参照 / 自己アタッチさせる。</summary>
+    public ChBrowser.Services.Shortcuts.ShortcutManager? Shortcuts { get; set; }
+
+    /// <summary>ショートカット「AIチャット: 送信」から呼ばれる。開いている AI チャットの送信を発火する。</summary>
+    public void TriggerAiChatSend()
+    {
+        if (_aiChatViewModel?.SendCommand.CanExecute(null) == true)
+            _aiChatViewModel.SendCommand.Execute(null);
+    }
+
     /// <summary>アドレスバーの「AI」ボタンから呼ばれるコマンド。
     /// 現在選択中のスレッドタブがあればそのスレを文脈に、無ければスレッド非アタッチの AI チャットを開く。
     /// 既に開いていれば現在の <see cref="SelectedThreadTab"/> に合わせて中身を切り替えてアクティブ化する。</summary>
@@ -421,7 +432,7 @@ public sealed partial class MainViewModel
         var toolset = BuildToolsetForTab(tab);
         var title   = ResolveAiChatTitle(tab);
         var vm      = new AiChatViewModel(_llmClient, title, toolset, CurrentConfig);
-        var window       = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow);
+        var window       = new ChBrowser.Views.AiChatWindow(vm, System.Windows.Application.Current?.MainWindow, Shortcuts);
         _aiChatWindow    = window;
         _aiChatViewModel = vm;
         window.Closed += (_, _) =>

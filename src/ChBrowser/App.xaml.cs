@@ -246,6 +246,8 @@ public partial class App : Application
         // ショートカット & マウスジェスチャー (Phase 15) — MainWindow 作成後に setup
         _shortcutStorage = new ChBrowser.Services.Storage.ShortcutStorage(paths);
         _shortcutManager = new ChBrowser.Services.Shortcuts.ShortcutManager(window, BuildShortcutHandlers(window, mainVm, () => _imageViewerVm));
+        // AI チャットウィンドウ (MainViewModel が生成) がショートカット設定を参照 / 自己アタッチできるよう注入。
+        mainVm.Shortcuts = _shortcutManager;
         // Apply 時に各カテゴリの bind 一覧を WebView 内 JS ブリッジへ push する callback を配線。
         _shortcutManager.OnBindingsApplied = byCategory =>
         {
@@ -433,6 +435,13 @@ public partial class App : Application
             {
                 if (Current is App app && app._imageViewerWindow is { } vw) vw.ToggleFullscreen();
             },
+
+            // ----- AI チャットウィンドウ -----
+            // 送信は MainViewModel 経由で AI チャット VM の SendCommand を叩く。入力欄 (TextBox) 上では
+            // window 側 PreviewKeyDown がバインドを引いて自前処理するため、この handler は入力欄外フォーカス時の
+            // 補助。改行は TextBox 既定 (AcceptsReturn) に任せるため C# 側は no-op (= バインド一覧登録目的)。
+            ["ai_chat.send"]    = _ => vm.TriggerAiChatSend(),
+            ["ai_chat.newline"] = _ => { },
         };
 
         void RefreshThreadList(object? src)

@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Input;
 using ChBrowser.Controls;
 using ChBrowser.Services.Render;
+using ChBrowser.Services.Shortcuts;
 using ChBrowser.ViewModels;
 using Microsoft.Web.WebView2.Core;
 
@@ -26,14 +27,17 @@ namespace ChBrowser.Views;
 public partial class AiChatWindow : Window
 {
     private readonly AiChatViewModel _vm;
+    /// <summary>ショートカット設定 (= 「AIチャット」カテゴリの送信 / 改行バインドの参照元)。null なら既定動作。</summary>
+    private readonly ShortcutManager? _shortcuts;
     /// <summary>シェル (ai-chat.html) の 'ready' を受信済みか。受信前の post はキューに退避する。</summary>
     private bool _shellReady;
     /// <summary>ready 前に発生した表示更新メッセージ (JSON 文字列) の退避キュー。</summary>
     private readonly List<string> _pending = new();
 
-    public AiChatWindow(AiChatViewModel vm, Window? owner)
+    public AiChatWindow(AiChatViewModel vm, Window? owner, ShortcutManager? shortcuts = null)
     {
         _vm         = vm;
+        _shortcuts  = shortcuts;
         DataContext = vm;
         Owner       = owner;
 
@@ -45,6 +49,9 @@ public partial class AiChatWindow : Window
         _vm.AssistantHtmlUpdated     += OnAssistantHtmlUpdated;
         _vm.AssistantMessageFinished += OnAssistantMessageFinished;
         _vm.ErrorAdded               += OnErrorAdded;
+
+        // 「AIチャット」カテゴリのキーバインドをこのウィンドウへ登録 (= 入力欄外フォーカス時の Enter 送信等)。
+        _shortcuts?.AttachAiChatWindow(this);
 
         Loaded += async (_, _) =>
         {
@@ -164,6 +171,8 @@ public partial class AiChatWindow : Window
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        _shortcuts?.DetachAiChatWindow(this);
+
         _vm.UserMessageAdded         -= OnUserMessageAdded;
         _vm.AssistantMessageStarted  -= OnAssistantMessageStarted;
         _vm.AssistantHtmlUpdated     -= OnAssistantHtmlUpdated;
@@ -178,17 +187,44 @@ public partial class AiChatWindow : Window
         TranscriptView.Dispose();
     }
 
-    /// <summary>入力欄のキー処理: Shift+Enter で送信、通常 Enter は改行 (= AcceptsReturn=True の挙動に任せる)。
-    /// IME 変換確定の Enter は <see cref="KeyEventArgs.Key"/> が <see cref="Key.ImeProcessed"/> になり
-    /// <see cref="Key.Enter"/> 判定に引っかからないので、変換確定中の Shift+Enter で誤送信は起きない。</summary>
-    private void InputBox_KeyDown(object sender, KeyEventArgs e)
+    /// <summary>入力欄のキー処理。「AIチャット」カテゴリのショートカット設定 (送信 / 改行) を参照して動作する。
+    /// 既定は Enter=送信 / Shift+Enter=改行 (= ShortcutRegistry の ai_chat.send / ai_chat.newline)。
+    /// **PreviewKeyDown** で受けるのが要点 — TextBox は AcceptsReturn 時に Enter / Shift+Enter を内部で
+    /// 先に処理 (改行挿入) してイベントを handled 済みにするため、通常の KeyDown では届かない。トンネリングの
+    /// PreviewKeyDown なら TextBox の既定処理より前に横取りできる。
+    /// IME 変換中は <see cref="KeyEventArgs.Key"/> が <see cref="Key.ImeProcessed"/> になり介入しないので、
+    /// 変換確定の Enter で誤送信は起きない。</summary>
+    private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter) return;
-        // Shift+Enter のみ送信、それ以外の Enter は通常の改行として通す。
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) != ModifierKeys.Shift) return;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.ImeProcessed) return; // IME 変換中は介入しない
+        // 修飾キー単独は無視
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+                or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
 
-        e.Handled = true;
-        if (_vm.SendCommand.CanExecute(null))
-            _vm.SendCommand.Execute(null);
+        var descriptor = ShortcutManager.BuildModifiedKey(Keyboard.Modifiers, key.ToString());
+        var bindings   = _shortcuts?.GetBindingsForCategory(CategoryResolver.AiChatCategory);
+
+        // ショートカット系が有効 (= マップが populate 済) なら厳密にそれに従う (= ユーザが送信を未割当にしたら送信しない)。
+        if (bindings is { Count: > 0 })
+        {
+            if (bindings.TryGetValue(descriptor, out var actionId))
+            {
+                if (actionId == "ai_chat.send")
+                {
+                    e.Handled = true; // 改行を挿入させず送信
+                    if (_vm.SendCommand.CanExecute(null)) _vm.SendCommand.Execute(null);
+                }
+                // ai_chat.newline は何もしない → TextBox 既定 (AcceptsReturn) が改行を挿入する。
+            }
+            return; // 未割当の descriptor は TextBox 既定に委ねる
+        }
+
+        // フォールバック (= ショートカット未配線): Enter=送信 / Shift+Enter=改行。
+        if (key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) != ModifierKeys.Shift)
+        {
+            e.Handled = true;
+            if (_vm.SendCommand.CanExecute(null)) _vm.SendCommand.Execute(null);
+        }
     }
 }
