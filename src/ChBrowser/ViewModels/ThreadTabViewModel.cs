@@ -114,6 +114,11 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>永続化済みスコア (<c>.aing.json</c>) を一度読み込んだか。スレ再オープン時の二重ロード防止。</summary>
     public bool AiScoresLoaded { get; set; }
 
+    /// <summary>このタブが別ペインへ移動した直後 (= 移動先で WebView2 が新規生成される) を示すフラグ。
+    /// 移動先 WebView の初回 ready 時に、既存の <see cref="Posts"/> を一括 resync して再描画させるために使う
+    /// (複数ペイン化 Phase 3)。通常の新規オープンでは false (= appendPosts チャネルで描画される)。</summary>
+    public bool NeedsResyncOnAttach { get; set; }
+
     /// <summary>JS に「このレスまでスクロールしてくれ」と push するためのトリガ (Phase 25)。
     /// 5ch.io スレ URL のクリック (= postNo 付き) で本タブにスクロール要求が来た時に、新しい
     /// <see cref="ScrollToPostRequest"/> インスタンスを setter することで AttachedProperty 経由で

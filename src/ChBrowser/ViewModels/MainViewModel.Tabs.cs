@@ -159,23 +159,27 @@ public sealed partial class MainViewModel
 
     private void CloseOtherThreadTabs(ThreadTabViewModel keep)
     {
+        // 「他を閉じる」は pivot が属するペイン内で完結させる (= 別ペインのタブは触らない)。
+        var tabs = (GroupOf(keep) ?? ActiveThreadGroup).Tabs;
         // 削除中のコレクション変更を避けるためスナップショットしてから処理
-        foreach (var t in ThreadTabs.ToList())
-            if (!ReferenceEquals(t, keep)) ThreadTabs.Remove(t);
+        foreach (var t in tabs.ToList())
+            if (!ReferenceEquals(t, keep)) tabs.Remove(t);
     }
 
     private void CloseThreadTabsBefore(ThreadTabViewModel pivot)
     {
-        var idx = ThreadTabs.IndexOf(pivot);
+        var tabs = (GroupOf(pivot) ?? ActiveThreadGroup).Tabs;
+        var idx  = tabs.IndexOf(pivot);
         if (idx <= 0) return;
-        for (var i = idx - 1; i >= 0; i--) ThreadTabs.RemoveAt(i);
+        for (var i = idx - 1; i >= 0; i--) tabs.RemoveAt(i);
     }
 
     private void CloseThreadTabsAfter(ThreadTabViewModel pivot)
     {
-        var idx = ThreadTabs.IndexOf(pivot);
+        var tabs = (GroupOf(pivot) ?? ActiveThreadGroup).Tabs;
+        var idx  = tabs.IndexOf(pivot);
         if (idx < 0) return;
-        while (ThreadTabs.Count > idx + 1) ThreadTabs.RemoveAt(ThreadTabs.Count - 1);
+        while (tabs.Count > idx + 1) tabs.RemoveAt(tabs.Count - 1);
     }
 
     private void CloseOtherThreadListTabs(ThreadListTabViewModel keep)

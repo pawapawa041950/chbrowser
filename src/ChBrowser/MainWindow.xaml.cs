@@ -61,10 +61,18 @@ public partial class MainWindow : Window
 
     private void MainWindow_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (_vm is not null) _vm.PropertyChanged -= Vm_PropertyChanged;
+        if (_vm is not null)
+        {
+            _vm.PropertyChanged  -= Vm_PropertyChanged;
+            _vm.ThreadGroupEmptied -= OnThreadGroupEmptied;
+        }
         _vm = DataContext as MainViewModel;
         if (_vm is null) return;
-        _vm.PropertyChanged += Vm_PropertyChanged;
+        _vm.PropertyChanged  += Vm_PropertyChanged;
+        _vm.ThreadGroupEmptied += OnThreadGroupEmptied; // 空になったスレ表示ペインの自動クローズ (Phase 3)
+        // 静的なスレ表示ペインの DataContext を最初のスレ表示グループに固定する (複数ペイン化 Phase 2)。
+        // ペイン本体は自分のグループ (タブ集合/選択タブ) を表示し、アプリ全体の設定は Group.Main 経由で参照する。
+        ThreadDisplayPaneCtrl.DataContext = _vm.ActiveThreadGroup;
         AddressBar.Text = _vm.AddressBarUrl;
         // 初期状態 (= 起動直後の VM 既定値) をログウィンドウの表示に反映。
         ApplyLogWindowVisibility(_vm.IsLogPaneVisible);
@@ -111,12 +119,16 @@ public partial class MainWindow : Window
         if (IsFinite(s.WindowLeft)) Left = s.WindowLeft;
         if (IsFinite(s.WindowTop))  Top  = s.WindowTop;
 
-        // ペインレイアウト: 保存値が valid (= 4 leaf 揃ってる) ならそれを採用、
-        // null / 不正 ならデフォルトレイアウト。
+        // ペインレイアウト: 保存値が valid ならそれを採用、null / 不正 ならデフォルト。
         var pane = s.PaneLayout;
         LayoutHost.Layout = (pane is not null && pane.IsValidFullLayout())
             ? pane
             : PaneLayoutOps.BuildDefault();
+
+        // 複数スレ表示ペイン (= 動的インスタンス leaf) を含むレイアウトに対し、対応するグループ + コントロールを
+        // 復元する (複数ペイン化 Phase 4)。タブの振り分けは後続の MainViewModel.RestoreOpenTabs が
+        // 各ペインのキーを突き合わせて流し込む。
+        ReconcilePanesToLayout();
 
         if (s.WindowMaximized) WindowState = WindowState.Maximized;
     }

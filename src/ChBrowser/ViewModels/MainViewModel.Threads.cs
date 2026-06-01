@@ -171,8 +171,8 @@ public sealed partial class MainViewModel
     /// 多数追加でペインがチカチカするのを避けるため。ユーザの単発操作経路はデフォルトの true で OK)。</summary>
     public async Task OpenThreadAsync(Board board, ThreadInfo info, LogMarkState? stateHint = null, bool activate = true)
     {
-        // 既存タブがあれば、アクティブにした上で差分取得を走らせる
-        foreach (var existing in ThreadTabs)
+        // 既存タブがあれば (どのペインでも)、アクティブにした上で差分取得を走らせる
+        foreach (var existing in AllThreadTabs)
         {
             if (existing.Board.Host          == board.Host &&
                 existing.Board.DirectoryName == board.DirectoryName &&
@@ -267,7 +267,7 @@ public sealed partial class MainViewModel
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[openThread] 404 で dat 取得不可。ブラウザ fallback: {fallbackUrl}");
             StatusMessage = $"dat 落ち (404) — ブラウザで開きます: {fallbackUrl}";
-            ThreadTabs.Remove(tab);
+            RemoveThreadTab(tab);
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -932,7 +932,7 @@ public sealed partial class MainViewModel
     /// この経路では追えない。完全に正しい結果が必要なら従来通りスレを開き直す運用 (= 全レスから再計算)。</summary>
     private void ApplyNewlyHiddenToOpenTabs(ChBrowser.Models.NgRule justAdded)
     {
-        foreach (var tab in ThreadTabs)
+        foreach (var tab in AllThreadTabs)
         {
             if (tab.Posts.Count == 0) continue;
             var breakdown = _ng.ComputeHiddenWithBreakdown(
@@ -999,7 +999,7 @@ public sealed partial class MainViewModel
         // ログ削除でも「うっかり消した → 復元したい」というユースケースが普通にあるため、
         // 再オープン履歴には積む (= 通常の close と同じ扱い)。再オープン時は dat を取り直して開く。
         var openTab = FindThreadTab(board, threadKey);
-        if (openTab is not null) ThreadTabs.Remove(openTab);
+        if (openTab is not null) RemoveThreadTab(openTab);
 
         NotifyThreadListLogMark(board, threadKey, LogMarkState.None);
 
@@ -1055,7 +1055,7 @@ public sealed partial class MainViewModel
     /// アプリ終了時 (<see cref="MainWindow.OnClosing"/>) から呼ばれる。 </summary>
     public void FlushAllThreadScrollPositionsToDisk()
     {
-        foreach (var tab in ThreadTabs) FlushScrollPositionToDisk(tab);
+        foreach (var tab in AllThreadTabs) FlushScrollPositionToDisk(tab);
     }
 
     /// <summary>現在開いている全タブ (スレ一覧タブ + スレタブ) を <c>open_tabs.json</c> に保存する。
@@ -1088,17 +1088,25 @@ public sealed partial class MainViewModel
             // 上記いずれにも該当しないタブ (= 想定外、現状無し) は保存対象外。
         }
 
-        var threadEntries = new System.Collections.Generic.List<OpenThreadTabEntry>(ThreadTabs.Count);
-        foreach (var tab in ThreadTabs)
+        // スレタブをペイン別に保存する (複数ペイン化 Phase 4)。各ペインの並び順 + 選択タブ + アクティブペインを記録。
+        // ペインのキー (PaneKey) は layout.json の leaf キーと対応し、復元時に突き合わせる。
+        var paneEntries = new System.Collections.Generic.List<OpenThreadPaneEntry>(ThreadPaneGroups.Count);
+        foreach (var group in ThreadPaneGroups)
         {
-            threadEntries.Add(new OpenThreadTabEntry(
-                Host:          tab.Board.Host,
-                DirectoryName: tab.Board.DirectoryName,
-                Key:           tab.ThreadKey,
-                Title:         tab.Title ?? ""));
+            var tabs = new System.Collections.Generic.List<OpenThreadTabEntry>(group.Tabs.Count);
+            foreach (var tab in group.Tabs)
+            {
+                tabs.Add(new OpenThreadTabEntry(
+                    Host:          tab.Board.Host,
+                    DirectoryName: tab.Board.DirectoryName,
+                    Key:           tab.ThreadKey,
+                    Title:         tab.Title ?? ""));
+            }
+            var selIdx = group.SelectedTab is null ? -1 : group.Tabs.IndexOf(group.SelectedTab);
+            paneEntries.Add(new OpenThreadPaneEntry(group.PaneKey, selIdx, tabs));
         }
 
-        _openTabsStorage.Save(listEntries, threadEntries);
+        _openTabsStorage.Save(listEntries, paneEntries, ActiveThreadGroup.PaneKey);
     }
 
     /// <summary>前回終了時に保存されたタブ一覧 (スレ一覧タブ + スレタブ) を読み込み、保存されていた順番で再オープンする。
@@ -1112,11 +1120,14 @@ public sealed partial class MainViewModel
     /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> による on/off は呼び出し側 (App) で判定する。</summary>
     public void RestoreOpenTabs()
     {
-        var saved = _openTabsStorage.Load();
-        if (saved.ThreadListTabs.Count == 0 && saved.ThreadTabs.Count == 0) return;
+        var saved    = _openTabsStorage.Load();
+        var hasPanes = saved.ThreadPanes is { Count: > 0 };
+        var flatCount = saved.ThreadTabs.Count;
+        if (saved.ThreadListTabs.Count == 0 && !hasPanes && flatCount == 0) return;
 
         ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[restoreOpenTabs] 復元開始: スレ一覧タブ {saved.ThreadListTabs.Count} 件, スレタブ {saved.ThreadTabs.Count} 件");
+            $"[restoreOpenTabs] 復元開始: スレ一覧タブ {saved.ThreadListTabs.Count} 件, "
+            + (hasPanes ? $"スレ表示ペイン {saved.ThreadPanes!.Count} 枚" : $"スレタブ {flatCount} 件 (旧形式)"));
 
         // (1) スレ一覧タブを先に — 復元順序のユーザ視認性のため、左ペインのタブを先に並べてからスレタブを並べる。
         foreach (var entry in saved.ThreadListTabs)
@@ -1150,17 +1161,45 @@ public sealed partial class MainViewModel
             }
         }
 
-        // (2) スレタブ。OpenThreadAsync は同期前段で ThreadTabs.Add するので await 不要。
-        foreach (var entry in saved.ThreadTabs)
+        // (2) スレタブ。OpenThreadAsync は同期前段で対象ペインの Tabs.Add まで行うので await 不要
+        //     (= 開いた直後に group.Tabs にタブが入っているので、選択インデックスもその場で復元できる)。
+        if (hasPanes)
         {
-            try
+            // ペイン別復元。各保存ペインのキーを、レイアウト復元時に再構成済みのグループ (MainWindow.ReconcilePanesToLayout)
+            // と突き合わせる。見つからなければアクティブペインへフォールバック (= レイアウトと open_tabs の不整合時の保険)。
+            foreach (var paneEntry in saved.ThreadPanes!)
             {
-                _ = OpenThreadFromListAsync(entry.Host, entry.DirectoryName, entry.Key, entry.Title);
+                var group = ThreadPaneGroups.FirstOrDefault(g => string.Equals(g.PaneKey, paneEntry.PaneKey, StringComparison.Ordinal))
+                            ?? _activeThreadGroup;
+                SetActiveThreadGroup(group); // 以降に開くタブはこのペインへ入る
+                foreach (var entry in paneEntry.Tabs)
+                {
+                    try { _ = OpenThreadFromListAsync(entry.Host, entry.DirectoryName, entry.Key, entry.Title, activate: false); }
+                    catch (Exception ex)
+                    {
+                        ChBrowser.Services.Logging.LogService.Instance.Write(
+                            $"[restoreOpenTabs] スレタブ復元失敗 ({entry.Host}/{entry.DirectoryName}/{entry.Key}): {ex.Message}");
+                    }
+                }
+                // このペインの選択タブを復元 (= 開いたタブは同期で group.Tabs に入っている)。
+                if (paneEntry.SelectedIndex >= 0 && paneEntry.SelectedIndex < group.Tabs.Count)
+                    group.SelectedTab = group.Tabs[paneEntry.SelectedIndex];
             }
-            catch (Exception ex)
+            // アクティブペインを復元。
+            var active = ThreadPaneGroups.FirstOrDefault(g => string.Equals(g.PaneKey, saved.ActiveThreadPaneKey, StringComparison.Ordinal));
+            if (active is not null) SetActiveThreadGroup(active);
+        }
+        else
+        {
+            // 旧形式 (v1): フラットなスレタブをアクティブ (= 単一) ペインへ復元。
+            foreach (var entry in saved.ThreadTabs)
             {
-                ChBrowser.Services.Logging.LogService.Instance.Write(
-                    $"[restoreOpenTabs] スレタブ復元失敗 ({entry.Host}/{entry.DirectoryName}/{entry.Key}): {ex.Message}");
+                try { _ = OpenThreadFromListAsync(entry.Host, entry.DirectoryName, entry.Key, entry.Title); }
+                catch (Exception ex)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write(
+                        $"[restoreOpenTabs] スレタブ復元失敗 ({entry.Host}/{entry.DirectoryName}/{entry.Key}): {ex.Message}");
+                }
             }
         }
     }
@@ -1170,6 +1209,17 @@ public sealed partial class MainViewModel
     /// Reset (= Clear()) は OldItems が null になるため捕捉できないが、この app では使われていないので問題なし。 </summary>
     private void OnThreadTabsCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
+        // Move (= D&D によるタブ並べ替え) は OldItems==NewItems==[移動したタブ] で発火するが、
+        // これは「閉じた」訳ではないのでスクロール位置 flush も復元履歴 push もしてはいけない。
+        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Move) return;
+
+        // ペインのタブが空になったら自動クローズを要求する (× で閉じた / 別ペインへ移動した のどちらでも)。
+        // 移動 (SuppressTabCloseSideEffects) でも空になれば閉じたいので、抑止チェックより前に判定する。
+        if (ThreadPaneGroups.FirstOrDefault(g => ReferenceEquals(g.Tabs, sender)) is { Tabs.Count: 0 } emptied)
+            ThreadGroupEmptied?.Invoke(emptied);
+
+        // ペイン間移動の Remove は「閉じた」ではないので close 副作用 (flush / 復元履歴 push) を出さない (Phase 3)。
+        if (SuppressTabCloseSideEffects) return;
         if (e.OldItems is null) return;
         foreach (var item in e.OldItems)
         {
@@ -1222,7 +1272,7 @@ public sealed partial class MainViewModel
 
     /// <summary>(host, dir, key) で開いている ThreadTab を引く。なければ null。</summary>
     private ThreadTabViewModel? FindThreadTab(Board board, string threadKey)
-        => ThreadTabs.FirstOrDefault(t =>
+        => AllThreadTabs.FirstOrDefault(t =>
             t.Board.Host          == board.Host &&
             t.Board.DirectoryName == board.DirectoryName &&
             t.ThreadKey           == threadKey);
@@ -1242,7 +1292,7 @@ public sealed partial class MainViewModel
     {
         var tab = new ThreadTabViewModel(
             board, info,
-            closeCallback:          t => ThreadTabs.Remove(t),
+            closeCallback:          t => RemoveThreadTab(t),
             deleteCallback:         t => DeleteThreadLog(t),
             refreshCallback:        t => _ = RefreshThreadAsync(t),
             addToFavoritesCallback: t => ToggleThreadFavorite(t),

@@ -8,7 +8,7 @@
              xmlns:conv="clr-namespace:ChBrowser.Converters"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              mc:Ignorable="d"
-             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+             d:DataContext="{d:DesignInstance Type=vm:ThreadPaneGroupViewModel}"
              GotKeyboardFocus="Pane_GotKeyboardFocus"
              PreviewMouseLeftButtonDown="Pane_PreviewMouseLeftButtonDown">
     <UserControl.Resources>
@@ -100,7 +100,7 @@
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedThreadTab}" Value="{x:Null}">
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                     <Setter Property="IsEnabled" Value="False" />
                                 </DataTrigger>
                             </Style.Triggers>
@@ -120,27 +120,27 @@
                                 <Separator />
                                 <MenuItem Header="NGなし"
                                           IsCheckable="True"
-                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=6, Mode=OneWay}"
-                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="6" />
+                                          IsChecked="{Binding Main.AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=6, Mode=OneWay}"
+                                          Command="{Binding Main.SetAiNgThresholdCommand}" CommandParameter="6" />
                                 <MenuItem Header="NG弱(Score5)"
                                           IsCheckable="True"
-                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=5, Mode=OneWay}"
-                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="5" />
+                                          IsChecked="{Binding Main.AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=5, Mode=OneWay}"
+                                          Command="{Binding Main.SetAiNgThresholdCommand}" CommandParameter="5" />
                                 <MenuItem Header="NG中(Score4以上)"
                                           IsCheckable="True"
-                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=4, Mode=OneWay}"
-                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="4" />
+                                          IsChecked="{Binding Main.AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=4, Mode=OneWay}"
+                                          Command="{Binding Main.SetAiNgThresholdCommand}" CommandParameter="4" />
                                 <MenuItem Header="NG強(Score3以上)"
                                           IsCheckable="True"
-                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=3, Mode=OneWay}"
-                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="3" />
+                                          IsChecked="{Binding Main.AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=3, Mode=OneWay}"
+                                          Command="{Binding Main.SetAiNgThresholdCommand}" CommandParameter="3" />
                                 <MenuItem Header="NG特強(Score2以上)"
                                           IsCheckable="True"
-                                          IsChecked="{Binding AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=2, Mode=OneWay}"
-                                          Command="{Binding SetAiNgThresholdCommand}" CommandParameter="2" />
+                                          IsChecked="{Binding Main.AiNgThreshold, Converter={StaticResource IntEquals}, ConverterParameter=2, Mode=OneWay}"
+                                          Command="{Binding Main.SetAiNgThresholdCommand}" CommandParameter="2" />
                                 <Separator />
                                 <MenuItem Header="レスのスコア判定をクリアする"
-                                          Command="{Binding ClearAiNgScoresCommand}"
+                                          Command="{Binding Main.ClearAiNgScoresCommand}"
                                           ToolTip="このスレの LLM 判定スコアをすべて消去します (再表示され、有効なら判定し直します)" />
                             </ContextMenu>
                         </Button.ContextMenu>
@@ -148,19 +148,19 @@
 
                     <!-- フィルタトグル: 人気レス / 画像レス。両方 ON で OR (= どちらかに該当なら表示)。 -->
                     <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
-                                  IsChecked="{Binding SelectedThreadTab.IsPopularFilterOn}"
+                                  IsChecked="{Binding SelectedTab.IsPopularFilterOn}"
                                   ToolTip="人気のレス (返信が多いレス + ツリーモードではその配下) のみ表示。画像トグルと OR 動作">
                         <TextBlock Text="👍" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </ToggleButton>
                     <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
-                                  IsChecked="{Binding SelectedThreadTab.IsMediaFilterOn}"
+                                  IsChecked="{Binding SelectedTab.IsMediaFilterOn}"
                                   ToolTip="画像 / 動画 URL を含むレスのみ表示。人気トグルと OR 動作">
                         <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </ToggleButton>
 
                     <!-- 差分取得 -->
                     <Button Style="{StaticResource ToolbarIconButton}"
-                            Command="{Binding SelectedThreadTab.RefreshCommand}"
+                            Command="{Binding SelectedTab.RefreshCommand}"
                             ToolTip="このスレの差分を取得 (新着レスを末尾に追加)">
                         <TextBlock Text="🔄" FontSize="13"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -168,7 +168,7 @@
 
                     <!-- 書き込み -->
                     <Button Style="{StaticResource ToolbarIconButton}"
-                            Command="{Binding SelectedThreadTab.WriteCommand}"
+                            Command="{Binding SelectedTab.WriteCommand}"
                             ToolTip="このスレに書き込む">
                         <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                               StrokeThickness="1.4"
@@ -180,18 +180,18 @@
                     </Button>
 
                     <!-- 表示モード切替 -->
-                    <Button Command="{Binding SelectedThreadTab.CycleViewModeCommand}">
+                    <Button Command="{Binding SelectedTab.CycleViewModeCommand}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="ToolTip" Value="表示モードを切替" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Flat}">
+                                    <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Flat}">
                                         <Setter Property="ToolTip" Value="現在: レス順表示 (クリック → ツリー (重複あり))" />
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Tree}">
+                                    <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Tree}">
                                         <Setter Property="ToolTip" Value="現在: ツリー表示 (重複あり) (クリック → ツリー (重複なし))" />
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.DedupTree}">
+                                    <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.DedupTree}">
                                         <Setter Property="ToolTip" Value="現在: ツリー表示 (重複なし) (クリック → レス順表示)" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -207,7 +207,7 @@
                                     <Style TargetType="Path">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode, FallbackValue={x:Static vm:ThreadViewMode.Flat}}"
+                                            <DataTrigger Binding="{Binding SelectedTab.ViewMode, FallbackValue={x:Static vm:ThreadViewMode.Flat}}"
                                                          Value="{x:Static vm:ThreadViewMode.Flat}">
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </DataTrigger>
@@ -224,7 +224,7 @@
                                     <Style TargetType="Path">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}"
+                                            <DataTrigger Binding="{Binding SelectedTab.ViewMode}"
                                                          Value="{x:Static vm:ThreadViewMode.Tree}">
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </DataTrigger>
@@ -242,7 +242,7 @@
                                     <Style TargetType="Path">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedThreadTab.ViewMode}"
+                                            <DataTrigger Binding="{Binding SelectedTab.ViewMode}"
                                                          Value="{x:Static vm:ThreadViewMode.DedupTree}">
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </DataTrigger>
@@ -255,7 +255,7 @@
 
                     <!-- ログ削除 -->
                     <Button Style="{StaticResource ToolbarIconButton}"
-                            Command="{Binding SelectedThreadTab.DeleteCommand}"
+                            Command="{Binding SelectedTab.DeleteCommand}"
                             ToolTip="このスレのログを削除してタブを閉じる">
                         <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                               StrokeThickness="1.2"
@@ -264,12 +264,12 @@
                     </Button>
 
                     <!-- お気に入りトグル (★) -->
-                    <Button Command="{Binding SelectedThreadTab.AddToFavoritesCommand}">
+                    <Button Command="{Binding SelectedTab.AddToFavoritesCommand}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="ToolTip" Value="このスレをお気に入りに追加" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedThreadTab.IsFavorited}" Value="True">
+                                    <DataTrigger Binding="{Binding SelectedTab.IsFavorited}" Value="True">
                                         <Setter Property="ToolTip"     Value="このスレをお気に入りから外す" />
                                         <Setter Property="Background"  Value="#CCE5FF" />
                                         <Setter Property="BorderBrush" Value="#88B0DD" />
@@ -285,14 +285,14 @@
 
                 <!-- 絞り込み検索: ヘッダの「タイトル」と「ボタン群」の間の残りスペースを fill する。
                      ペイン幅が狭くなっても × ボタン (= SearchBoxToggle 内で Dock=Right) が画面内に残る。
-                     SelectedThreadTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
                 <ctrl:SearchBoxToggle Margin="0,0,6,0"
                                       HintText="本文 / 名前行に文字列を含むレスだけ表示 (空欄でフィルタ解除)"
-                                      Text="{Binding SelectedThreadTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
                     <ctrl:SearchBoxToggle.Style>
                         <Style TargetType="ctrl:SearchBoxToggle">
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedThreadTab}" Value="{x:Null}">
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                     <Setter Property="IsEnabled" Value="False" />
                                 </DataTrigger>
                             </Style.Triggers>
@@ -303,8 +303,9 @@
         </Border>
 
         <TabControl Grid.Row="1"
-                    ItemsSource="{Binding ThreadTabs}"
-                    SelectedItem="{Binding SelectedThreadTab}"
+                    x:Name="ThreadTabStrip"
+                    ItemsSource="{Binding Tabs}"
+                    SelectedItem="{Binding SelectedTab}"
                     BorderThickness="0"
                     Margin="1,0,1,0"
                     MinHeight="24"><!-- タブ 0 件でも 1 段分の高さを維持 (= 中クリック復元の hit area を残す) -->
@@ -321,12 +322,18 @@
                     <!-- タブ幅は MaxWidth で「上限」として bind (= 短いタイトルは自然な幅で縮み、長いタイトルは
                          設定値でカットして次行 wrap)。MinWidth で潰れすぎを防ぐ。 -->
                     <Setter Property="MaxWidth"
-                            Value="{Binding DataContext.ThreadTabWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                            Value="{Binding DataContext.Main.ThreadTabWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                     <Setter Property="MinWidth" Value="60" />
                     <!-- タブのクリック (中/Ctrl+左/Shift+左/Alt+左/ダブル) は ShortcutManager の
                          PreviewMouseDown ハンドラがカテゴリ「スレッドタブ表示領域」として dispatch するので、
                          pane 側で直接拾う必要は無い (= 二重発火を避けるため EventSetter は外している)。 -->
                     <EventSetter Event="MouseRightButtonUp"   Handler="ThreadTabItem_MouseRightButtonUp" />
+                    <!-- タブの D&D (Phase 3 で Mouse.Capture 方式に統一)。素の左クリックは ShortcutManager に
+                         拾われず通常のタブ選択になるので、その上に「閾値を超えて動いたらドラッグ開始」を載せる。
+                         閾値超えで MainWindow.BeginTabDrag に委ね、以降の移動/ドロップは LayoutHost (PaneLayoutPanel) が
+                         キャプチャして処理する (= WebView2 を跨いだペイン本体へのドロップも可能)。 -->
+                    <EventSetter Event="PreviewMouseLeftButtonDown" Handler="ThreadTabItem_PreviewMouseLeftButtonDown" />
+                    <EventSetter Event="PreviewMouseMove"           Handler="ThreadTabItem_PreviewMouseMove" />
                 </Style>
             </TabControl.ItemContainerStyle>
             <TabControl.ItemTemplate>
@@ -361,7 +368,7 @@
             </TabControl.ItemTemplate>
         </TabControl>
 
-        <ItemsControl Grid.Row="2" ItemsSource="{Binding ThreadTabs}">
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Tabs}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <Grid />
@@ -377,8 +384,8 @@
                                   ctrl:WebView2Helper.HidePostsPush="{Binding PendingHidePostNumbers}"
                                   ctrl:WebView2Helper.AiHiddenPush="{Binding AiHiddenPostNumbers}"
                                   ctrl:WebView2Helper.ScrollToPostPush="{Binding PendingScrollToPost}"
-                                  ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                  ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.Main.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.Main.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"
                                   CoreWebView2InitializationCompleted="ThreadViewWebView_CoreInitialized"
                                   IsVisibleChanged="ThreadViewWebView_IsVisibleChanged"

@@ -93,7 +93,7 @@ public sealed partial class MainViewModel
     {
         var favKeys = Favorites.CollectFavoriteThreadKeys();
 
-        foreach (var tab in ThreadTabs)
+        foreach (var tab in AllThreadTabs)
         {
             var b = tab.Board;
             tab.IsFavorited = favKeys.Contains((b.Host, b.DirectoryName, tab.ThreadKey));

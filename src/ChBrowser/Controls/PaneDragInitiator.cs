@@ -49,13 +49,29 @@ public static class PaneDragInitiator
             // 閾値超え → 自前ドラッグ開始 (Mouse.Capture が PaneLayoutPanel に移る)
             armed     = false;
             downPoint = null;
-            FindAncestorPanel(header)?.BeginPaneDrag(paneId);
+            FindAncestorPanel(header)?.BeginPaneDrag(ResolveKey(header, paneId));
         };
         header.PreviewMouseLeftButtonUp += (s, e) =>
         {
             armed     = false;
             downPoint = null;
         };
+    }
+
+    /// <summary>ヘッダの祖先で <see cref="PaneLayoutPanel.PaneIdProperty"/> が設定された要素 (= ペイン本体の UserControl) を探し、
+    /// その <see cref="PaneLayoutPanel.InstanceIdProperty"/> と組んで leaf キーを作る (複数ペイン化, Phase 1〜)。
+    /// 動的生成された ThreadDisplay ペインは InstanceId を持つので、ここでドラッグ時の実キーを解決できる。
+    /// 見つからなければ <paramref name="fallbackKind"/> 単独のキー。</summary>
+    private static string ResolveKey(DependencyObject from, PaneId fallbackKind)
+    {
+        DependencyObject? cur = from;
+        while (cur is not null)
+        {
+            if (PaneLayoutPanel.GetPaneId(cur) is PaneId pid)
+                return PaneKinds.MakeKey(pid, PaneLayoutPanel.GetInstanceId(cur));
+            cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+        }
+        return PaneKinds.MakeKey(fallbackKind, null);
     }
 
     private static PaneLayoutPanel? FindAncestorPanel(DependencyObject d)

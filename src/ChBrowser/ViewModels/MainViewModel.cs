@@ -43,7 +43,137 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     // ----- ペイン用コレクション -----
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
     public ObservableCollection<ThreadListTabViewModel> ThreadListTabs   { get; } = new();
-    public ObservableCollection<ThreadTabViewModel>     ThreadTabs       { get; } = new();
+
+    // ----- スレ表示ペイン (複数枚対応, Phase 2) -----
+    /// <summary>スレッド表示ペインの集合。各ペインが自分のタブ集合 + 選択タブを持つ。
+    /// 起動時は 1 枚 (= 従来と同じ単一ペイン)。Phase 3 のタブ D&amp;D で増減する。</summary>
+    public ObservableCollection<ThreadPaneGroupViewModel> ThreadPaneGroups { get; } = new();
+
+    /// <summary>「最後に操作した」スレ表示ペイン (MRU)。新規スレ・AI NG・AI チャット・ショートカット等の
+    /// 「アクティブペイン」基準の対象。<see cref="SetActiveThreadGroup"/> で張り替える。</summary>
+    private ThreadPaneGroupViewModel _activeThreadGroup = null!;
+    public  ThreadPaneGroupViewModel ActiveThreadGroup => _activeThreadGroup;
+
+    /// <summary>アクティブペインのタブ集合 (= 従来の ThreadTabs 互換 facade)。
+    /// 「新規スレを追加する / 件数を見る」等の "アクティブペインに対する操作" はこれを使う。
+    /// 横断的な「全ペインのタブ」を見たい処理は <see cref="AllThreadTabs"/> を使う。</summary>
+    public ObservableCollection<ThreadTabViewModel> ThreadTabs => _activeThreadGroup.Tabs;
+
+    /// <summary>全スレ表示ペインのタブを横断列挙する (= 既存スレ検索 / 全件 flush / 全件保存 / NG 一括適用 用)。</summary>
+    public System.Collections.Generic.IEnumerable<ThreadTabViewModel> AllThreadTabs
+        => ThreadPaneGroups.SelectMany(g => g.Tabs);
+
+    /// <summary>指定タブが属するペインを返す (無ければ null)。</summary>
+    public ThreadPaneGroupViewModel? GroupOf(ThreadTabViewModel tab)
+        => ThreadPaneGroups.FirstOrDefault(g => g.Tabs.Contains(tab));
+
+    /// <summary>タブを所属ペインから取り除く (= 閉じる)。所属不明ならアクティブペインから試みる。</summary>
+    public void RemoveThreadTab(ThreadTabViewModel tab)
+        => (GroupOf(tab) ?? _activeThreadGroup).Tabs.Remove(tab);
+
+    /// <summary>新しいスレ表示ペインを登録する (= Tabs の CollectionChanged を購読 + コレクションに追加)。
+    /// ctor の初期 1 枚生成と、Phase 3 のペイン増設の両方から呼ばれる。</summary>
+    private void RegisterThreadGroup(ThreadPaneGroupViewModel group)
+    {
+        group.Tabs.CollectionChanged += OnThreadTabsCollectionChanged;
+        ThreadPaneGroups.Add(group);
+    }
+
+    /// <summary>スレ表示ペインを新設する (Phase 3 のタブ→ペイン本体ドロップ用)。View 側がコントロールを生成して
+    /// レイアウトツリーに挿す前提で、ここでは VM (グループ) だけ作る。</summary>
+    public ThreadPaneGroupViewModel AddThreadGroup(string paneKey)
+    {
+        var group = new ThreadPaneGroupViewModel(this, paneKey);
+        RegisterThreadGroup(group);
+        return group;
+    }
+
+    /// <summary>空になったスレ表示ペインを破棄する (Phase 3)。最低 1 枚は維持する。
+    /// 破棄対象がアクティブだったら別ペインをアクティブに繰り上げる。</summary>
+    public void RemoveThreadGroup(ThreadPaneGroupViewModel group)
+    {
+        if (ThreadPaneGroups.Count <= 1) return; // 最低 1 枚は残す
+        group.Tabs.CollectionChanged -= OnThreadTabsCollectionChanged;
+        var wasActive = ReferenceEquals(group, _activeThreadGroup);
+        ThreadPaneGroups.Remove(group);
+        if (wasActive)
+        {
+            // 別ペインをアクティブに繰り上げ (SetActiveThreadGroup は同一参照で no-op になるため直接差し替える)。
+            _activeThreadGroup = ThreadPaneGroups[0];
+            OnPropertyChanged(nameof(ActiveThreadGroup));
+            OnPropertyChanged(nameof(ThreadTabs));
+            OnPropertyChanged(nameof(SelectedThreadTab));
+            _lastActivePane = ActivePane.Thread;
+            HandleActiveSelectedTabChanged(_activeThreadGroup.SelectedTab);
+        }
+    }
+
+    /// <summary>タブを別ペイン (または同一ペイン内の別位置) へ移動する (Phase 3)。
+    /// <paramref name="exclusiveIndex"/> は「ドラッグ中タブを除いた target.Tabs」での挿入位置。
+    /// 同一ペインなら <see cref="System.Collections.ObjectModel.ObservableCollection{T}.Move"/> で並べ替え
+    /// (= WebView2 を作り直さない)、別ペインなら Remove+Insert で移す (= 移動先で WebView 再生成・再描画)。</summary>
+    public void MoveTabToGroupAt(ThreadTabViewModel tab, ThreadPaneGroupViewModel target, int exclusiveIndex)
+    {
+        var source = GroupOf(tab);
+        if (source is null) return;
+
+        if (ReferenceEquals(source, target))
+        {
+            int from = target.Tabs.IndexOf(tab);
+            if (from < 0) return;
+            int to = Math.Clamp(exclusiveIndex, 0, target.Tabs.Count - 1);
+            if (to != from) target.Tabs.Move(from, to);
+            target.SelectedTab = tab;
+            return;
+        }
+
+        // 別ペインへ移動。Remove は「閉じた」ではないので副作用 (flush / 復元履歴 push) を抑止する。
+        // 移動先では WebView2 が新規生成されるので、初回 ready で既存 Posts を resync させるフラグを立てる。
+        tab.NeedsResyncOnAttach = true;
+        SuppressTabCloseSideEffects = true;
+        try
+        {
+            source.Tabs.Remove(tab);
+            target.Tabs.Insert(Math.Clamp(exclusiveIndex, 0, target.Tabs.Count), tab);
+        }
+        finally { SuppressTabCloseSideEffects = false; }
+
+        target.SelectedTab = tab;
+        SetActiveThreadGroup(target);
+        // 元ペインの選択タブが移動タブを指したままなら繕う。
+        if (source.SelectedTab is null || source.Tabs.IndexOf(source.SelectedTab) < 0)
+            source.SelectedTab = source.Tabs.Count > 0 ? source.Tabs[^1] : null;
+    }
+
+    /// <summary>true の間、<see cref="OnThreadTabsCollectionChanged"/> の Remove 副作用 (スクロール flush /
+    /// 復元履歴 push) を抑止する。タブのペイン間移動 (= 閉じた訳ではない) のときに使う。</summary>
+    internal bool SuppressTabCloseSideEffects { get; set; }
+
+    /// <summary>あるスレ表示ペインのタブが 0 枚になったときに発火する (× で閉じた / 別ペインへ移動した、いずれでも)。
+    /// View 側 (MainWindow) が受けて、最後の 1 枚を除きそのペインを閉じる (= レイアウトから除去) (複数ペイン化 Phase 3)。</summary>
+    public event System.Action<ThreadPaneGroupViewModel>? ThreadGroupEmptied;
+
+    /// <summary>アクティブペイン (MRU) を張り替える。アクティブが変わったら、そのペインの選択タブに合わせて
+    /// ステータスバー / アドレスバー / AI チャット文脈 / AI NG を更新する。</summary>
+    public void SetActiveThreadGroup(ThreadPaneGroupViewModel group)
+    {
+        if (ReferenceEquals(_activeThreadGroup, group)) return;
+        _activeThreadGroup = group;
+        OnPropertyChanged(nameof(ActiveThreadGroup));
+        OnPropertyChanged(nameof(ThreadTabs));
+        OnPropertyChanged(nameof(SelectedThreadTab));
+        _lastActivePane = ActivePane.Thread;
+        HandleActiveSelectedTabChanged(group.SelectedTab);
+    }
+
+    /// <summary>ペインの選択タブが変わったときにそのペインから呼ばれる。アクティブペインのときだけ
+    /// 「選択タブ追従」の各種更新を行う (= 非アクティブペインの選択変更はステータスに出さない)。</summary>
+    internal void OnGroupSelectedTabChanged(ThreadPaneGroupViewModel group, ThreadTabViewModel? value)
+    {
+        if (!ReferenceEquals(group, _activeThreadGroup)) return;
+        OnPropertyChanged(nameof(SelectedThreadTab));
+        HandleActiveSelectedTabChanged(value);
+    }
 
     /// <summary>お気に入りペイン (TreeView) のルート。Phase 7 で導入。</summary>
     public FavoritesViewModel Favorites { get; }
@@ -138,15 +268,28 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 
     // ----- アクティブタブ -----
     [ObservableProperty] private ThreadListTabViewModel? _selectedThreadListTab;
-    [ObservableProperty] private ThreadTabViewModel?     _selectedThreadTab;
+
+    /// <summary>アクティブペインの選択タブ (= 従来の SelectedThreadTab 互換 facade)。
+    /// getter/setter ともアクティブペイン (<see cref="ActiveThreadGroup"/>) の SelectedTab に委譲する。
+    /// 選択変更時の追従処理は <see cref="OnGroupSelectedTabChanged"/> → <see cref="HandleActiveSelectedTabChanged"/>。</summary>
+    public ThreadTabViewModel? SelectedThreadTab
+    {
+        get => _activeThreadGroup.SelectedTab;
+        set => _activeThreadGroup.SelectedTab = value;
+    }
 
     /// <summary>open API 群の <c>activate</c> 引数共通実装。
-    /// <paramref name="activate"/> が true、または対象コレクションが「0 → 1」に遷移する状況
-    /// (= タブが唯一) のときだけ Selected*Tab を切り替える。一括オープン経路 (activate:false) で
-    /// 次々タブが追加されてもペインがチカチカしないよう、ここで一元判定する。</summary>
+    /// <paramref name="activate"/> が true、または対象ペインが「0 → 1」に遷移する状況
+    /// (= タブが唯一) のときだけ、そのタブの所属ペインをアクティブにして選択する。一括オープン経路
+    /// (activate:false) で次々タブが追加されてもペインがチカチカしないよう、ここで一元判定する。</summary>
     private void MaybeActivateThreadTab(ThreadTabViewModel tab, bool activate)
     {
-        if (activate || ThreadTabs.Count == 1) SelectedThreadTab = tab;
+        var group = GroupOf(tab) ?? _activeThreadGroup;
+        if (activate || group.Tabs.Count == 1)
+        {
+            SetActiveThreadGroup(group);
+            group.SelectedTab = tab;
+        }
     }
 
     /// <inheritdoc cref="MaybeActivateThreadTab"/>
@@ -163,11 +306,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// <summary>現在 PropertyChanged を購読しているスレ一覧タブ。SelectedThreadListTab 変更で付け替え。</summary>
     private ThreadListTabViewModel? _statusListenerThreadListTab;
 
-    partial void OnSelectedThreadTabChanged(ThreadTabViewModel? value)
+    /// <summary>アクティブペインの選択タブが変わったとき (= 選択タブ変更 / アクティブペイン切替) に呼ばれ、
+    /// ステータスバー・アドレスバー・AI チャット文脈・AI NG をその選択タブに追従させる。
+    /// 各タブの IsSelected (= WebView 可視制御) はペイン単位で <see cref="ThreadPaneGroupViewModel"/> 側が更新する。</summary>
+    private void HandleActiveSelectedTabChanged(ThreadTabViewModel? value)
     {
-        // 各タブの WebView2 は専属インスタンス (TabControl ではなく ItemsControl で並列描画)。
-        // Visibility 切替で選択タブだけ可視にするため、IsSelected を更新する。
-        foreach (var t in ThreadTabs) t.IsSelected = ReferenceEquals(t, value);
         // ステータスバーの「あぼーん N」「dat サイズ」を選択タブのものに更新
         AboneStatus    = value is null ? "あぼーん 0" : $"あぼーん {value.HiddenCount}";
         DatSizeStatus  = value is null ? ""           : FormatDatSize(value.DatSize);
@@ -276,9 +419,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         SyncStatusFromActivePane();
     }
 
-    /// <summary>右ペイン下段「スレ表示」(ThreadTabs) がアクティブ化された通知。</summary>
-    public void MarkThreadPaneActive()
+    /// <summary>スレ表示ペインがアクティブ化された通知 (= フォーカス / クリック / WebView paneActivated)。
+    /// そのペインを MRU アクティブにして、アドレスバー / ステータスを追従させる。</summary>
+    public void MarkThreadPaneActive(ThreadPaneGroupViewModel group)
     {
+        SetActiveThreadGroup(group); // アクティブが変わるなら選択タブ追従も走る (同一なら no-op)
         _lastActivePane = ActivePane.Thread;
         RefreshAddressBarUrl();
         SyncStatusFromActivePane();
@@ -348,13 +493,13 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     public async Task OpenThreadByUrlAsync(string host, string dir, string key, int scrollToPostNumber = 0)
     {
         var rootIn = DataPaths.ExtractRootDomain(host);
-        foreach (var tab in ThreadTabs)
+        foreach (var tab in AllThreadTabs)
         {
             if (string.Equals(DataPaths.ExtractRootDomain(tab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(tab.Board.DirectoryName, dir, StringComparison.Ordinal) &&
                 string.Equals(tab.ThreadKey,           key, StringComparison.Ordinal))
             {
-                SelectedThreadTab = tab;
+                MaybeActivateThreadTab(tab, activate: true); // 所属ペインをアクティブにして選択
                 if (scrollToPostNumber > 0)
                     tab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
                 return;
@@ -408,15 +553,18 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         _llmClient       = llmClient;
         Favorites        = new FavoritesViewModel(favoritesStorage);
 
+        // スレ表示ペインを 1 枚生成 (= 起動時は従来どおり単一ペイン)。キーは静的ペインと同じ "ThreadDisplay"。
+        var firstGroup = new ThreadPaneGroupViewModel(this, ChBrowser.Models.PaneKinds.MakeKey(ChBrowser.Models.PaneId.ThreadDisplay, null));
+        _activeThreadGroup = firstGroup;
+        RegisterThreadGroup(firstGroup);
+
         Favorites.Changed += RefreshFavoritesHtml;
         // 「上ボタン」バー: お気に入り変更のたびに再構築 (= フォルダ直下を ObservableCollection に流し込む)。
         Favorites.Changed += RefreshTopButtons;
         RefreshTopButtons();
 
-        // タブを閉じる瞬間に「最後にスクロールしていた位置」を idx.json に書き出すため、
-        // CollectionChanged を購読する。スクロール中の都度書き込みは行わない設計
-        // (= MainViewModel.UpdateScrollPosition は in-memory 更新のみ)。
-        ThreadTabs.CollectionChanged += OnThreadTabsCollectionChanged;
+        // タブを閉じる瞬間に「最後にスクロールしていた位置」を idx.json に書き出すための CollectionChanged
+        // 購読は、ペインごとに RegisterThreadGroup で行う (= 上の firstGroup 登録時に購読済み)。
 
         // スレ一覧タブの close 履歴管理 (= 中クリック空領域復元用)。
         ThreadListTabs.CollectionChanged += (_, e) =>

@@ -1,11 +1,13 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using ChBrowser.Services.Image;
 using ChBrowser.Services.WebView2;
@@ -38,13 +40,24 @@ public partial class ThreadDisplayPane : UserControl
         btn.ContextMenu.IsOpen          = true;
     }
 
-    // ---- ペインフォーカス → ViewModel に通知 ----
+    /// <summary>このペインの DataContext (= 担当するスレ表示グループ, 複数ペイン化 Phase 2)。
+    /// 静的ペインは MainWindow が、動的ペインは生成側が DataContext にグループ VM を設定する。</summary>
+    private ThreadPaneGroupViewModel? Group => DataContext as ThreadPaneGroupViewModel;
+
+    /// <summary>アプリ全体の ViewModel (= Group.Main)。横断操作 / 共有設定の参照に使う。</summary>
+    private MainViewModel? Vm => (DataContext as ThreadPaneGroupViewModel)?.Main;
+
+    // ---- ペインフォーカス → ViewModel に通知 (このペインを MRU アクティブにする) ----
 
     private void Pane_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-        => (DataContext as MainViewModel)?.MarkThreadPaneActive();
+    {
+        if (Group is { } g) g.Main.MarkThreadPaneActive(g);
+    }
 
     private void Pane_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        => (DataContext as MainViewModel)?.MarkThreadPaneActive();
+    {
+        if (Group is { } g) g.Main.MarkThreadPaneActive(g);
+    }
 
     // ---- WebView2 のライフサイクル管理 ----
 
@@ -53,19 +66,18 @@ public partial class ThreadDisplayPane : UserControl
     /// (= 動画再生/JS 実行/ネットワーク要求などを継続する) ので、ここで明示的に Dispose しないと
     /// タブを閉じても動画音声が鳴り続ける + 再オープン時に二重再生になる。
     ///
-    /// 注意: Unloaded はタブ切替時 (= Visibility 変化) には発火しないが、ペインの可視ツリー再構成
-    /// (= 例えばペインを別ロケーションに付け直す) でも発火することがある。そのため、
-    /// 「自分の DataContext が ThreadTabs にもう存在しない」ことを確認してから Dispose する
-    /// (= 偽陽性で動いている WebView2 を壊さない)。</summary>
+    /// 注意: Unloaded はタブ切替時 (= Visibility 変化) には発火しないが、ペインの可視ツリー再構成でも
+    /// 発火することがある。判定は「このタブが "このペインの" タブ集合にまだ居るか」で行う (複数ペイン化 Phase 3)。
+    /// 居れば一時的 unload (= レイアウト再構成等) とみなして Dispose しない。居なければ — 閉じた / 別ペインへ
+    /// 移動した — のどちらでも、このペインが抱えていた WebView2 はもう不要なので Dispose する
+    /// (移動先では別の WebView2 が新規生成される)。</summary>
     private void ThreadViewWebView_Unloaded(object sender, RoutedEventArgs e)
     {
         if (sender is not WebView2 wv) return;
         // WPF は ItemsControl コンテナの解体時に DataContext を null に戻してから Unloaded を発火する
-        // ケースがあるので、ctx が null になっていても「本当に閉じられた」と解釈して Dispose する。
-        // ctx が拾えてかつ ThreadTabs にまだ存在する場合のみ「一時的 unload」(= ペイン構造の再構成等) と
-        // みなして Dispose しない。
+        // ケースがあるので、ctx が null になっていても「本当に外れた」と解釈して Dispose する。
         var ctx = wv.DataContext as ThreadTabViewModel;
-        if (ctx is not null && DataContext is MainViewModel main && main.ThreadTabs.Contains(ctx)) return;
+        if (ctx is not null && Group is { } g && g.Tabs.Contains(ctx)) return;
         try { wv.Dispose(); }
         catch (Exception ex) { Debug.WriteLine($"[ThreadDisplayPane] WebView2 Dispose failed: {ex.Message}"); }
     }
@@ -86,7 +98,7 @@ public partial class ThreadDisplayPane : UserControl
 
         if (type == "paneActivated")
         {
-            (DataContext as MainViewModel)?.MarkThreadPaneActive();
+            if (Group is { } g) g.Main.MarkThreadPaneActive(g);
             return;
         }
         if (WebMessageBridge.TryDispatchCommonMessage(sender, type, payload, "スレッド表示領域")) return;
@@ -231,6 +243,21 @@ public partial class ThreadDisplayPane : UserControl
             // への主たる対策点。デバッグ ON 時は素の挙動を観測するためナッジしない。
             if (!ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog && wv.IsVisible)
                 ScheduleRepresentNudge(wv);
+
+            // 別ペインへ移動してきたタブ (= この WebView は新規生成) は、初回 ready 時点で
+            // 既に Posts を抱えている。appendPosts チャネルでは再配信されない (= 移動中は OnAppendBatchChanged が
+            // suppress される) ので、ここで全 Posts を一括 resync して描画する (複数ペイン化 Phase 3/4)。
+            // これは「ペイン移動先の初回描画」であって自動復旧ではないため、デバッグ (復旧無効) モードでも実施する。
+            // 通常の新規オープン (NeedsResyncOnAttach=false) では何もしない。
+            if (wv.DataContext is ThreadTabViewModel moved
+                && moved.NeedsResyncOnAttach
+                && moved.Posts.Count > 0)
+            {
+                moved.NeedsResyncOnAttach = false;
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[threadReady] {moved.Header}: ペイン移動先の初回描画 → resync (posts={moved.Posts.Count})");
+                _ = ChBrowser.Controls.WebView2Helper.SendThreadResyncAsync(wv, moved);
+            }
             return;
         }
         if (wv.DataContext is not ThreadTabViewModel tab) return;
@@ -266,7 +293,7 @@ public partial class ThreadDisplayPane : UserControl
         if (ChBrowser.Services.Logging.DebugFlags.DisableRecoveryAndLog)
         {
             var header   = (wv.DataContext as ThreadTabViewModel)?.Header ?? "(unknown)";
-            var liveTabs = (DataContext as MainViewModel)?.ThreadTabs.Count ?? -1;
+            var liveTabs = Vm?.AllThreadTabs.Count() ?? -1;
 
             // WebView2 系プロセスの本数 / 総ワーキングセット (= メモリ圧迫の裏取り用)。
             // システム上の msedgewebview2 全体の概算 (他アプリの WebView2 も含みうる点に注意)。
@@ -585,7 +612,7 @@ public partial class ThreadDisplayPane : UserControl
     private void HandleThreadPreviewRequest(object sender, JsonElement payload)
     {
         if (sender is not WebView2 wv) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (!payload.TryGetProperty("host", out var hostProp)) return;
         if (!payload.TryGetProperty("dir",  out var dirProp))  return;
         if (!payload.TryGetProperty("key",  out var keyProp))  return;
@@ -766,7 +793,7 @@ public partial class ThreadDisplayPane : UserControl
     private void PostNoReply_Click(object sender, RoutedEventArgs e)
     {
         if (PostNoCtxOf(sender) is not { } ctx) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
         main.OpenReplyDialog(tab, ctx.Number);
     }
@@ -774,7 +801,7 @@ public partial class ThreadDisplayPane : UserControl
     private void PostNoToggleOwn_Click(object sender, RoutedEventArgs e)
     {
         if (PostNoCtxOf(sender) is not { } ctx) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
         main.ToggleOwnPost(tab, ctx.Number, !ctx.IsOwn);
     }
@@ -791,7 +818,7 @@ public partial class ThreadDisplayPane : UserControl
     private void OpenNgQuickFromMenu(object sender, string target, Func<PostNoMenuContext, string> getValue)
     {
         if (PostNoCtxOf(sender) is not { } ctx) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
         var value = getValue(ctx);
         if (string.IsNullOrEmpty(value)) return;
@@ -804,7 +831,7 @@ public partial class ThreadDisplayPane : UserControl
     {
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
         if (!payload.TryGetProperty("isOwn",  out var oProp) || oProp.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
         var isOwn = oProp.GetBoolean();
@@ -817,7 +844,7 @@ public partial class ThreadDisplayPane : UserControl
     {
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
         main.OpenReplyDialog(tab, num);
     }
@@ -828,7 +855,7 @@ public partial class ThreadDisplayPane : UserControl
     {
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         var target = payload.TryGetProperty("target", out var tp) ? (tp.GetString() ?? "") : "";
         var value  = payload.TryGetProperty("value",  out var vp) ? (vp.GetString() ?? "") : "";
         if (string.IsNullOrEmpty(target)) return;
@@ -912,7 +939,7 @@ public partial class ThreadDisplayPane : UserControl
             $"[openUrl] parsed: Kind={parsed.Kind}, Host='{parsed.Host}', Dir='{parsed.Directory}', Key='{parsed.ThreadKey}'");
 
         if (parsed.Kind == ChBrowser.Services.Url.AddressBarTargetKind.Thread
-            && DataContext is MainViewModel main)
+            && Vm is { } main)
         {
             // URL に「/<dir>/<key>/<N>」のレス番号が含まれていれば AddressBarParser が
             // parsed.PostNumber に拾ってくれる (= アドレスバー入力経路と JS クリック経路で同じ抽出)。
@@ -941,7 +968,7 @@ public partial class ThreadDisplayPane : UserControl
     {
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         if (!payload.TryGetProperty("postNumber", out var numProp)) return;
         if (numProp.ValueKind != JsonValueKind.Number) return;
         if (!numProp.TryGetInt32(out var num)) return;
@@ -1063,6 +1090,50 @@ public partial class ThreadDisplayPane : UserControl
         }
     }
 
+    // ---- タブの D&D 開始検出 (移動/ペイン生成の本体は MainWindow + LayoutHost が担う, Phase 3) ----
+
+    /// <summary>ドラッグ開始判定用に、押下位置とその時点で押されたタブを覚えておく。
+    /// 閉じる(×)ボタン等のボタン上の押下はドラッグ対象にしない (= 通常のクリックを優先)。</summary>
+    private Point _tabDragStartPoint;
+    private ThreadTabViewModel? _tabDragCandidate;
+
+    private void ThreadTabItem_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not TabItem ti)
+        {
+            _tabDragCandidate = null;
+            return;
+        }
+        // ×ボタン等の上での押下はドラッグにしない (= Command を素直に発火させる)。
+        if (e.OriginalSource is DependencyObject src && TabClickHelper.FindAncestor<ButtonBase>(src) is not null)
+        {
+            _tabDragCandidate = null;
+            return;
+        }
+        _tabDragStartPoint = e.GetPosition(null);
+        _tabDragCandidate  = ti.DataContext as ThreadTabViewModel;
+    }
+
+    /// <summary>押下後に閾値を超えて動いたらタブ D&D を開始する。以降の移動/ドロップは MainWindow が
+    /// LayoutHost (PaneLayoutPanel) のマウスキャプチャで処理し、
+    /// 「自ストリップ内=並べ替え / 別ペインのストリップ上=移動 / ペイン本体=新ペイン生成」を切り替える
+    /// (= WebView2 を跨いだドロップとオーバーレイ表示のため、ペイン移動と同じキャプチャ方式に統一)。</summary>
+    private void ThreadTabItem_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_tabDragCandidate is null) return;
+        if (e.LeftButton != MouseButtonState.Pressed) { _tabDragCandidate = null; return; }
+
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _tabDragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(pos.Y - _tabDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var tab = _tabDragCandidate;
+        _tabDragCandidate = null;
+        if (Group is null || tab is null) return;
+        if (Window.GetWindow(this) is MainWindow mw) mw.BeginTabDrag(tab, Group);
+    }
+
     // ---- タブの右クリックメニュー (中/ダブル/修飾+左 は ShortcutManager 側で dispatch) ----
 
     private void ThreadTabItem_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -1107,7 +1178,7 @@ public partial class ThreadDisplayPane : UserControl
     private void ThreadTabFav_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
-        (DataContext as MainViewModel)?.ToggleThreadFavorite(tab);
+        Vm?.ToggleThreadFavorite(tab);
     }
 
     /// <summary>「板を開く」: スレが属する板のスレ一覧タブを開く (既存タブがあればアクティブ化)。
@@ -1115,7 +1186,7 @@ public partial class ThreadDisplayPane : UserControl
     private void ThreadTabOpenBoard_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         _ = main.OpenBoardByUrlAsync(tab.Board.Host, tab.Board.DirectoryName);
     }
 
@@ -1177,13 +1248,13 @@ public partial class ThreadDisplayPane : UserControl
     private void ThreadTabFindNext_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         _ = main.OpenNextThreadSearchAsync(tab);
     }
 
     private void ThreadTabDeleteLog_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadTabViewModel>(sender) is not { } tab) return;
-        (DataContext as MainViewModel)?.DeleteThreadLog(tab);
+        Vm?.DeleteThreadLog(tab);
     }
 }

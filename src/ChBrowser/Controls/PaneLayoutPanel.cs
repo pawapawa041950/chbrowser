@@ -38,6 +38,22 @@ public class PaneLayoutPanel : Panel
     public static PaneId? GetPaneId(DependencyObject d) => (PaneId?)d.GetValue(PaneIdProperty);
     public static void    SetPaneId(DependencyObject d, PaneId? value) => d.SetValue(PaneIdProperty, value);
 
+    /// <summary>複数可種 (ThreadDisplay) の動的生成ペインが「自分はどのインスタンスか」を表明する添付プロパティ。
+    /// シングルトン種 / 静的ペインでは未設定 (= null)。<see cref="PaneId"/> と組で leaf キーを成す。</summary>
+    public static readonly DependencyProperty InstanceIdProperty =
+        DependencyProperty.RegisterAttached(
+            "InstanceId",
+            typeof(string),
+            typeof(PaneLayoutPanel),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsParentArrange));
+
+    public static string? GetInstanceId(DependencyObject d) => (string?)d.GetValue(InstanceIdProperty);
+    public static void    SetInstanceId(DependencyObject d, string? value) => d.SetValue(InstanceIdProperty, value);
+
+    /// <summary>子コントロールの leaf キー (= PaneId + InstanceId)。PaneId 未設定なら null。</summary>
+    private static string? GetChildKey(DependencyObject d)
+        => GetPaneId(d) is PaneId pid ? PaneKinds.MakeKey(pid, GetInstanceId(d)) : null;
+
     /// <summary>レイアウトツリー。null なら何も配置しない (= 空ペイン状態)。
     /// セッターで <see cref="UIElement.InvalidateArrange"/> + <see cref="UIElement.InvalidateMeasure"/> を呼ぶ。</summary>
     public LayoutNode? Layout
@@ -53,6 +69,18 @@ public class PaneLayoutPanel : Panel
     }
     private LayoutNode? _layout;
 
+    /// <summary>レイアウトツリーを差し替えて強制的に再配置する (複数ペイン化, Phase 3)。
+    /// <see cref="PaneLayoutOps.SplitAtLeaf"/> / <see cref="PaneLayoutOps.RemoveLeaf"/> はツリーを in-place 改変して
+    /// 同じ root 参照を返すことがあり、その場合 <see cref="Layout"/> セッターの参照比較で再配置がスキップされる。
+    /// 本メソッドは参照に関係なく必ず measure/arrange を無効化し、変更通知も出す。</summary>
+    public void ReplaceLayout(LayoutNode? layout)
+    {
+        _layout = layout;
+        InvalidateMeasure();
+        InvalidateArrange();
+        RaiseLayoutChanged();
+    }
+
     /// <summary>スプリッタの hit-test 太さ (px)。実際の splitter 視覚要素はこれと同じ太さで描画する。</summary>
     public double SplitterThickness { get; set; } = 4.0;
 
@@ -66,7 +94,8 @@ public class PaneLayoutPanel : Panel
     private void RaiseLayoutChanged() => LayoutChanged?.Invoke(this, EventArgs.Empty);
 
     // ---- 各 leaf の配置領域を保持 (再描画間で再利用しない、毎回 ArrangeOverride で再計算) ----
-    private readonly Dictionary<PaneId, Rect>             _leafRects     = new();
+    // キーは leaf の一意キー (= PaneKinds.MakeKey: "ThreadList" / "ThreadDisplay:<id>")。
+    private readonly Dictionary<string, Rect>             _leafRects     = new();
     private readonly List<(SplitLayoutNode Node, Rect Bounds, bool IsHorizontal)> _splitterRects = new();
 
     // ---- ドラッグ中のスプリッタ ----
@@ -113,9 +142,9 @@ public class PaneLayoutPanel : Panel
             ComputeLayout(_layout, new Rect(0, 0, size.Width, size.Height));
     }
 
-    /// <summary>子の PaneId に対応する矩形を返す (= 未割当なら null)。</summary>
+    /// <summary>子の leaf キーに対応する矩形を返す (= 未割当なら null)。</summary>
     private Rect? TryGetLeafRect(UIElement child)
-        => GetPaneId(child) is PaneId pid && _leafRects.TryGetValue(pid, out var rect) ? rect : null;
+        => GetChildKey(child) is string key && _leafRects.TryGetValue(key, out var rect) ? rect : null;
 
     /// <summary>infinity 成分を 0 にした Size を返す (= MeasureOverride で渡される無限大対策)。</summary>
     private static Size ToFinite(Size s) => new(
@@ -128,7 +157,7 @@ public class PaneLayoutPanel : Panel
     {
         if (node is LeafLayoutNode leaf)
         {
-            _leafRects[leaf.Pane] = rect;
+            _leafRects[leaf.Key] = rect;
             return;
         }
         if (node is not SplitLayoutNode split) return;
@@ -199,6 +228,15 @@ public class PaneLayoutPanel : Panel
     protected override void OnPreviewMouseMove(MouseEventArgs e)
     {
         base.OnPreviewMouseMove(e);
+
+        // 外部 (タブ) ドラッグ中: 位置だけ通知してホスト (MainWindow) に判定/描画を委ねる。
+        if (_isExternalDragging)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed) { EndExternalDrag(); return; }
+            ExternalDragMove?.Invoke(e.GetPosition(this));
+            e.Handled = true;
+            return;
+        }
 
         // ペインドラッグ中: drop zone visualization のみ更新 (splitter 系処理はスキップ)
         if (_isPaneDragging)
@@ -281,6 +319,13 @@ public class PaneLayoutPanel : Panel
     protected override void OnPreviewMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnPreviewMouseLeftButtonUp(e);
+        if (_isExternalDragging)
+        {
+            ExternalDragCommit?.Invoke(e.GetPosition(this));
+            EndExternalDrag();
+            e.Handled = true;
+            return;
+        }
         if (_isPaneDragging)
         {
             TryCommitPaneDrop(e.GetPosition(this));
@@ -298,6 +343,7 @@ public class PaneLayoutPanel : Panel
     protected override void OnLostMouseCapture(MouseEventArgs e)
     {
         base.OnLostMouseCapture(e);
+        if (_isExternalDragging)  EndExternalDrag();
         if (_isPaneDragging)      EndPaneDrag();
         if (_draggingSplitter is not null) EndSplitterDrag();
     }
@@ -346,20 +392,20 @@ public class PaneLayoutPanel : Panel
         }
     }
 
-    /// <summary>あるスクリーン上座標がどの leaf 上にあるかを返す (D&D ドロップ判定で使う)。
+    /// <summary>あるスクリーン上座標がどの leaf 上にあるかを leaf キーで返す (D&D ドロップ判定で使う)。
     /// どの leaf にも当たらないなら null。</summary>
-    public PaneId? HitTestLeafAt(Point pointInPanel)
+    public string? HitTestLeafAt(Point pointInPanel)
     {
-        foreach (var (paneId, rect) in _leafRects)
+        foreach (var (key, rect) in _leafRects)
         {
-            if (rect.Contains(pointInPanel)) return paneId;
+            if (rect.Contains(pointInPanel)) return key;
         }
         return null;
     }
 
-    /// <summary>指定 leaf の現在の配置 Rect を返す (= drop zone 表示の計算に使う)。</summary>
-    public Rect? GetLeafRect(PaneId pane)
-        => _leafRects.TryGetValue(pane, out var rect) ? rect : null;
+    /// <summary>指定 leaf キーの現在の配置 Rect を返す (= drop zone 表示の計算に使う)。</summary>
+    public Rect? GetLeafRect(string key)
+        => _leafRects.TryGetValue(key, out var rect) ? rect : null;
 
     // ---- ペインドラッグ受信 (Mouse.Capture ベースの自前実装) ----
     //
@@ -374,7 +420,7 @@ public class PaneLayoutPanel : Panel
     private Popup?                _overlayPopup;
     private PaneDropZoneOverlay?  _overlay;
     private bool                  _isPaneDragging;
-    private PaneId                _paneDragSource;
+    private string?               _paneDragSourceKey;
 
     public PaneLayoutPanel()
     {
@@ -387,12 +433,13 @@ public class PaneLayoutPanel : Panel
     /// <summary>ペインヘッダから「ドラッグ閾値超え」が起きたときに呼ぶ。Mouse.Capture をこの Panel に
     /// 取って drop adorner を表示し、以降の MouseMove / MouseUp は <see cref="OnPreviewMouseMove"/> /
     /// <see cref="OnPreviewMouseLeftButtonUp"/> がこの Panel で受ける。</summary>
-    public void BeginPaneDrag(PaneId source)
+    public void BeginPaneDrag(string sourceKey)
     {
         if (_isPaneDragging) return;
         if (_layout is null) return;
-        _isPaneDragging = true;
-        _paneDragSource = source;
+        if (string.IsNullOrEmpty(sourceKey)) return;
+        _isPaneDragging    = true;
+        _paneDragSourceKey = sourceKey;
         EnsureOverlay();
         // CaptureMouse で WebView2 (HwndHost) を跨いでも MouseMove / MouseUp が取れる。
         CaptureMouse();
@@ -404,7 +451,7 @@ public class PaneLayoutPanel : Panel
     {
         if (!_isPaneDragging) return;
         var target = HitTestLeafAt(pointInPanel);
-        if (target is PaneId t && t != _paneDragSource && GetLeafRect(t) is Rect rect)
+        if (target is string t && t != _paneDragSourceKey && GetLeafRect(t) is Rect rect)
         {
             var side = ComputeDropSide(rect, pointInPanel);
             _overlay?.Update(ComputeZoneRect(rect, side));
@@ -484,14 +531,18 @@ public class PaneLayoutPanel : Panel
     private void TryCommitPaneDrop(Point pointInPanel)
     {
         if (_layout is null) return;
-        if (HitTestLeafAt(pointInPanel) is not PaneId target) return;
-        if (target == _paneDragSource) return;
+        if (_paneDragSourceKey is not string sourceKey) return;
+        if (HitTestLeafAt(pointInPanel) is not string target) return;
+        if (target == sourceKey) return;
         if (GetLeafRect(target) is not Rect rect) return;
+        if (!PaneKinds.TryParseKey(sourceKey, out var srcKind, out var srcInstance)) return;
         var side = ComputeDropSide(rect, pointInPanel);
 
-        var withoutSource = PaneLayoutOps.RemovePane(_layout, _paneDragSource);
+        // ペイン「移動」: 同じ (kind, instanceId) の leaf を抜いて、target の side 側へ挿し直す。
+        var withoutSource = PaneLayoutOps.RemoveLeaf(_layout, sourceKey);
         if (withoutSource is null) return;
-        var newLayout = PaneLayoutOps.SplitAtLeaf(withoutSource, target, side, _paneDragSource);
+        var movedLeaf = new LeafLayoutNode(srcKind, srcInstance);
+        var newLayout = PaneLayoutOps.SplitAtLeaf(withoutSource, target, side, movedLeaf);
         if (!newLayout.IsValidFullLayout()) return;
         _layout = newLayout;
         InvalidateMeasure();
@@ -501,8 +552,60 @@ public class PaneLayoutPanel : Panel
 
     private void EndPaneDrag()
     {
-        _isPaneDragging = false;
+        _isPaneDragging    = false;
+        _paneDragSourceKey = null;
         if (IsMouseCaptured) ReleaseMouseCapture();
         RemoveOverlay();
+    }
+
+    // ---- 外部ドラッグ (= タブ D&D) のための汎用キャプチャ機構 (複数ペイン化, Phase 3) ----
+    //
+    // ペイン本体へのドロップ (= 新ペイン生成) はオーバーレイを WebView2 (HwndHost) の上に出す必要があり、
+    // それは既存のペイン移動と同じ Popup ベースのオーバーレイ + Mouse.Capture でしか実現できない。
+    // ただし「どのペイン/タブストリップ上か」「挿入位置」「タブの移動/ペイン生成」という判断は VM/View 側
+    // (MainWindow) の責務なので、ここは「キャプチャ + 位置通知 + ペイン本体オーバーレイ描画」だけを提供し、
+    // 実際の処理はイベントでホストに委ねる (= この Panel は VM/タブストリップを知らないでいられる)。
+
+    private bool _isExternalDragging;
+
+    /// <summary>外部ドラッグ中のマウス移動 (引数はこの Panel 座標)。</summary>
+    public event System.Action<Point>? ExternalDragMove;
+    /// <summary>外部ドラッグのドロップ確定 (引数はこの Panel 座標)。<see cref="ExternalDragEnd"/> より前に発火。</summary>
+    public event System.Action<Point>? ExternalDragCommit;
+    /// <summary>外部ドラッグ終了 (ドロップ / キャンセル / キャプチャ喪失いずれでも)。後始末用。</summary>
+    public event System.Action? ExternalDragEnd;
+
+    /// <summary>外部 (タブ) ドラッグを開始する。Mouse.Capture をこの Panel に取り、以降の移動/離しを
+    /// <see cref="ExternalDragMove"/> / <see cref="ExternalDragCommit"/> で通知する。</summary>
+    public void BeginExternalDrag()
+    {
+        if (_isExternalDragging || _isPaneDragging) return;
+        if (_layout is null) return;
+        _isExternalDragging = true;
+        EnsureOverlay();
+        _overlay?.Update(null);
+        CaptureMouse();
+    }
+
+    /// <summary>ペイン本体ドロップ先のハイライト矩形を更新する (null で消去)。タブストリップ上では null を渡す。</summary>
+    public void ShowExternalDropZone(Rect? zone) => _overlay?.Update(zone);
+
+    private void EndExternalDrag()
+    {
+        if (!_isExternalDragging) return;
+        _isExternalDragging = false;
+        if (IsMouseCaptured) ReleaseMouseCapture();
+        RemoveOverlay();
+        ExternalDragEnd?.Invoke();
+    }
+
+    /// <summary>指定座標が乗っている leaf について、ドロップ side とハイライト矩形を計算して返す
+    /// (= ペイン本体ドロップ = 新ペイン生成のプレビュー用)。どの leaf にも当たらなければ null。</summary>
+    public (string LeafKey, DropSide Side, Rect Zone)? ComputeBodyDropZone(Point pointInPanel)
+    {
+        if (HitTestLeafAt(pointInPanel) is not string key) return null;
+        if (GetLeafRect(key) is not Rect rect) return null;
+        var side = ComputeDropSide(rect, pointInPanel);
+        return (key, side, ComputeZoneRect(rect, side));
     }
 }

@@ -24,12 +24,29 @@ public sealed record OpenThreadTabEntry(
     string Key,
     string Title);
 
-/// <summary>open_tabs.json のシリアライズ用ルート。スレ一覧タブ → スレタブの順番で記録 / 復元する。</summary>
+/// <summary>1 枚のスレ表示ペインの保存情報 (複数ペイン化, Phase 4)。
+/// <see cref="PaneKey"/> はレイアウト (layout.json) の leaf キーと対応する。
+/// <see cref="SelectedIndex"/> はこのペインで選択中だったタブの <see cref="Tabs"/> 内インデックス (無選択は -1)。</summary>
+public sealed record OpenThreadPaneEntry(
+    string                      PaneKey,
+    int                         SelectedIndex,
+    List<OpenThreadTabEntry>    Tabs);
+
+/// <summary>open_tabs.json のシリアライズ用ルート。スレ一覧タブ → スレタブ (ペイン別) の順番で記録 / 復元する。
+///
+/// <para>v2 (複数ペイン化) で <see cref="ThreadPanes"/> / <see cref="ActiveThreadPaneKey"/> を追加。
+/// 旧 v1 ファイルはこれらが null になるので、フラットな <see cref="ThreadTabs"/> から単一ペインとして復元する
+/// (= 後方互換)。v2 保存時は <see cref="ThreadTabs"/> は空のまま <see cref="ThreadPanes"/> に書き出す。</para></summary>
 public sealed class OpenTabsData
 {
     public int Version { get; init; } = 1;
     public List<OpenThreadListTabEntry> ThreadListTabs { get; init; } = new();
     public List<OpenThreadTabEntry>     ThreadTabs     { get; init; } = new();
+
+    /// <summary>スレ表示ペイン別のタブ振り分け (v2+)。null は旧フォーマット (= ThreadTabs を見る)。</summary>
+    public List<OpenThreadPaneEntry>?   ThreadPanes         { get; init; }
+    /// <summary>復元時にアクティブにするペインのキー (v2+)。</summary>
+    public string?                      ActiveThreadPaneKey { get; init; }
 }
 
 /// <summary>
@@ -68,18 +85,20 @@ public sealed class OpenTabsStorage
         }
     }
 
-    /// <summary>引数の並びをそのまま保存する (= 呼び出し側が ThreadListTabs / ThreadTabs の順を反映)。
+    /// <summary>引数の並びをそのまま保存する (= 呼び出し側が ThreadListTabs / 各ペインの順を反映)。v2 フォーマット。
     /// 例外時はログだけ吐いて飲み込む — 保存失敗で終了処理を止めないため。</summary>
     public void Save(IReadOnlyList<OpenThreadListTabEntry> threadListTabs,
-                     IReadOnlyList<OpenThreadTabEntry>     threadTabs)
+                     IReadOnlyList<OpenThreadPaneEntry>    threadPanes,
+                     string?                               activeThreadPaneKey)
     {
         try
         {
             var data = new OpenTabsData
             {
-                Version        = 1,
-                ThreadListTabs = new List<OpenThreadListTabEntry>(threadListTabs),
-                ThreadTabs     = new List<OpenThreadTabEntry>(threadTabs),
+                Version             = 2,
+                ThreadListTabs      = new List<OpenThreadListTabEntry>(threadListTabs),
+                ThreadPanes         = new List<OpenThreadPaneEntry>(threadPanes),
+                ActiveThreadPaneKey = activeThreadPaneKey,
             };
             // 部分書き込みを避けるため .tmp に書いてから rename。
             var tmp = _path + ".tmp";

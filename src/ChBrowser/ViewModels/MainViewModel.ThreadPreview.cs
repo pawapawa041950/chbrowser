@@ -15,7 +15,7 @@ public sealed partial class MainViewModel
         try
         {
             var rootIn = DataPaths.ExtractRootDomain(host);
-            foreach (var tab in ThreadTabs)
+            foreach (var tab in AllThreadTabs)
             {
                 if (string.Equals(DataPaths.ExtractRootDomain(tab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(tab.Board.DirectoryName, dir, StringComparison.Ordinal) &&

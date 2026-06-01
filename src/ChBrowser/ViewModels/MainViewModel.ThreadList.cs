@@ -79,8 +79,8 @@ public sealed partial class MainViewModel
                          .Select(k => k.Key));
             tab.SetThreads(allThreads, DateTimeOffset.UtcNow, states, favKeys);
 
-            // この板に属する開きっぱなしのスレタブの状態マークも同期する
-            foreach (var threadTab in ThreadTabs)
+            // この板に属する開きっぱなしのスレタブの状態マークも同期する (全ペイン横断)
+            foreach (var threadTab in AllThreadTabs)
             {
                 if (threadTab.Board.Host          != board.Host)          continue;
                 if (threadTab.Board.DirectoryName != board.DirectoryName) continue;

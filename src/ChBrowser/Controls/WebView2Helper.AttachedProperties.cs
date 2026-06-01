@@ -153,6 +153,13 @@ public static partial class WebView2Helper
         if (d is not WebView2 wv) return;
         if (e.NewValue is not ChBrowser.ViewModels.AppendBatchData data) return;
 
+        // ペイン移動直後の新規 WebView では、初回 ready で全 Posts を resyncThreadState で一括描画する
+        // (複数ペイン化 Phase 3/4)。このとき DP バインドの初期評価で流れてくる "最後のバッチ" (= 差分取得の
+        // デルタ / ストリーミングの最終チャンク) をそのまま push すると、resync と競合して「デルタ部分だけ表示」に
+        // なるため、resync 待ちの間 (NeedsResyncOnAttach=true) は appendPosts を送らない。
+        if (wv.DataContext is ChBrowser.ViewModels.ThreadTabViewModel pending && pending.NeedsResyncOnAttach)
+            return;
+
         // streaming 中もこのバッチで対象レスが現れる可能性があるので scroll target / mark を併送
         var binding      = wv.DataContext as IThreadDisplayBinding;
         var scrollTarget = binding?.ScrollTargetPostNumber;
