@@ -42,7 +42,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 
     // ----- ペイン用コレクション -----
     public ObservableCollection<BoardCategoryViewModel> BoardCategories  { get; } = new();
-    public ObservableCollection<ThreadListTabViewModel> ThreadListTabs   { get; } = new();
+    // ThreadListTabs / SelectedThreadListTab は複数ペイン化でアクティブ一覧グループへの facade になった
+    // (= MainViewModel.ThreadListPanes.cs)。
 
     // ----- スレ表示ペイン (複数枚対応, Phase 2) -----
     /// <summary>スレッド表示ペインの集合。各ペインが自分のタブ集合 + 選択タブを持つ。
@@ -267,7 +268,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     [ObservableProperty] private string _boardListSearchQuery = "";
 
     // ----- アクティブタブ -----
-    [ObservableProperty] private ThreadListTabViewModel? _selectedThreadListTab;
+    // SelectedThreadListTab はアクティブ一覧グループへの facade (= MainViewModel.ThreadListPanes.cs)。
 
     /// <summary>アクティブペインの選択タブ (= 従来の SelectedThreadTab 互換 facade)。
     /// getter/setter ともアクティブペイン (<see cref="ActiveThreadGroup"/>) の SelectedTab に委譲する。
@@ -295,7 +296,12 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// <inheritdoc cref="MaybeActivateThreadTab"/>
     private void MaybeActivateThreadListTab(ThreadListTabViewModel tab, bool activate)
     {
-        if (activate || ThreadListTabs.Count == 1) SelectedThreadListTab = tab;
+        var group = ThreadListGroupOf(tab) ?? _activeThreadListGroup;
+        if (activate || group.Tabs.Count == 1)
+        {
+            SetActiveThreadListGroup(group);
+            group.SelectedTab = tab;
+        }
     }
 
     // ステータスバー (= MainViewModel.StatusMessage) はアクティブペイン (Thread / ThreadList) の選択タブの
@@ -367,10 +373,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         if (!string.IsNullOrEmpty(msg)) StatusMessage = msg;
     }
 
-    partial void OnSelectedThreadListTabChanged(ThreadListTabViewModel? value)
+    /// <summary>アクティブ一覧ペインの選択タブが変わったとき (= 選択タブ変更 / アクティブ一覧ペイン切替) に呼ばれ、
+    /// ステータスバー・アドレスバーをその選択タブに追従させる。各タブの IsSelected (= WebView 可視制御) は
+    /// ペイン単位で <see cref="ThreadListPaneGroupViewModel"/> 側が更新する。</summary>
+    private void HandleActiveSelectedThreadListTabChanged(ThreadListTabViewModel? value)
     {
-        foreach (var t in ThreadListTabs) t.IsSelected = ReferenceEquals(t, value);
-
         if (_statusListenerThreadListTab is not null)
             _statusListenerThreadListTab.PropertyChanged -= OnActiveThreadListTabPropertyChanged;
         _statusListenerThreadListTab = value;
@@ -411,9 +418,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     private enum ActivePane { None, ThreadList, Thread }
     private ActivePane _lastActivePane = ActivePane.None;
 
-    /// <summary>右ペイン上段「スレ欄」(ThreadListTabs) がアクティブ化された通知。</summary>
-    public void MarkThreadListPaneActive()
+    /// <summary>スレ一覧ペインがアクティブ化された通知 (= フォーカス / クリック / WebView paneActivated)。
+    /// そのペインを MRU アクティブにして、アドレスバー / ステータスを追従させる。</summary>
+    public void MarkThreadListPaneActive(ThreadListPaneGroupViewModel group)
     {
+        SetActiveThreadListGroup(group); // アクティブが変わるなら選択タブ追従も走る (同一なら no-op)
         _lastActivePane = ActivePane.ThreadList;
         RefreshAddressBarUrl();
         SyncStatusFromActivePane();
@@ -473,13 +482,13 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     public async Task OpenBoardByUrlAsync(string host, string dir)
     {
         var rootIn = DataPaths.ExtractRootDomain(host);
-        foreach (var tab in ThreadListTabs)
+        foreach (var tab in AllThreadListTabs)
         {
             if (tab.Board is not { } b) continue;
             if (string.Equals(DataPaths.ExtractRootDomain(b.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(b.DirectoryName, dir, StringComparison.Ordinal))
             {
-                SelectedThreadListTab = tab;
+                ActivateThreadListTab(tab); // 所属ペインをアクティブにして選択
                 return;
             }
         }
@@ -558,21 +567,18 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         _activeThreadGroup = firstGroup;
         RegisterThreadGroup(firstGroup);
 
+        // スレ一覧ペインも 1 枚生成 (= 起動時は単一)。キーは静的ペインと同じ "ThreadList"。
+        var firstListGroup = new ThreadListPaneGroupViewModel(this, ChBrowser.Models.PaneKinds.MakeKey(ChBrowser.Models.PaneId.ThreadList, null));
+        _activeThreadListGroup = firstListGroup;
+        RegisterThreadListGroup(firstListGroup);
+
         Favorites.Changed += RefreshFavoritesHtml;
         // 「上ボタン」バー: お気に入り変更のたびに再構築 (= フォルダ直下を ObservableCollection に流し込む)。
         Favorites.Changed += RefreshTopButtons;
         RefreshTopButtons();
 
-        // タブを閉じる瞬間に「最後にスクロールしていた位置」を idx.json に書き出すための CollectionChanged
-        // 購読は、ペインごとに RegisterThreadGroup で行う (= 上の firstGroup 登録時に購読済み)。
-
-        // スレ一覧タブの close 履歴管理 (= 中クリック空領域復元用)。
-        ThreadListTabs.CollectionChanged += (_, e) =>
-        {
-            if (e.OldItems is null) return;
-            foreach (var item in e.OldItems)
-                if (item is ThreadListTabViewModel t) PushRecentlyClosedThreadListTab(t);
-        };
+        // タブを閉じる瞬間の各種後始末用 CollectionChanged 購読は、ペインごとに RegisterThreadGroup /
+        // RegisterThreadListGroup で行う (= 上の firstGroup / firstListGroup 登録時に購読済み)。
 
         // どんぐり経過時間表示を 30 秒ごとに更新。起動直後にも 1 度実行。
         _donguriTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -790,7 +796,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         RefreshFavoritesHtml();
         RefreshBoardListHtml();
         var now = DateTimeOffset.UtcNow;
-        foreach (var tab in ThreadListTabs)
+        foreach (var tab in AllThreadListTabs)
         {
             // SetItems は Html プロパティを再設定するので WebView2 が再ナビゲートされる
             tab.SetItems(tab.Items, now);

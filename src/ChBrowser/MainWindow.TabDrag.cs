@@ -24,12 +24,13 @@ namespace ChBrowser;
 /// 移動の結果、元ペインが空になったら (最後の 1 枚を除き) 自動で閉じる。</para></summary>
 public partial class MainWindow
 {
-    private ThreadTabViewModel?        _dragTab;
-    private ThreadPaneGroupViewModel?  _dragSourceGroup;
+    // ドラッグ中のタブ (= スレ表示 / スレ一覧 いずれか) とその種類。
+    private IPaneTab? _dragTab;
+    private PaneId    _dragKind;
 
-    // 現在のドロップ先候補。
-    private ThreadPaneGroupViewModel?  _stripTargetGroup;
-    private int                        _stripExclusiveIndex;
+    // 現在のドロップ先候補。strip ターゲットのグループは IPaneGroup (= 具象は Thread*PaneGroupViewModel)。
+    private object?  _stripTargetGroup;
+    private int      _stripExclusiveIndex;
     private (string LeafKey, DropSide Side)? _bodyTarget;
 
     // タブストリップ上の挿入線アドーナー。
@@ -37,12 +38,19 @@ public partial class MainWindow
     private TabItem?             _insertionAdornerTab;
     private bool                 _insertionAdornerAfter;
 
-    /// <summary><see cref="ThreadDisplayPane"/> がタブのドラッグ閾値超えを検出したときに呼ぶ。</summary>
+    /// <summary>スレ表示タブのドラッグ閾値超えを <see cref="ThreadDisplayPane"/> が検出したときに呼ぶ。</summary>
     public void BeginTabDrag(ThreadTabViewModel tab, ThreadPaneGroupViewModel sourceGroup)
+        => BeginTabDragCore(tab, PaneId.ThreadDisplay);
+
+    /// <summary>スレ一覧タブのドラッグ閾値超えを <see cref="ThreadListPane"/> が検出したときに呼ぶ。</summary>
+    public void BeginTabDrag(ThreadListTabViewModel tab, ThreadListPaneGroupViewModel sourceGroup)
+        => BeginTabDragCore(tab, PaneId.ThreadList);
+
+    private void BeginTabDragCore(IPaneTab tab, PaneId kind)
     {
         if (_vm is null) return;
         _dragTab          = tab;
-        _dragSourceGroup  = sourceGroup;
+        _dragKind         = kind;
         _stripTargetGroup = null;
         _bodyTarget       = null;
         LayoutHost.ExternalDragMove   += OnTabDragMove;
@@ -55,7 +63,7 @@ public partial class MainWindow
     {
         if (_dragTab is null) return;
 
-        // (1) スレ表示ペインのタブストリップ上か？
+        // (1) ドラッグ中タブと「同じ種類」のタブストリップ上か？
         if (FindStripTargetAt(posInHost) is { } strip)
         {
             _stripTargetGroup    = strip.Group;
@@ -66,7 +74,7 @@ public partial class MainWindow
             return;
         }
 
-        // (2) ペイン本体 (= 新ペイン生成) か？
+        // (2) ペイン本体 (= ドラッグ中タブの種類で新ペイン生成) か？ 任意の種類のペイン上で 4 方向に出せる。
         _stripTargetGroup = null;
         RemoveInsertionAdorner();
         if (LayoutHost.ComputeBodyDropZone(posInHost) is { } bz)
@@ -83,19 +91,26 @@ public partial class MainWindow
 
     private void OnTabDragCommit(Point posInHost)
     {
-        var tab    = _dragTab;
-        var source = _dragSourceGroup;
-        if (tab is null || source is null || _vm is null) return;
+        var tab = _dragTab;
+        if (tab is null || _vm is null) return;
 
-        if (_stripTargetGroup is { } target)
+        if (_stripTargetGroup is { } group)
         {
-            _vm.MoveTabToGroupAt(tab, target, _stripExclusiveIndex);
+            // 同種ストリップへの移動 (= 同一ペインなら並べ替え)。
+            if (_dragKind == PaneId.ThreadDisplay && tab is ThreadTabViewModel t && group is ThreadPaneGroupViewModel g)
+                _vm.MoveTabToGroupAt(t, g, _stripExclusiveIndex);
+            else if (_dragKind == PaneId.ThreadList && tab is ThreadListTabViewModel lt && group is ThreadListPaneGroupViewModel lg)
+                _vm.MoveThreadListTabToGroupAt(lt, lg, _stripExclusiveIndex);
         }
         else if (_bodyTarget is { } body)
         {
-            CreatePaneWithTab(tab, body.LeafKey, body.Side);
+            // ペイン本体 → その辺にドラッグ中タブの種類の新ペインを生成して移動。
+            if (_dragKind == PaneId.ThreadDisplay && tab is ThreadTabViewModel t)
+                CreatePaneWithTab(t, body.LeafKey, body.Side);
+            else if (_dragKind == PaneId.ThreadList && tab is ThreadListTabViewModel lt)
+                CreateListPaneWithTab(lt, body.LeafKey, body.Side);
         }
-        // 元ペインが空になった場合の自動クローズは VM の ThreadGroupEmptied → OnThreadGroupEmptied で行う
+        // 元ペインが空になった場合の自動クローズは VM の *GroupEmptied → On*GroupEmptied で行う
         // (= タブ移動の Remove でも × で閉じた Remove でも同じ経路)。ここでは何もしない。
     }
 
@@ -106,31 +121,36 @@ public partial class MainWindow
         LayoutHost.ExternalDragEnd    -= OnTabDragEnd;
         RemoveInsertionAdorner();
         _dragTab          = null;
-        _dragSourceGroup  = null;
         _stripTargetGroup = null;
         _bodyTarget       = null;
     }
 
-    /// <summary>タブストリップ上のドロップ先情報。<see cref="ExclusiveIndex"/> は「ドラッグ中タブを除いた
-    /// target.Tabs」での挿入位置。<see cref="AdornTab"/>/<see cref="AdornAfter"/> は挿入線の表示位置。</summary>
-    private sealed record StripTarget(ThreadPaneGroupViewModel Group, int ExclusiveIndex, TabItem? AdornTab, bool AdornAfter);
+    /// <summary>タブストリップ上のドロップ先情報。<see cref="Group"/> は IPaneGroup (= 具象 Thread*PaneGroupViewModel)。
+    /// <see cref="ExclusiveIndex"/> は「ドラッグ中タブを除いた target.Tabs」での挿入位置。</summary>
+    private sealed record StripTarget(object Group, int ExclusiveIndex, TabItem? AdornTab, bool AdornAfter);
 
     private StripTarget? FindStripTargetAt(Point posInHost)
     {
         if (LayoutHost.InputHitTest(posInHost) is not DependencyObject hit) return null;
-
-        // スレ表示ペインのタブストリップ (x:Name=ThreadTabStrip) の中だけを対象にする
-        // (= スレ一覧ペインの TabControl 等は除外)。
         var strip = TabClickHelper.FindAncestor<TabControl>(hit);
-        if (strip is null || strip.Name != "ThreadTabStrip") return null;
-        var pane = TabClickHelper.FindAncestor<ThreadDisplayPane>(strip);
-        if (pane?.DataContext is not ThreadPaneGroupViewModel group) return null;
+        if (strip is null) return null;
+
+        // ドラッグ中タブと同じ種類のストリップだけを対象にする (= 異種ストリップへは移動させない)。
+        IPaneGroup? group = _dragKind switch
+        {
+            PaneId.ThreadDisplay when strip.Name == "ThreadTabStrip"
+                => TabClickHelper.FindAncestor<ThreadDisplayPane>(strip)?.DataContext as IPaneGroup,
+            PaneId.ThreadList when strip.Name == "ThreadListTabStrip"
+                => TabClickHelper.FindAncestor<ThreadListPane>(strip)?.DataContext as IPaneGroup,
+            _ => null,
+        };
+        if (group is null) return null;
 
         var dragged = _dragTab;
-        var excl     = group.Tabs.Where(t => !ReferenceEquals(t, dragged)).ToList();
+        var excl     = group.TabsSnapshot.Where(t => !ReferenceEquals(t, dragged)).ToList();
 
         var overItem = TabClickHelper.FindAncestor<TabItem>(hit);
-        if (overItem?.DataContext is ThreadTabViewModel overTab && !ReferenceEquals(overTab, dragged))
+        if (overItem?.DataContext is IPaneTab overTab && !ReferenceEquals(overTab, dragged))
         {
             var p     = LayoutHost.TranslatePoint(posInHost, overItem);
             bool after = p.X > overItem.ActualWidth / 2;
@@ -156,7 +176,6 @@ public partial class MainWindow
         var newLayout  = PaneLayoutOps.SplitAtLeaf(LayoutHost.Layout, targetLeafKey, side, newLeaf);
         if (!newLayout.IsValidFullLayout()) return;
 
-        // VM グループ + ペインコントロールを生成してレイアウトに参加させる。
         var group = _vm.AddThreadGroup(newLeaf.Key);
         var pane  = new ThreadDisplayPane();
         PaneLayoutPanel.SetPaneId(pane, PaneId.ThreadDisplay);
@@ -165,9 +184,28 @@ public partial class MainWindow
         LayoutHost.Children.Add(pane);
 
         LayoutHost.ReplaceLayout(newLayout);
-
-        // タブを新ペインへ移動 (空の新ペインの先頭へ)。
         _vm.MoveTabToGroupAt(tab, group, 0);
+    }
+
+    /// <summary>指定 leaf の side 側に新しいスレ一覧ペインを生成し、ドラッグ中タブをそこへ移す。</summary>
+    private void CreateListPaneWithTab(ThreadListTabViewModel tab, string targetLeafKey, DropSide side)
+    {
+        if (_vm is null || LayoutHost.Layout is null) return;
+
+        var instanceId = Guid.NewGuid().ToString("N");
+        var newLeaf    = new LeafLayoutNode(PaneId.ThreadList, instanceId);
+        var newLayout  = PaneLayoutOps.SplitAtLeaf(LayoutHost.Layout, targetLeafKey, side, newLeaf);
+        if (!newLayout.IsValidFullLayout()) return;
+
+        var group = _vm.AddThreadListGroup(newLeaf.Key);
+        var pane  = new ThreadListPane();
+        PaneLayoutPanel.SetPaneId(pane, PaneId.ThreadList);
+        PaneLayoutPanel.SetInstanceId(pane, instanceId);
+        pane.DataContext = group;
+        LayoutHost.Children.Add(pane);
+
+        LayoutHost.ReplaceLayout(newLayout);
+        _vm.MoveThreadListTabToGroupAt(tab, group, 0);
     }
 
     /// <summary>復元したレイアウトツリー中の各スレ表示ペイン (leaf) に対し、対応するグループ + コントロールを
@@ -177,30 +215,78 @@ public partial class MainWindow
     private void ReconcilePanesToLayout()
     {
         if (_vm is null || LayoutHost.Layout is null) return;
+        ReconcileKindToLayout(PaneId.ThreadDisplay);
+        ReconcileKindToLayout(PaneId.ThreadList);
+    }
 
-        var keys = LayoutHost.Layout.EnumerateLeaves()
-            .Where(l => l.Pane == PaneId.ThreadDisplay)
+    /// <summary>指定種類 (ThreadDisplay / ThreadList) について、レイアウトツリー中の各 leaf に対応する
+    /// グループ + コントロールを用意する。静的ペイン (XAML のコントロール + 初期グループ) を先頭 leaf に
+    /// 割り当て直し、残りの leaf 分だけ動的にグループ + コントロールを生成する。</summary>
+    private void ReconcileKindToLayout(PaneId kind)
+    {
+        var keys = LayoutHost.Layout!.EnumerateLeaves()
+            .Where(l => l.Pane == kind)
             .Select(l => l.Key)
             .ToList();
-        if (keys.Count == 0) return; // 通常ありえない (IsValidFullLayout が ThreadDisplay ≥1 を保証)
+        if (keys.Count == 0) return; // 通常ありえない (IsValidFullLayout が各複数可種 ≥1 を保証)
 
-        // (1) 静的ペインを先頭キーへ割り当て直す (= 元 "ThreadDisplay" 以外のキーで保存されていた場合に追従)。
-        var staticGroup = ThreadDisplayPaneCtrl.DataContext as ThreadPaneGroupViewModel ?? _vm.ActiveThreadGroup;
-        staticGroup.PaneKey = keys[0];
-        PaneKinds.TryParseKey(keys[0], out _, out var firstInstance);
-        PaneLayoutPanel.SetInstanceId(ThreadDisplayPaneCtrl, firstInstance);
-
-        // (2) 残りの leaf キーごとにグループ + コントロールを生成して参加させる。
-        for (int i = 1; i < keys.Count; i++)
+        if (kind == PaneId.ThreadDisplay)
         {
-            PaneKinds.TryParseKey(keys[i], out _, out var inst);
-            var group = _vm.AddThreadGroup(keys[i]);
-            var pane  = new ThreadDisplayPane();
-            PaneLayoutPanel.SetPaneId(pane, PaneId.ThreadDisplay);
-            PaneLayoutPanel.SetInstanceId(pane, inst);
-            pane.DataContext = group;
-            LayoutHost.Children.Add(pane);
+            var staticGroup = ThreadDisplayPaneCtrl.DataContext as ThreadPaneGroupViewModel ?? _vm!.ActiveThreadGroup;
+            staticGroup.PaneKey = keys[0];
+            PaneKinds.TryParseKey(keys[0], out _, out var firstInstance);
+            PaneLayoutPanel.SetInstanceId(ThreadDisplayPaneCtrl, firstInstance);
+            for (int i = 1; i < keys.Count; i++)
+            {
+                PaneKinds.TryParseKey(keys[i], out _, out var inst);
+                var group = _vm!.AddThreadGroup(keys[i]);
+                var pane  = new ThreadDisplayPane();
+                PaneLayoutPanel.SetPaneId(pane, PaneId.ThreadDisplay);
+                PaneLayoutPanel.SetInstanceId(pane, inst);
+                pane.DataContext = group;
+                LayoutHost.Children.Add(pane);
+            }
         }
+        else if (kind == PaneId.ThreadList)
+        {
+            var staticGroup = ThreadListPaneCtrl.DataContext as ThreadListPaneGroupViewModel ?? _vm!.ActiveThreadListGroup;
+            staticGroup.PaneKey = keys[0];
+            PaneKinds.TryParseKey(keys[0], out _, out var firstInstance);
+            PaneLayoutPanel.SetInstanceId(ThreadListPaneCtrl, firstInstance);
+            for (int i = 1; i < keys.Count; i++)
+            {
+                PaneKinds.TryParseKey(keys[i], out _, out var inst);
+                var group = _vm!.AddThreadListGroup(keys[i]);
+                var pane  = new ThreadListPane();
+                PaneLayoutPanel.SetPaneId(pane, PaneId.ThreadList);
+                PaneLayoutPanel.SetInstanceId(pane, inst);
+                pane.DataContext = group;
+                LayoutHost.Children.Add(pane);
+            }
+        }
+    }
+
+    /// <summary>VM がスレ一覧ペイン空化を通知してきたときのハンドラ。再入回避のため遅延実行。</summary>
+    internal void OnThreadListGroupEmptied(ThreadListPaneGroupViewModel group)
+        => Dispatcher.BeginInvoke(new Action(() => CloseEmptyListPane(group)));
+
+    /// <summary>空になったスレ一覧ペインを閉じる (最後の 1 枚は残す)。冪等。</summary>
+    private void CloseEmptyListPane(ThreadListPaneGroupViewModel group)
+    {
+        if (_vm is null || LayoutHost.Layout is null) return;
+        if (!_vm.ThreadListPaneGroups.Contains(group)) return;
+        if (group.Tabs.Count > 0) return;
+        if (_vm.ThreadListPaneGroups.Count <= 1) return;
+
+        var newLayout = PaneLayoutOps.RemoveLeaf(LayoutHost.Layout, group.PaneKey);
+        if (newLayout is null) return;
+
+        var ctrl = LayoutHost.Children.OfType<ThreadListPane>()
+            .FirstOrDefault(p => ReferenceEquals(p.DataContext, group));
+        if (ctrl is not null) LayoutHost.Children.Remove(ctrl);
+
+        _vm.RemoveThreadListGroup(group);
+        LayoutHost.ReplaceLayout(newLayout);
     }
 
     /// <summary>VM がペイン空化を通知してきたときのハンドラ。再入を避けるため遅延実行する

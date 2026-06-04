@@ -43,7 +43,7 @@ public sealed class ScrollToPostRequest
 /// 表示モード (Flat / Tree / DedupTree) はすべて JS 側で実装済 (thread.js)、
 /// <see cref="CycleViewModeCommand"/> でトグル → setViewMode メッセージで JS が再描画する。
 /// </summary>
-public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDisplayBinding
+public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDisplayBinding, IPaneTab
 {
     public Board  Board     { get; }
     public string ThreadKey { get; }

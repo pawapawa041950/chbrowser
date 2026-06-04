@@ -44,7 +44,7 @@ public sealed record FavoritedPatch(IReadOnlyList<FavoritedChange> Changes);
 /// <summary>スレ一覧 1 タブ。
 /// <see cref="Board"/> != null なら 1 板由来の通常タブ、null ならお気に入りディレクトリ展開タブ。
 /// 表示は両者ともに同じ <see cref="ThreadListHtmlBuilder"/> を経由するので JS 側は区別しない。</summary>
-public sealed partial class ThreadListTabViewModel : ObservableObject
+public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
 {
     /// <summary>このタブが 1 板由来 (subject.txt) の場合の板。お気に入りディレクトリ展開タブでは null。</summary>
     public Board? Board { get; }
@@ -167,6 +167,15 @@ public sealed partial class ThreadListTabViewModel : ObservableObject
         }
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
+    }
+
+    /// <summary>別ペインへ移動する直前に、現在の <see cref="Items"/> から <see cref="Html"/> を作り直して
+    /// 「移動先 WebView の初期 HTML」を最新状態にする (複数ペイン化)。
+    /// Html は初回のみ設定し以降は <see cref="ItemsHtmlPatch"/> で差分更新する設計なので、これをしないと
+    /// 移動先の新規 WebView が「初回ロード時の古い一覧」を表示してしまう。</summary>
+    public void RebuildHtmlForReattach()
+    {
+        Html = ThreadListHtmlBuilder.Build(Items, DateTimeOffset.UtcNow);
     }
 
     /// <summary>1 件のスレッドのマーク状態を変更する増分通知を送る (集約タブ対応のため host/dir も指定)。</summary>

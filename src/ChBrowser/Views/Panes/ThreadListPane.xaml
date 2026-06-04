@@ -7,7 +7,7 @@
              xmlns:ctrl="clr-namespace:ChBrowser.Controls"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              mc:Ignorable="d"
-             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+             d:DataContext="{d:DesignInstance Type=vm:ThreadListPaneGroupViewModel}"
              GotKeyboardFocus="Pane_GotKeyboardFocus"
              PreviewMouseLeftButtonDown="Pane_PreviewMouseLeftButtonDown">
     <UserControl.Resources>
@@ -73,13 +73,13 @@
                      ペイン幅が狭くても × ボタンが画面内に残るようにする。 -->
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                     <!-- 更新 (= 選択中のスレ一覧タブを再取得)。タブ種別 (板 / 全ログ / お気に入り) を問わず動作する。
-                         SelectedThreadListTab が null なら無効化。 -->
+                         SelectedTab が null なら無効化。 -->
                     <Button Click="RefreshThreadListButton_Click"
                             ToolTip="このスレ一覧タブを更新">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedThreadListTab}" Value="{x:Null}">
+                                    <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                         <Setter Property="IsEnabled" Value="False" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -96,7 +96,7 @@
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="IsEnabled" Value="False" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                    <DataTrigger Binding="{Binding SelectedTab.IsBoardTab}" Value="True">
                                         <Setter Property="IsEnabled" Value="True" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -122,12 +122,12 @@
                                 <Setter Property="ToolTip"   Value="この板をお気に入りに追加" />
                                 <Style.Triggers>
                                     <!-- 板タブで未登録: 有効 + 「追加」ツールチップ -->
-                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardTab}" Value="True">
+                                    <DataTrigger Binding="{Binding SelectedTab.IsBoardTab}" Value="True">
                                         <Setter Property="IsEnabled" Value="True" />
                                     </DataTrigger>
                                     <!-- 既に登録済み: ★ボタン背景強調 + 「外す」ツールチップ。
                                          IsEnabled は上のトリガで True 確定済み (= 板タブ)。 -->
-                                    <DataTrigger Binding="{Binding SelectedThreadListTab.IsBoardFavorited}" Value="True">
+                                    <DataTrigger Binding="{Binding SelectedTab.IsBoardFavorited}" Value="True">
                                         <Setter Property="ToolTip"     Value="この板をお気に入りから外す" />
                                         <Setter Property="Background"  Value="#CCE5FF" />
                                         <Setter Property="BorderBrush" Value="#88B0DD" />
@@ -141,14 +141,14 @@
                 </StackPanel>
 
                 <!-- 絞り込み検索: タイトルとボタン群の間の残りスペースを fill (= 最後の child)。
-                     SelectedThreadListTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
                 <ctrl:SearchBoxToggle Margin="0,0,6,0"
                                       HintText="タイトルにこの文字列を含むスレッドだけ表示 (空欄でフィルタ解除)"
-                                      Text="{Binding SelectedThreadListTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
                     <ctrl:SearchBoxToggle.Style>
                         <Style TargetType="ctrl:SearchBoxToggle">
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedThreadListTab}" Value="{x:Null}">
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                     <Setter Property="IsEnabled" Value="False" />
                                 </DataTrigger>
                             </Style.Triggers>
@@ -159,8 +159,9 @@
         </Border>
 
         <TabControl Grid.Row="1"
-                    ItemsSource="{Binding ThreadListTabs}"
-                    SelectedItem="{Binding SelectedThreadListTab}"
+                    x:Name="ThreadListTabStrip"
+                    ItemsSource="{Binding Tabs}"
+                    SelectedItem="{Binding SelectedTab}"
                     BorderThickness="0"
                     Margin="1,0,1,0"
                     MinHeight="24"><!-- タブ 0 件でも 1 段分の高さを維持 -->
@@ -177,12 +178,16 @@
                     <!-- タブ幅は MaxWidth で「上限」として bind (= 短いタイトルは自然な幅で縮み、長いタイトルは
                          設定値でカットして次行 wrap)。MinWidth で潰れすぎを防ぐ。 -->
                     <Setter Property="MaxWidth"
-                            Value="{Binding DataContext.ThreadListTabWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                            Value="{Binding DataContext.Main.ThreadListTabWidth, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                     <Setter Property="MinWidth" Value="60" />
                     <!-- タブのクリック (中/Ctrl+左/Shift+左/Alt+左/ダブル) は ShortcutManager の
                          PreviewMouseDown ハンドラがカテゴリ「スレ一覧のタブ領域」として dispatch するので、
                          pane 側で直接拾う必要は無い (= 二重発火を避けるため EventSetter は外している)。 -->
                     <EventSetter Event="MouseRightButtonUp"   Handler="ThreadListTabItem_MouseRightButtonUp" />
+                    <!-- タブの D&D (複数ペイン化)。閾値超えで MainWindow.BeginTabDrag に委ね、以降の移動/ドロップは
+                         LayoutHost (PaneLayoutPanel) がキャプチャして処理する (= スレ表示タブと同じ統一機構)。 -->
+                    <EventSetter Event="PreviewMouseLeftButtonDown" Handler="ThreadListTabItem_PreviewMouseLeftButtonDown" />
+                    <EventSetter Event="PreviewMouseMove"           Handler="ThreadListTabItem_PreviewMouseMove" />
                 </Style>
             </TabControl.ItemContainerStyle>
             <TabControl.ItemTemplate>
@@ -208,7 +213,7 @@
             </TabControl.ItemTemplate>
         </TabControl>
 
-        <ItemsControl Grid.Row="2" ItemsSource="{Binding ThreadListTabs}">
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Tabs}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <Grid />
@@ -221,8 +226,8 @@
                                   ctrl:WebView2Helper.LogMarkUpdate="{Binding LogMarkUpdate}"
                                   ctrl:WebView2Helper.FavoritedUpdate="{Binding FavoritedUpdate}"
                                   ctrl:WebView2Helper.ThreadListSearchPush="{Binding SearchQuery}"
-                                  ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                  ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.PaneConfigJson="{Binding DataContext.Main.ThreadListConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.PaneShortcutsJson="{Binding DataContext.Main.ThreadListShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadListWebView_WebMessageReceived"
                                   Unloaded="ThreadListWebView_Unloaded"
                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />

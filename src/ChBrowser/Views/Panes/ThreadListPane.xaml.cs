@@ -24,36 +24,47 @@ public partial class ThreadListPane : UserControl
         ChBrowser.Controls.PaneDragInitiator.Attach(HeaderBar, ChBrowser.Models.PaneId.ThreadList);
     }
 
-    // ---- ペインフォーカス → ViewModel に通知 ----
+    /// <summary>このペインの DataContext (= 担当するスレ一覧グループ, 複数ペイン化)。</summary>
+    private ThreadListPaneGroupViewModel? Group => DataContext as ThreadListPaneGroupViewModel;
+
+    /// <summary>アプリ全体の ViewModel (= Group.Main)。横断操作 / 共有設定の参照に使う。</summary>
+    private MainViewModel? Vm => (DataContext as ThreadListPaneGroupViewModel)?.Main;
+
+    // ---- ペインフォーカス → ViewModel に通知 (このペインを MRU アクティブにする) ----
 
     private void Pane_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-        => (DataContext as MainViewModel)?.MarkThreadListPaneActive();
+    {
+        if (Group is { } g) g.Main.MarkThreadListPaneActive(g);
+    }
 
     private void Pane_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        => (DataContext as MainViewModel)?.MarkThreadListPaneActive();
+    {
+        if (Group is { } g) g.Main.MarkThreadListPaneActive(g);
+    }
 
     // ---- ヘッダのボタン ----
 
     private void NewThreadButton_Click(object sender, RoutedEventArgs e)
     {
-        (DataContext as MainViewModel)?.OpenNewThreadDialog();
+        Vm?.OpenNewThreadDialog();
     }
 
     /// <summary>選択中のスレ一覧タブを再取得する。タブ種別 (板 / 全ログ / お気に入り) を問わず
     /// MainViewModel.RefreshThreadListTabAsync が適切に振り分ける。タブ未選択なら no-op。</summary>
     private void RefreshThreadListButton_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel main) return;
-        if (main.SelectedThreadListTab is null) return;
-        _ = main.RefreshThreadListTabAsync(main.SelectedThreadListTab);
+        // このペインの選択タブを更新する (= ボタンは各ペインのヘッダにあるので自ペイン基準)。
+        if (Group is not { } g || Vm is not { } main) return;
+        if (g.SelectedTab is null) return;
+        _ = main.RefreshThreadListTabAsync(g.SelectedTab);
     }
 
     /// <summary>選択中の板タブの板をお気に入りに追加 / 削除する (トグル)。
     /// 板タブ以外 (お気に入り展開タブ / 全ログタブ) では XAML 側で IsEnabled=False になっているため呼ばれない。</summary>
     private void ToggleBoardFavoriteButton_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel main) return;
-        if (main.SelectedThreadListTab?.Board is not { } board) return;
+        if (Group is not { } g || Vm is not { } main) return;
+        if (g.SelectedTab?.Board is not { } board) return;
         main.ToggleBoardFavorite(board);
     }
 
@@ -71,7 +82,9 @@ public partial class ThreadListPane : UserControl
     {
         if (sender is not WebView2 wv) return;
         var ctx = wv.DataContext as ThreadListTabViewModel;
-        if (ctx is not null && DataContext is MainViewModel main && main.ThreadListTabs.Contains(ctx)) return;
+        // このタブが "このペインの" タブ集合にまだ居れば一時的 unload とみなし Dispose しない。
+        // 居なければ (閉じた / 別ペインへ移動) このペインの WebView2 は不要なので Dispose する (複数ペイン化)。
+        if (ctx is not null && Group is { } g && g.Tabs.Contains(ctx)) return;
         try { wv.Dispose(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ThreadListPane] WebView2 Dispose failed: {ex.Message}"); }
     }
@@ -80,10 +93,10 @@ public partial class ThreadListPane : UserControl
 
     private async void ThreadListWebView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main || Group is not { } g) return;
         var (type, payload) = WebMessageBridge.TryParseMessage(e);
 
-        if (type == "paneActivated") { main.MarkThreadListPaneActive(); return; }
+        if (type == "paneActivated") { main.MarkThreadListPaneActive(g); return; }
         if (WebMessageBridge.TryDispatchCommonMessage(sender, type, payload, "スレ一覧表示領域")) return;
 
         if (type == "threadListRowMenu") { ShowThreadListRowContextMenu(payload); return; }
@@ -112,7 +125,7 @@ public partial class ThreadListPane : UserControl
     /// (= タブを開かずに「お気に入り追加 / コピー / 次スレ候補検索 / ログ削除」を実行可能)。</summary>
     private void ShowThreadListRowContextMenu(System.Text.Json.JsonElement payload)
     {
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         var host  = payload.TryGetProperty("host",          out var hp) ? hp.GetString() : null;
         var dir   = payload.TryGetProperty("directoryName", out var dp) ? dp.GetString() : null;
         var key   = payload.TryGetProperty("key",           out var kp) ? kp.GetString() : null;
@@ -134,7 +147,7 @@ public partial class ThreadListPane : UserControl
     {
         if (sender is not ContextMenu cm) return;
         if (cm.DataContext is not ThreadListRowContext ctx) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
 
         var isFav = main.Favorites.FindThread(ctx.Board.Host, ctx.Board.DirectoryName, ctx.ThreadKey) is not null;
         foreach (var item in TabClickHelper.EnumerateAllMenuItems(cm))
@@ -150,7 +163,7 @@ public partial class ThreadListPane : UserControl
     private void ThreadListRowFav_Click(object sender, RoutedEventArgs e)
     {
         if (CtxOf(sender) is not { } ctx) return;
-        (DataContext as MainViewModel)?.ToggleThreadFavorite(ctx.Board, ctx.ThreadKey, ctx.Title);
+        Vm?.ToggleThreadFavorite(ctx.Board, ctx.ThreadKey, ctx.Title);
     }
 
     private void ThreadListRowCopyTitle_Click(object sender, RoutedEventArgs e)
@@ -174,14 +187,14 @@ public partial class ThreadListPane : UserControl
     private void ThreadListRowFindNext_Click(object sender, RoutedEventArgs e)
     {
         if (CtxOf(sender) is not { } ctx) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         _ = main.OpenNextThreadSearchAsync(ctx.Board, ctx.Title, ctx.ThreadKey);
     }
 
     private void ThreadListRowDeleteLog_Click(object sender, RoutedEventArgs e)
     {
         if (CtxOf(sender) is not { } ctx) return;
-        (DataContext as MainViewModel)?.DeleteThreadLog(ctx.Board, ctx.ThreadKey, ctx.Title);
+        Vm?.DeleteThreadLog(ctx.Board, ctx.ThreadKey, ctx.Title);
     }
 
     /// <summary>{board, key} → 5ch.io 系の read.cgi 形式 URL を組み立てる
@@ -192,6 +205,43 @@ public partial class ThreadListPane : UserControl
     /// <summary>スレ一覧行の右クリックメニュー操作で必要な値を 1 つに束ねた immutable record。
     /// Board は <see cref="MainViewModel.ResolveBoard"/> で解決済み (= bbsmenu 未登録の板でも fallback Board が入る)。</summary>
     private sealed record ThreadListRowContext(Board Board, string ThreadKey, string Title);
+
+    // ---- タブの D&D 開始検出 (移動/ペイン生成の本体は MainWindow + LayoutHost が担う, 複数ペイン化) ----
+
+    private System.Windows.Point _tabDragStartPoint;
+    private ThreadListTabViewModel? _tabDragCandidate;
+
+    private void ThreadListTabItem_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not TabItem ti) { _tabDragCandidate = null; return; }
+        // ×ボタン等の上での押下はドラッグにしない (= Command を素直に発火させる)。
+        if (e.OriginalSource is DependencyObject src && TabClickHelper.FindAncestor<ButtonBase>(src) is not null)
+        {
+            _tabDragCandidate = null;
+            return;
+        }
+        _tabDragStartPoint = e.GetPosition(null);
+        _tabDragCandidate  = ti.DataContext as ThreadListTabViewModel;
+    }
+
+    /// <summary>押下後に閾値を超えて動いたらタブ D&D を開始する。以降の移動/ドロップは MainWindow が
+    /// LayoutHost のマウスキャプチャで処理し、自ストリップ内=並べ替え / 別一覧ストリップ=移動 /
+    /// ペイン本体=新一覧ペイン生成 を切り替える。</summary>
+    private void ThreadListTabItem_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_tabDragCandidate is null) return;
+        if (e.LeftButton != MouseButtonState.Pressed) { _tabDragCandidate = null; return; }
+
+        var pos = e.GetPosition(null);
+        if (System.Math.Abs(pos.X - _tabDragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            System.Math.Abs(pos.Y - _tabDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var tab = _tabDragCandidate;
+        _tabDragCandidate = null;
+        if (Group is null || tab is null) return;
+        if (Window.GetWindow(this) is MainWindow mw) mw.BeginTabDrag(tab, Group);
+    }
 
     // ---- タブの右クリックメニュー (中/ダブル/修飾+左 は ShortcutManager 側で dispatch) ----
 
@@ -215,7 +265,7 @@ public partial class ThreadListPane : UserControl
     {
         if (sender is not ContextMenu cm) return;
         if (cm.DataContext is not ThreadListTabViewModel tab) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
 
         var hasBoard = tab.Board is not null;
         var isFav    = tab.Board is { } b && main.Favorites.FindBoard(b.Host, b.DirectoryName) is not null;
@@ -244,7 +294,7 @@ public partial class ThreadListPane : UserControl
     private void ThreadListTabFav_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
-        (DataContext as MainViewModel)?.ToggleBoardFavorite(board);
+        Vm?.ToggleBoardFavorite(board);
     }
 
     private void ThreadListTabCopyTitle_Click(object sender, RoutedEventArgs e)
@@ -311,7 +361,7 @@ public partial class ThreadListPane : UserControl
     private void ThreadListTabRefreshSettingTxt_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
-        if (DataContext is not MainViewModel main) return;
+        if (Vm is not { } main) return;
         _ = main.RefreshSettingTxtAsync(board);
     }
 }

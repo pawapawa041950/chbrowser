@@ -63,16 +63,19 @@ public partial class MainWindow : Window
     {
         if (_vm is not null)
         {
-            _vm.PropertyChanged  -= Vm_PropertyChanged;
-            _vm.ThreadGroupEmptied -= OnThreadGroupEmptied;
+            _vm.PropertyChanged        -= Vm_PropertyChanged;
+            _vm.ThreadGroupEmptied     -= OnThreadGroupEmptied;
+            _vm.ThreadListGroupEmptied -= OnThreadListGroupEmptied;
         }
         _vm = DataContext as MainViewModel;
         if (_vm is null) return;
-        _vm.PropertyChanged  += Vm_PropertyChanged;
-        _vm.ThreadGroupEmptied += OnThreadGroupEmptied; // 空になったスレ表示ペインの自動クローズ (Phase 3)
-        // 静的なスレ表示ペインの DataContext を最初のスレ表示グループに固定する (複数ペイン化 Phase 2)。
+        _vm.PropertyChanged        += Vm_PropertyChanged;
+        _vm.ThreadGroupEmptied     += OnThreadGroupEmptied;     // 空になったスレ表示ペインの自動クローズ
+        _vm.ThreadListGroupEmptied += OnThreadListGroupEmptied; // 空になったスレ一覧ペインの自動クローズ
+        // 静的なスレ表示 / スレ一覧ペインの DataContext を最初の各グループに固定する (複数ペイン化)。
         // ペイン本体は自分のグループ (タブ集合/選択タブ) を表示し、アプリ全体の設定は Group.Main 経由で参照する。
         ThreadDisplayPaneCtrl.DataContext = _vm.ActiveThreadGroup;
+        ThreadListPaneCtrl.DataContext    = _vm.ActiveThreadListGroup;
         AddressBar.Text = _vm.AddressBarUrl;
         // 初期状態 (= 起動直後の VM 既定値) をログウィンドウの表示に反映。
         ApplyLogWindowVisibility(_vm.IsLogPaneVisible);

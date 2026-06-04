@@ -27,13 +27,13 @@ public sealed partial class MainViewModel
 
         // 既存タブを探す (host + directory_name で一致判定)。なければ作る。
         // お気に入りフォルダ展開タブ (Board=null) は対象外。
-        var tab = ThreadListTabs.FirstOrDefault(t =>
+        var tab = AllThreadListTabs.FirstOrDefault(t =>
             t.Board is not null &&
             t.Board.Host          == board.Host &&
             t.Board.DirectoryName == board.DirectoryName);
         if (tab is null)
         {
-            tab = new ThreadListTabViewModel(board, t => ThreadListTabs.Remove(t))
+            tab = new ThreadListTabViewModel(board, t => RemoveThreadListTab(t))
             {
                 // 初期化: 板自身がお気に入り登録済みか (= ツールバーの ★ ボタンの押下状態)。
                 // 後続の登録/削除操作で RefreshFavoritedStateOfAllTabs が再同期する。
@@ -129,7 +129,7 @@ public sealed partial class MainViewModel
     /// 集約タブ (Board == null) — Items に該当 (host, dir, key) があるときだけ更新。</summary>
     private void NotifyThreadListLogMark(Board board, string threadKey, LogMarkState state)
     {
-        foreach (var t in ThreadListTabs)
+        foreach (var t in AllThreadListTabs)
         {
             if (t.Board is not null)
             {
@@ -177,16 +177,16 @@ public sealed partial class MainViewModel
     /// 中身の組み立ては <see cref="BuildAllLogsItems"/> を共有する (= リフレッシュ時もここを通る)。</summary>
     public Task OpenAllLogsAsync()
     {
-        var existingTab = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == AllLogsTabId);
+        var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == AllLogsTabId);
         if (existingTab is not null)
         {
-            SelectedThreadListTab = existingTab;
+            ActivateThreadListTab(existingTab);
             return Task.CompletedTask;
         }
 
-        var tab = new ThreadListTabViewModel(AllLogsTabId, "全ログ", t => ThreadListTabs.Remove(t));
+        var tab = new ThreadListTabViewModel(AllLogsTabId, "全ログ", t => RemoveThreadListTab(t));
         ThreadListTabs.Add(tab);
-        SelectedThreadListTab = tab;
+        ActivateThreadListTab(tab);
         RefreshAllLogsTab(tab);
         return Task.CompletedTask;
     }
@@ -319,13 +319,13 @@ public sealed partial class MainViewModel
 
         // 同じ検索の繰り返しは同じタブを再利用 (deterministic Guid)。
         var tabId = ComputeNextThreadTabId(board.Host, board.DirectoryName, sourceTitle);
-        var tab   = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == tabId);
+        var tab   = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == tabId);
         if (tab is null)
         {
-            tab = new ThreadListTabViewModel(tabId, $"🔍 候補: {Truncate(sourceTitle, 18)}", t => ThreadListTabs.Remove(t));
+            tab = new ThreadListTabViewModel(tabId, $"🔍 候補: {Truncate(sourceTitle, 18)}", t => RemoveThreadListTab(t));
             ThreadListTabs.Add(tab);
         }
-        SelectedThreadListTab = tab;
+        ActivateThreadListTab(tab);
 
         if (tab.IsBusy) return;
 

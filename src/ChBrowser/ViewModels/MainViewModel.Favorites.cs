@@ -99,7 +99,7 @@ public sealed partial class MainViewModel
             tab.IsFavorited = favKeys.Contains((b.Host, b.DirectoryName, tab.ThreadKey));
         }
 
-        foreach (var listTab in ThreadListTabs)
+        foreach (var listTab in AllThreadListTabs)
         {
             listTab.SyncFavoritedFromKeySet(favKeys);
             // 板タブ自身がお気に入り登録済みか (= スレ一覧ペインのツールバー★ボタンの押下状態)
@@ -247,16 +247,16 @@ public sealed partial class MainViewModel
         string aggregateName,
         IEnumerable<FavoriteEntryViewModel> children)
     {
-        var existingTab = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == aggregateId);
+        var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == aggregateId);
         if (existingTab is not null)
         {
-            SelectedThreadListTab = existingTab;
+            ActivateThreadListTab(existingTab);
             return Task.CompletedTask;
         }
 
-        var tab = new ThreadListTabViewModel(aggregateId, aggregateName, t => ThreadListTabs.Remove(t));
+        var tab = new ThreadListTabViewModel(aggregateId, aggregateName, t => RemoveThreadListTab(t));
         ThreadListTabs.Add(tab);
-        SelectedThreadListTab = tab;
+        ActivateThreadListTab(tab);
         return BuildFavoritesAggregateItemsAsync(tab, aggregateName, children);
     }
 

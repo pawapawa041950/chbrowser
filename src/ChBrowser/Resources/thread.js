@@ -340,7 +340,9 @@
     // ---------- regexes (本文/名前テキストを安全な HTML に変換) ----------
     const TAG_BLOCK_RE     = /<(a|b|small)\b([^>]*)>([\s\S]*?)<\/\1>|<\/?[a-z][^>]*>/gi;
     const HREF_RE          = /href\s*=\s*["']([^"']+)["']/i;
-    const INNER_ANCHOR_RE  = /^\s*>>\s*(\d+)(?:\s*-\s*(\d+))?\s*$/;
+    // 単独 / 範囲(N-M) / それらをカンマ(半角"," 全角"，" 読点"、")で連ねたリスト (例: 3 / 3-5 / 3,5 / 3-5,7、9)。
+    // group 1 = ">>" を除いた番号指定全体 (= parseAnchorRanges に渡す)。
+    const INNER_ANCHOR_RE  = /^\s*>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*)\s*$/;
     const HREF_ANCHOR_RE   = /read\.cgi\/[^/]+\/[^/]+\/(\d+)(?:-(\d+))?\/?$/i;
     const STRIP_TAGS_RE    = /<[^>]+>/g;
     // URL 部分は RFC 3986 の ASCII URL-safe 文字に限定 (非 ASCII = 日本語等、および () のような
@@ -362,8 +364,25 @@
     // 当初 "ico/" まで固定と聞いていたが、実際は ico/ 以外の path もあるため img.5ch.io/ までで判定する。
     // 文書中のその位置に <img> で表示し、後ろに元の "sssp://～" 文字列をそのまま並べる (= ユーザ要件)。
     // URL_OR_ANCHOR_RE の他の alt より先に置いて優先マッチさせる (= truncated の "s"/"ps" 等への巻き込みを避ける)。
+    // 末尾の anchor 部 group 2 = ">>..." 表示テキスト全体、group 3 = 番号指定 (例 "3-5,7")。
     const URL_OR_ANCHOR_RE =
-        /(sssp:\/\/img\.5ch\.io\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+)(?:\s*-\s*(\d+))?)/g;
+        /(sssp:\/\/img\.5ch\.io\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*))/g;
+
+    /** ">>" 後の番号指定文字列 (例 "3-5,7、9") を {from,to} 範囲オブジェクト配列に分解する。
+     *  カンマは半角"," / 全角"，" / 読点"、" を許容。各範囲は from<=to に正規化。数字が取れない部分は無視。 */
+    function parseAnchorRanges(spec) {
+        const ranges = [];
+        if (!spec) return ranges;
+        for (const part of spec.split(/[,，、]/)) {
+            const rm = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(part);
+            if (!rm) continue;
+            let from = parseInt(rm[1], 10);
+            let to   = rm[2] ? parseInt(rm[2], 10) : from;
+            if (to < from) { const t = from; from = to; to = t; }
+            ranges.push({ from: from, to: to });
+        }
+        return ranges;
+    }
 
     /** sssp://img.5ch.io/ico/<path> 形式 (5ch のレス毎アイコン記法) の判定。 */
     const SSSP_PREFIX = 'sssp://';
@@ -477,9 +496,8 @@
                     html += renderExternalLink(normalized, m[1]);
                 }
             } else {
-                const from = parseInt(m[3], 10);
-                const to = m[4] ? parseInt(m[4], 10) : from;
-                html += renderPostAnchor(from, to, m[2]);
+                // m[2] = ">>..." 表示テキスト, m[3] = 番号指定 (例 "3-5,7")
+                html += renderPostAnchor(m[3], m[2]);
             }
             pos = m.index + m[0].length;
         }
@@ -491,9 +509,7 @@
         const inner = stripTags(innerRaw);
         const innerM = INNER_ANCHOR_RE.exec(inner);
         if (innerM) {
-            const f = parseInt(innerM[1], 10);
-            const t = innerM[2] ? parseInt(innerM[2], 10) : f;
-            return renderPostAnchor(f, t, inner);
+            return renderPostAnchor(innerM[1], inner);
         }
         const hrefM = HREF_RE.exec(attrs);
         const href = hrefM ? hrefM[1] : '';
@@ -506,18 +522,27 @@
         }
         const hrefA = HREF_ANCHOR_RE.exec(href);
         if (hrefA) {
-            const f = parseInt(hrefA[1], 10);
-            const t = hrefA[2] ? parseInt(hrefA[2], 10) : f;
-            return renderPostAnchor(f, t, inner);
+            const spec = hrefA[2] ? (hrefA[1] + '-' + hrefA[2]) : hrefA[1];
+            return renderPostAnchor(spec, inner);
         }
         return renderExternalLink(href, inner);
     }
 
-    function renderPostAnchor(from, to, visible) {
+    /** 番号指定文字列 (例 "3" / "3-5" / "3,5" / "3-5,7") と表示テキストから anchor 要素を作る。
+     *  data-spec  : 指定全体 (= ポップアップ展開の正規ソース。範囲・カンマリスト対応)。
+     *  data-from  : 先頭レス番号 (= missing 判定・クリックスクロールの後方互換用)。
+     *  data-to    : 末尾レス番号 (= data-spec 不在環境向けの後方互換フォールバック)。 */
+    function renderPostAnchor(spec, visible) {
+        const ranges = parseAnchorRanges(spec);
+        if (ranges.length === 0) return escapeHtml(visible); // 数字が取れない異常系はただのテキスト
+        const from = ranges[0].from;
+        const to   = ranges[ranges.length - 1].to;
+        const norm = spec.replace(/\s+/g, '');
         // href は意図的に付けない。<a> が href を持つと focusable になり、
         // Chromium が DOM 再構築後にそれへ auto-focus → auto-scroll してしまうため。
-        return '<a class="anchor" data-from="' + from + '" data-to="' + to + '">' +
-               escapeHtml(visible) + '</a>';
+        return '<a class="anchor" data-from="' + from + '" data-to="' + to
+             + '" data-spec="' + escapeHtml(norm) + '">'
+             + escapeHtml(visible) + '</a>';
     }
 
     // ---------- 画像 / 動画 URL 検出 + 外部サービスの展開 ----------
@@ -879,8 +904,9 @@
 
     // ---------- ツリー表示 (重複あり / 重複なし) 用の補助 ----------
 
-    /** 本文中の >>N / >>N-M 参照をすべて抽出 (タグは事前ストリップ)。 */
-    const ANCHOR_REF_RE = />>\s*(\d+)(?:\s*-\s*(\d+))?/g;
+    /** 本文中の >>N / >>N-M / >>N,M(カンマリスト) 参照をすべて抽出 (タグは事前ストリップ)。
+     *  カンマリストは各要素を個別の範囲 {from,to} に展開する (= 範囲ごとの INLINE_EXPAND_RANGE_LIMIT 判定を維持)。 */
+    const ANCHOR_REF_RE = />>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*)/g;
     function extractAnchorRefs(body) {
         if (!body) return [];
         const stripped = body.replace(/<[^>]+>/g, ' ');
@@ -888,10 +914,7 @@
         ANCHOR_REF_RE.lastIndex = 0;
         let m;
         while ((m = ANCHOR_REF_RE.exec(stripped)) !== null) {
-            let from = parseInt(m[1], 10);
-            let to   = m[2] ? parseInt(m[2], 10) : from;
-            if (to < from) { const tmp = from; from = to; to = tmp; }
-            refs.push({ from: from, to: to });
+            for (const r of parseAnchorRanges(m[1])) refs.push(r);
         }
         return refs;
     }
@@ -2910,6 +2933,21 @@
     const MAX_RANGE = 50;
     const CLOSE_DELAY_MS = 250;
 
+    /** ">>" 番号指定 (例 "3-5,7") を distinct なレス番号配列に展開する。出現順を保ち MAX_RANGE で打ち切る。 */
+    function expandAnchorSpec(spec) {
+        const nums = [];
+        const seen = new Set();
+        for (const r of parseAnchorRanges(spec)) {
+            for (let n = r.from; n <= r.to; n++) {
+                if (seen.has(n)) continue;
+                seen.add(n);
+                nums.push(n);
+                if (nums.length >= MAX_RANGE) return nums;
+            }
+        }
+        return nums;
+    }
+
     function scheduleCloseAt(level) {
         cancelCloseAt(level);
         const id = setTimeout(function () {
@@ -2983,13 +3021,13 @@
         return clone;
     }
 
-    function buildPopupContent(from, to) {
+    /** レス番号配列 (= 範囲/カンマリストを展開済み) からポップアップ内容を作る。
+     *  label は対象が 1 件も見つからなかったときの ">>label (見つかりません)" 表示用。 */
+    function buildPopupContent(numbers, label) {
         const frag = document.createDocumentFragment();
-        const span = Math.min(to - from + 1, MAX_RANGE);
         let any = false;
-        for (let i = 0; i < span; i++) {
-            const n = from + i;
-            const src = document.getElementById('r' + n);
+        for (let i = 0; i < numbers.length && i < MAX_RANGE; i++) {
+            const src = document.getElementById('r' + numbers[i]);
             if (src) {
                 frag.appendChild(clonePostForPopup(src));
                 any = true;
@@ -2998,7 +3036,7 @@
         if (!any) {
             const miss = document.createElement('div');
             miss.className = 'anchor-missing';
-            miss.textContent = '>>' + from + (to !== from ? ('-' + to) : '') + ' (見つかりません)';
+            miss.textContent = '>>' + label + ' (見つかりません)';
             frag.appendChild(miss);
         }
         return frag;
@@ -3067,11 +3105,22 @@
 
     function openPopup(anchor, level) {
         closeFrom(level);
-        const from = parseInt(anchor.dataset.from, 10);
-        const to = parseInt(anchor.dataset.to, 10) || from;
+        // data-spec があれば範囲/カンマリストを正規ソースとして展開。無ければ data-from/to (後方互換)。
+        let numbers, label;
+        const spec = anchor.dataset.spec;
+        if (spec) {
+            numbers = expandAnchorSpec(spec);
+            label   = spec;
+        } else {
+            const from = parseInt(anchor.dataset.from, 10);
+            const to   = parseInt(anchor.dataset.to, 10) || from;
+            numbers = [];
+            for (let n = from; n <= to && numbers.length < MAX_RANGE; n++) numbers.push(n);
+            label = from + (to !== from ? ('-' + to) : '');
+        }
         const el = document.createElement('div');
         el.className = 'anchor-popup';
-        el.appendChild(buildPopupContent(from, to));
+        el.appendChild(buildPopupContent(numbers, label));
         document.body.appendChild(el);
         positionPopup(el, anchor);
         // popup level N の hover は <= N の close をすべてキャンセル (チェーン上)

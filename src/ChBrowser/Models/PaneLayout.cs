@@ -26,8 +26,9 @@ public enum PaneId
 public static class PaneKinds
 {
     /// <summary>この種類は画面内に 1 枚しか置けない (= シングルトン) か。
-    /// 現状 ThreadDisplay のみ複数可。それ以外 (お気に入り / 板 / スレ一覧) は各 1 枚。</summary>
-    public static bool IsSingleton(PaneId kind) => kind != PaneId.ThreadDisplay;
+    /// ThreadDisplay / ThreadList が複数可。お気に入り / 板一覧は各 1 枚。</summary>
+    public static bool IsSingleton(PaneId kind)
+        => kind is not (PaneId.ThreadDisplay or PaneId.ThreadList);
 
     /// <summary>(kind, instanceId) から leaf / 子コントロールを一意に指す文字列キーを作る。
     /// シングルトン (instanceId 無し) は種類名そのもの ("ThreadList")、複数可インスタンスは "ThreadDisplay:&lt;id&gt;"。</summary>
@@ -91,10 +92,11 @@ public abstract class LayoutNode
         foreach (var l in leaves)
             counts[l.Pane] = counts.TryGetValue(l.Pane, out var c) ? c + 1 : 1;
 
-        // シングルトン種はちょうど 1 枚。
-        foreach (var kind in new[] { PaneId.Favorites, PaneId.BoardList, PaneId.ThreadList })
+        // シングルトン種 (お気に入り / 板一覧) はちょうど 1 枚。
+        foreach (var kind in new[] { PaneId.Favorites, PaneId.BoardList })
             if (counts.GetValueOrDefault(kind) != 1) return false;
-        // 複数可種 (ThreadDisplay) は最低 1 枚。
+        // 複数可種 (スレ一覧 / スレ表示) は最低 1 枚。
+        if (counts.GetValueOrDefault(PaneId.ThreadList)    < 1) return false;
         if (counts.GetValueOrDefault(PaneId.ThreadDisplay) < 1) return false;
 
         // インスタンスキーの重複が無いこと (= 同じ ThreadDisplay インスタンスが 2 leaf に出ない)。

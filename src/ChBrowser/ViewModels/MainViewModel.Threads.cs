@@ -603,15 +603,15 @@ public sealed partial class MainViewModel
 
         // 同じ検索ラベルなら同じタブを再利用 (deterministic Guid)。
         var tabId  = ComputeAiSearchResultsTabId(label);
-        var tab    = ThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == tabId);
+        var tab    = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == tabId);
         var reused = tab is not null;
         if (tab is null)
         {
-            tab = new ThreadListTabViewModel(tabId, $"🤖 {Truncate(label, 24)}", t => ThreadListTabs.Remove(t));
+            tab = new ThreadListTabViewModel(tabId, $"🤖 {Truncate(label, 24)}", t => RemoveThreadListTab(t));
             ThreadListTabs.Add(tab);
         }
-        SelectedThreadListTab = tab;
-        log.Write($"[OpenAiSearchResults]   タブ {(reused ? "再利用" : "新規作成")}: tabId={tabId}, ThreadListTabs.Count={ThreadListTabs.Count}");
+        ActivateThreadListTab(tab);
+        log.Write($"[OpenAiSearchResults]   タブ {(reused ? "再利用" : "新規作成")}: tabId={tabId}");
 
         if (tab.IsBusy)
         {
@@ -1064,28 +1064,22 @@ public sealed partial class MainViewModel
     /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> が OFF でも常に書き出すので、後で ON に戻したら復元可。</summary>
     public void SaveOpenTabsToDisk()
     {
-        // スレ一覧タブ: 「板タブ」と「お気に入りフォルダタブ」を Kind で区別。
-        // FavoritesFolderId == Guid.Empty は「お気に入り全体 (= 仮想ルート)」を表す。
-        var listEntries = new System.Collections.Generic.List<OpenThreadListTabEntry>(ThreadListTabs.Count);
-        foreach (var tab in ThreadListTabs)
+        // スレ一覧タブをペイン別に保存する (複数ペイン化 Phase C)。各ペインの並び順 + 選択タブ + アクティブペインを記録。
+        // 「板タブ」と「お気に入りフォルダタブ」を Kind で区別 (FavoritesFolderId==Guid.Empty は「お気に入り全体」)。
+        var listPaneEntries = new System.Collections.Generic.List<OpenThreadListPaneEntry>(ThreadListPaneGroups.Count);
+        foreach (var group in ThreadListPaneGroups)
         {
-            if (tab.Board is { } b)
+            var listTabs = new System.Collections.Generic.List<OpenThreadListTabEntry>(group.Tabs.Count);
+            foreach (var tab in group.Tabs)
             {
-                listEntries.Add(new OpenThreadListTabEntry(
-                    Kind:          "board",
-                    Host:          b.Host,
-                    DirectoryName: b.DirectoryName,
-                    FolderId:      null));
+                if (tab.Board is { } b)
+                    listTabs.Add(new OpenThreadListTabEntry("board", b.Host, b.DirectoryName, null));
+                else if (tab.FavoritesFolderId is Guid id)
+                    listTabs.Add(new OpenThreadListTabEntry("favoritesFolder", null, null, id.ToString()));
+                // 上記いずれにも該当しないタブ (= 想定外、現状無し) は保存対象外。
             }
-            else if (tab.FavoritesFolderId is Guid id)
-            {
-                listEntries.Add(new OpenThreadListTabEntry(
-                    Kind:          "favoritesFolder",
-                    Host:          null,
-                    DirectoryName: null,
-                    FolderId:      id.ToString()));
-            }
-            // 上記いずれにも該当しないタブ (= 想定外、現状無し) は保存対象外。
+            var selIdx = group.SelectedTab is null ? -1 : group.Tabs.IndexOf(group.SelectedTab);
+            listPaneEntries.Add(new OpenThreadListPaneEntry(group.PaneKey, selIdx, listTabs));
         }
 
         // スレタブをペイン別に保存する (複数ペイン化 Phase 4)。各ペインの並び順 + 選択タブ + アクティブペインを記録。
@@ -1106,7 +1100,7 @@ public sealed partial class MainViewModel
             paneEntries.Add(new OpenThreadPaneEntry(group.PaneKey, selIdx, tabs));
         }
 
-        _openTabsStorage.Save(listEntries, paneEntries, ActiveThreadGroup.PaneKey);
+        _openTabsStorage.Save(listPaneEntries, paneEntries, ActiveThreadListGroup.PaneKey, ActiveThreadGroup.PaneKey);
     }
 
     /// <summary>前回終了時に保存されたタブ一覧 (スレ一覧タブ + スレタブ) を読み込み、保存されていた順番で再オープンする。
@@ -1120,45 +1114,38 @@ public sealed partial class MainViewModel
     /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> による on/off は呼び出し側 (App) で判定する。</summary>
     public void RestoreOpenTabs()
     {
-        var saved    = _openTabsStorage.Load();
-        var hasPanes = saved.ThreadPanes is { Count: > 0 };
-        var flatCount = saved.ThreadTabs.Count;
-        if (saved.ThreadListTabs.Count == 0 && !hasPanes && flatCount == 0) return;
+        var saved         = _openTabsStorage.Load();
+        var hasPanes      = saved.ThreadPanes is { Count: > 0 };
+        var hasListPanes  = saved.ThreadListPanes is { Count: > 0 };
+        var flatCount     = saved.ThreadTabs.Count;
+        if (saved.ThreadListTabs.Count == 0 && !hasListPanes && !hasPanes && flatCount == 0) return;
 
         ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[restoreOpenTabs] 復元開始: スレ一覧タブ {saved.ThreadListTabs.Count} 件, "
+            $"[restoreOpenTabs] 復元開始: "
+            + (hasListPanes ? $"スレ一覧ペイン {saved.ThreadListPanes!.Count} 枚, " : $"スレ一覧タブ {saved.ThreadListTabs.Count} 件 (旧形式), ")
             + (hasPanes ? $"スレ表示ペイン {saved.ThreadPanes!.Count} 枚" : $"スレタブ {flatCount} 件 (旧形式)"));
 
         // (1) スレ一覧タブを先に — 復元順序のユーザ視認性のため、左ペインのタブを先に並べてからスレタブを並べる。
-        foreach (var entry in saved.ThreadListTabs)
+        if (hasListPanes)
         {
-            try
+            // ペイン別復元。各保存ペインのキーを、レイアウト復元時に再構成済みのグループ (ReconcileKindToLayout) と
+            // 突き合わせる。見つからなければアクティブ一覧ペインへフォールバック (= レイアウトと open_tabs の不整合保険)。
+            foreach (var paneEntry in saved.ThreadListPanes!)
             {
-                if (string.Equals(entry.Kind, "board", StringComparison.Ordinal))
-                {
-                    if (string.IsNullOrEmpty(entry.Host) || string.IsNullOrEmpty(entry.DirectoryName)) continue;
-                    var board = ResolveBoard(entry.Host, entry.DirectoryName, "");
-                    _ = LoadThreadListAsync(new BoardViewModel(board));
-                }
-                else if (string.Equals(entry.Kind, "favoritesFolder", StringComparison.Ordinal))
-                {
-                    if (!Guid.TryParse(entry.FolderId, out var id)) continue;
-                    if (id == Guid.Empty)
-                    {
-                        _ = OpenAllRootAsBoardAsync();
-                    }
-                    else if (Favorites.FindById(id) is FavoriteFolderViewModel folder)
-                    {
-                        _ = OpenFavoritesFolderAsync(folder);
-                    }
-                    // フォルダが既に削除されていた場合は何もしない (= サイレントに skip)。
-                }
+                var group = ThreadListPaneGroups.FirstOrDefault(g => string.Equals(g.PaneKey, paneEntry.PaneKey, StringComparison.Ordinal))
+                            ?? _activeThreadListGroup;
+                SetActiveThreadListGroup(group); // 以降に開く一覧タブはこのペインへ入る
+                foreach (var entry in paneEntry.Tabs) RestoreOneThreadListTab(entry);
+                if (paneEntry.SelectedIndex >= 0 && paneEntry.SelectedIndex < group.Tabs.Count)
+                    group.SelectedTab = group.Tabs[paneEntry.SelectedIndex];
             }
-            catch (Exception ex)
-            {
-                ChBrowser.Services.Logging.LogService.Instance.Write(
-                    $"[restoreOpenTabs] スレ一覧タブ復元失敗 ({entry.Kind} {entry.Host}/{entry.DirectoryName} {entry.FolderId}): {ex.Message}");
-            }
+            var activeList = ThreadListPaneGroups.FirstOrDefault(g => string.Equals(g.PaneKey, saved.ActiveThreadListPaneKey, StringComparison.Ordinal));
+            if (activeList is not null) SetActiveThreadListGroup(activeList);
+        }
+        else
+        {
+            // 旧形式 (v1/v2): フラットなスレ一覧タブをアクティブ (= 単一) ペインへ復元。
+            foreach (var entry in saved.ThreadListTabs) RestoreOneThreadListTab(entry);
         }
 
         // (2) スレタブ。OpenThreadAsync は同期前段で対象ペインの Tabs.Add まで行うので await 不要
@@ -1201,6 +1188,35 @@ public sealed partial class MainViewModel
                         $"[restoreOpenTabs] スレタブ復元失敗 ({entry.Host}/{entry.DirectoryName}/{entry.Key}): {ex.Message}");
                 }
             }
+        }
+    }
+
+    /// <summary>保存済みスレ一覧タブ 1 件を「現在アクティブな一覧ペイン」に復元する (= 各 Open* は同期前段で
+    /// アクティブペインの Tabs.Add まで行う)。板タブ / お気に入りフォルダタブ / お気に入り全体 を Kind で振り分ける。</summary>
+    private void RestoreOneThreadListTab(OpenThreadListTabEntry entry)
+    {
+        try
+        {
+            if (string.Equals(entry.Kind, "board", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrEmpty(entry.Host) || string.IsNullOrEmpty(entry.DirectoryName)) return;
+                var board = ResolveBoard(entry.Host, entry.DirectoryName, "");
+                _ = LoadThreadListAsync(new BoardViewModel(board), activate: false);
+            }
+            else if (string.Equals(entry.Kind, "favoritesFolder", StringComparison.Ordinal))
+            {
+                if (!Guid.TryParse(entry.FolderId, out var id)) return;
+                if (id == Guid.Empty)
+                    _ = OpenAllRootAsBoardAsync();
+                else if (Favorites.FindById(id) is FavoriteFolderViewModel folder)
+                    _ = OpenFavoritesFolderAsync(folder);
+                // フォルダが既に削除されていた場合は何もしない (= サイレントに skip)。
+            }
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[restoreOpenTabs] スレ一覧タブ復元失敗 ({entry.Kind} {entry.Host}/{entry.DirectoryName} {entry.FolderId}): {ex.Message}");
         }
     }
 

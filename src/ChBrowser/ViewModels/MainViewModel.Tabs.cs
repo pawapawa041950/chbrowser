@@ -184,21 +184,24 @@ public sealed partial class MainViewModel
 
     private void CloseOtherThreadListTabs(ThreadListTabViewModel keep)
     {
-        foreach (var t in ThreadListTabs.ToList())
-            if (!ReferenceEquals(t, keep)) ThreadListTabs.Remove(t);
+        var tabs = (ThreadListGroupOf(keep) ?? ActiveThreadListGroup).Tabs;
+        foreach (var t in tabs.ToList())
+            if (!ReferenceEquals(t, keep)) tabs.Remove(t);
     }
 
     private void CloseThreadListTabsBefore(ThreadListTabViewModel pivot)
     {
-        var idx = ThreadListTabs.IndexOf(pivot);
+        var tabs = (ThreadListGroupOf(pivot) ?? ActiveThreadListGroup).Tabs;
+        var idx  = tabs.IndexOf(pivot);
         if (idx <= 0) return;
-        for (var i = idx - 1; i >= 0; i--) ThreadListTabs.RemoveAt(i);
+        for (var i = idx - 1; i >= 0; i--) tabs.RemoveAt(i);
     }
 
     private void CloseThreadListTabsAfter(ThreadListTabViewModel pivot)
     {
-        var idx = ThreadListTabs.IndexOf(pivot);
+        var tabs = (ThreadListGroupOf(pivot) ?? ActiveThreadListGroup).Tabs;
+        var idx  = tabs.IndexOf(pivot);
         if (idx < 0) return;
-        while (ThreadListTabs.Count > idx + 1) ThreadListTabs.RemoveAt(ThreadListTabs.Count - 1);
+        while (tabs.Count > idx + 1) tabs.RemoveAt(tabs.Count - 1);
     }
 }
