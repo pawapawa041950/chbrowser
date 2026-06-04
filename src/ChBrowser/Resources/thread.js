@@ -2385,9 +2385,17 @@
     function tryScrollToTarget() {
         if (userHasScrolled) return;
         if (pendingScrollTarget == null) return;
+        if (allPosts.length === 0) return;
         const N = pendingScrollTarget;
-        // 1..N が全部届くまでは繰り延べ。途中で部分的にスクロールすると、後続 batch で再度動いて jitter になる。
-        if (allPosts.length < N) return;
+        // N 番まで届くまでは繰り延べ。途中で部分的にスクロールすると、後続 batch で再度動いて jitter になる。
+        //
+        // ★ 件数 (allPosts.length) ではなく「読み込み済みの最大レス番号」で判定する点が重要。
+        //   NG (あぼーん) されたレスは C# 側で batch から除外されて JS には届かないため、1..N に欠番が
+        //   できると allPosts.length は N 未満になりうる。件数で gate すると「以前 NG したレスより下まで
+        //   読んでいたスレ」を開き直したとき条件が永久に成立せず、スクロールが復元されず先頭(=1)に留まる。
+        //   allPosts は番号昇順なので末尾要素の number が「到達済み最大番号」= ストリーミング進捗を表す。
+        const loadedMaxNumber = allPosts[allPosts.length - 1].number;
+        if (loadedMaxNumber < N) return;
 
         const bottomMost = findBottommostPrimaryInRange(N);
         if (!bottomMost) return;
