@@ -183,6 +183,11 @@
             applySearchHighlightToAll();
             return;
         }
+        // 1st pass: 各 .post を一旦すべて filter-hidden にし、match した要素だけ控える。
+        //   ツリー/dedupTree モードでは子レス (返信) が親 .post の内側に nest されているため、
+        //   独立判定で親を hidden にすると「子は match しているのに親ごと消えて結果に出ない」事象が起きる。
+        //   そこで 2nd pass で match した要素の祖先 .post も可視化し、親込みで表示する (= ユーザ要件)。
+        const matchedEls = [];
         root.querySelectorAll('.post').forEach(function (el) {
             const id = el.id || '';
             // primary レスは id="rN"。embedded は id 無し or 別 — その場合は親要素の data-from 等から番号を引きたいが
@@ -198,8 +203,17 @@
                 : (currentFilter.textQuery
                     ? (el.textContent || '').toLowerCase().indexOf(currentFilter.textQuery.toLowerCase()) >= 0
                     : true);
-            if (matched) el.classList.remove('filter-hidden');
-            else         el.classList.add('filter-hidden');
+            el.classList.add('filter-hidden');
+            if (matched) matchedEls.push(el);
+        });
+        // 2nd pass: match 要素自身と、それを内包する祖先 .post (= 親レス) を可視化する。
+        //   子レスが hit したら親レスも表示することで、ツリーの文脈ごと検索結果に残す。
+        matchedEls.forEach(function (el) {
+            let cur = el;
+            while (cur && cur !== root) {
+                if (cur.classList && cur.classList.contains('post')) cur.classList.remove('filter-hidden');
+                cur = cur.parentElement;
+            }
         });
         // dedupTree モードの incremental-block (= 「以降新レス」ラベル以下の各ブロック) は
         // トップレベル要素が祖先レス (id 無し) で、新着デルタ本体は内部の embedded で配置されている。
