@@ -558,7 +558,9 @@ public sealed partial class MainViewModel
         var existing = FindThreadTab(board, info.Key);
         if (existing is not null)
         {
-            var prevCount = existing.Posts.Count;
+            // 差分境界は dat 連番ベースの件数 (= FetchedPostCount) を使う。existing.Posts.Count は NG 透明化分を
+            // 含まないので、これを境界にすると NG で消した件数ぶん既出レスが新着扱いで再 append される (= 二重表示)。
+            var prevCount = existing.FetchedPostCount > 0 ? existing.FetchedPostCount : existing.Posts.Count;
             if (result.Posts.Count > prevCount)
             {
                 var added = new List<Post>(result.Posts.Count - prevCount);
@@ -574,6 +576,7 @@ public sealed partial class MainViewModel
             }
             existing.DatSize = result.DatSize;
             SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+            existing.FetchedPostCount = result.Posts.Count;
             // 最終状態を ComputeMarkState で算定 (= HasReplyToOwn が true なら RepliedToOwn、それ以外は Cached)。
             var finalState = ComputeMarkState(existing, stateHint: null);
             NotifyThreadListLogMark(board, info.Key, finalState);
@@ -649,6 +652,7 @@ public sealed partial class MainViewModel
 
         tab.DatSize = result.DatSize;
         SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+        tab.FetchedPostCount = result.Posts.Count;
 
         var newTabState = ComputeMarkState(tab, stateHint: null);
         NotifyThreadListLogMark(board, info.Key, newTabState);

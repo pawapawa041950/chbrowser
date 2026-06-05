@@ -219,6 +219,8 @@ public sealed partial class MainViewModel
                 AppendPostsWithNg(tab, local.Posts);
                 tab.DatSize       = local.DatSize;
                 prevCount         = local.Posts.Count;
+                // dat 連番ベースの件数で初期化 (= 取得失敗で Step 2 が走らなくても、後続 refresh の境界が正しくなる)。
+                tab.FetchedPostCount = local.Posts.Count;
                 tab.StatusMessage = $"{info.Title}: {prevCount} レス (差分取得中...)";
                 // 仕様: cache load では「自分への返信」検知を走らせない (= 既存スレ内の旧返信は赤化しない)。
                 // 初回 false で OK。次の差分取得が新着 + 返信を含む場合に ApplyFetchDelta が立てる。
@@ -249,6 +251,8 @@ public sealed partial class MainViewModel
             }
 
             SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+            // dat 連番ベースの件数を記録 (= 後続の差分取得の境界に使う。NG 透明化では減らない)。
+            tab.FetchedPostCount = result.Posts.Count;
 
             // 最終状態は ComputeMarkState で算定 (= Dropped > RepliedToOwn > Cached の優先順)。
             // tab.HasReplyToOwn は ApplyFetchDelta が直前にセット済 (= delta scan の結果)。
@@ -305,7 +309,10 @@ public sealed partial class MainViewModel
     {
         if (tab.IsBusy) return;
 
-        var prevCount = tab.Posts.Count;
+        // 差分境界は dat 連番ベースの件数 (= FetchedPostCount) を使う。tab.Posts.Count は NG 透明化された
+        // レスを含まないため、これを境界にすると NG で消した件数ぶん既出レスが新着扱いで再 append される
+        // (= 二重表示 / 「以降新レス」ラベルずれ)。未初期化 (0) のときだけ Posts.Count にフォールバック。
+        var prevCount = tab.FetchedPostCount > 0 ? tab.FetchedPostCount : tab.Posts.Count;
         try
         {
             tab.IsBusy        = true;
@@ -316,6 +323,7 @@ public sealed partial class MainViewModel
             ApplyFetchDelta(tab, prevCount, result, tab.Header);
 
             SaveFetchedPostCount(tab.Board, tab.ThreadKey, result.Posts.Count);
+            tab.FetchedPostCount = result.Posts.Count;
 
             // 最終状態算定: HasReplyToOwn は ApplyFetchDelta の delta scan で直前に決まっているので
             // ここではそれを ComputeMarkState で集約するだけ。Refresh 経路は stateHint なしなので Dropped 評価しない。

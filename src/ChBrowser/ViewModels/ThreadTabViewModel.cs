@@ -135,6 +135,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// 増分チャネルとの順序競合で「先にレンダ → setPosts([]) で消去」の真っ白現象が出ていたため撤去した。</summary>
     public IReadOnlyList<Post> Posts { get; private set; } = new List<Post>();
 
+    /// <summary>直近の dat 取得で得た「dat 連番ベースのレス総数」(= 取得した dat 上の件数そのもの)。
+    /// 差分取得の境界 (prevCount) に使う。<see cref="Posts"/> は NG 透明化で送られなかったレスを含まない
+    /// (= dat 件数より少ない) ため、差分境界に <c>Posts.Count</c> を使うと NG で消えた件数ぶん境界が手前にずれ、
+    /// 既出レスが新着として再 append される (= 二重表示) / 「以降新レス」ラベルがずれる。
+    /// 取得成功のたびに <c>result.Posts.Count</c> で更新する。NG 追加 (<see cref="ReplaceVisiblePostsAfterNgAdd"/>)
+    /// では変化させない (= dat 件数は NG で減らないため)。</summary>
+    public int FetchedPostCount { get; set; }
+
     /// <summary>
     /// streaming で受け取った直近のレスバッチと、それが「差分 append (= incremental)」かどうかのフラグ。
     /// WebView2Helper.AppendBatch がこれを観測して JS の window.appendPosts() に送る。

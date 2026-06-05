@@ -3716,6 +3716,12 @@
         // 1 レスずつ: 内部状態を更新して replayPostIntoDom で「reverseIndex → DOM 挿入 → 親バッジ更新」を実施。
         // dedupTree-delta だけは DOM 挿入を rebuildSectionB に任せるので、ここでは reverseIndex とバッジだけ更新する。
         for (const p of batch) {
+            // 防御: dat 連番は一意なので、既に保持しているレス番号は二重 append しない
+            // (= 万一 C# 側が境界計算ミスで既出レスを再送しても、allPosts / DOM が二重化しないようにする)。
+            if (postsByNumber.has(p.number)) {
+                debugLog('appendPosts: skip duplicate number=' + p.number);
+                continue;
+            }
             allPosts.push(p);
             postsByNumber.set(p.number, p);
             if (isDelta) sessionNewPostNumbers.add(p.number);
