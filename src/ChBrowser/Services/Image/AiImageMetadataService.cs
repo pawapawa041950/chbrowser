@@ -222,12 +222,8 @@ public sealed class AiImageMetadataService
     {
         long fileSize = data.LongLength;
         var (w, h) = GetJpegDimensions(data);
-
-        // APP1 セグメントから "Exif\0\0" を探し、UserComment を抽出。
-        // 完全な TIFF/IFD パーサは書かず、Rust fallback と同じく "ASCII\0\0\0" / "UNICODE\0" prefix を
-        // 直接 byte-scan する。EXIF UserComment 以外でこの 8 バイト並びが偶然出る可能性は低い。
-        var infotext = FindEXIFUserCommentInJpeg(data);
-        return BuildResult(infotext, "JPEG", fileSize, w, h);
+        var (tiffStart, tiffEnd) = FindJpegExifBlock(data);
+        return BuildFromExifBlock(data, tiffStart, tiffEnd, "JPEG", fileSize, w, h);
     }
 
     private static (int w, int h) GetJpegDimensions(byte[] data)
@@ -257,20 +253,21 @@ public sealed class AiImageMetadataService
         return (0, 0);
     }
 
-    /// <summary>JPEG の APP1 (FF E1) セグメントを走査して Exif の UserComment を取り出す。</summary>
-    private static string? FindEXIFUserCommentInJpeg(byte[] data)
+    /// <summary>JPEG の APP1 (FF E1) "Exif\0\0" セグメントを探し、TIFF 本体の [start, end) を返す。
+    /// 見つからなければ (-1, -1)。</summary>
+    private static (int start, int end) FindJpegExifBlock(byte[] data)
     {
         int i = 2;
         while (i + 4 <= data.Length)
         {
-            if (data[i] != 0xFF) return null;
+            if (data[i] != 0xFF) return (-1, -1);
             while (i < data.Length && data[i] == 0xFF) i++;
-            if (i >= data.Length) return null;
+            if (i >= data.Length) return (-1, -1);
             byte marker = data[i++];
-            if (marker == 0xD9 || marker == 0xDA) return null;
+            if (marker == 0xD9 || marker == 0xDA) return (-1, -1);
             if (marker is >= 0xD0 and <= 0xD7) continue;
             if (marker == 0x01) continue;
-            if (i + 2 > data.Length) return null;
+            if (i + 2 > data.Length) return (-1, -1);
             int segLen = (data[i] << 8) | data[i + 1];
             int segStart = i + 2;
             int segEnd   = Math.Min(data.Length, i + segLen);
@@ -280,13 +277,12 @@ public sealed class AiImageMetadataService
                 && data[segStart + 2] == 'i' && data[segStart + 3] == 'f'
                 && data[segStart + 4] == 0   && data[segStart + 5] == 0)
             {
-                var found = FindUserCommentInBuffer(data, segStart, segEnd);
-                if (!string.IsNullOrEmpty(found)) return found;
+                return (segStart + 6, segEnd); // "Exif\0\0" の直後が TIFF ヘッダ
             }
 
             i += segLen;
         }
-        return null;
+        return (-1, -1);
     }
 
     /// <summary>EXIF UserComment 値の "ASCII\0\0\0" / "UNICODE\0" prefix を直接 byte 検索して読む。
@@ -370,8 +366,8 @@ public sealed class AiImageMetadataService
     {
         long fileSize = data.LongLength;
         var (w, h) = GetWebpDimensions(data);
-        var infotext = FindEXIFUserCommentInWebp(data);
-        return BuildResult(infotext, "WEBP", fileSize, w, h);
+        var (tiffStart, tiffEnd) = FindWebpExifBlock(data);
+        return BuildFromExifBlock(data, tiffStart, tiffEnd, "WEBP", fileSize, w, h);
     }
 
     private static (int w, int h) GetWebpDimensions(byte[] data)
@@ -421,7 +417,9 @@ public sealed class AiImageMetadataService
         return (0, 0);
     }
 
-    private static string? FindEXIFUserCommentInWebp(byte[] data)
+    /// <summary>WebP RIFF の "EXIF" チャンクを探し、TIFF 本体の [start, end) を返す。
+    /// 見つからなければ (-1, -1)。一部エンコーダは EXIF チャンク先頭に "Exif\0\0" を付けるので吸収する。</summary>
+    private static (int start, int end) FindWebpExifBlock(byte[] data)
     {
         int i = 12;
         while (i + 8 <= data.Length)
@@ -432,10 +430,116 @@ public sealed class AiImageMetadataService
             if (payload + size > data.Length) break;
             if (fourcc == "EXIF")
             {
-                var found = FindUserCommentInBuffer(data, payload, payload + size);
-                if (!string.IsNullOrEmpty(found)) return found;
+                int ts = payload;
+                if (size >= 6 && data[payload] == 'E' && data[payload + 1] == 'x'
+                    && data[payload + 2] == 'i' && data[payload + 3] == 'f'
+                    && data[payload + 4] == 0   && data[payload + 5] == 0)
+                    ts = payload + 6;
+                return (ts, payload + size);
             }
             i = payload + size + (size & 1);
+        }
+        return (-1, -1);
+    }
+
+    // -----------------------------------------------------------------
+    // EXIF (TIFF) → メタデータ 共通経路 (JPEG / WebP)
+    //
+    // SD WebUI は EXIF UserComment (charset-prefix 付き) に infotext を入れる。
+    // ComfyUI は WebP/JPEG 保存時に EXIF ASCII タグへ JSON を入れる:
+    //   ImageDescription (0x010e) = "Workflow: {UI グラフ JSON}"  (nodes 配列形式 / パース対象外)
+    //   Make             (0x010f) = "Prompt: {API グラフ JSON}"   (node-id キー形式 / TryParseComfyPrompt 対象)
+    // タグ値は仕様上 ASCII だが ComfyUI は UTF-8 バイトをそのまま書くため UTF-8 で復号する。
+    // -----------------------------------------------------------------
+
+    private static AiImageMetadata BuildFromExifBlock(
+        byte[] data, int tiffStart, int tiffEnd, string format, long fileSize, int width, int height)
+    {
+        if (tiffStart >= 0 && tiffEnd > tiffStart)
+        {
+            var tags = ParseExifAsciiStringTags(data, tiffStart, tiffEnd);
+
+            // 1) いずれかの ASCII タグに SD WebUI infotext がある (一部エンコーダは ImageDescription に書く)。
+            foreach (var v in tags.Values)
+                if (IsSDWebUIInfotext(v))
+                    return BuildResult(v, format, fileSize, width, height);
+
+            // 2) ComfyUI: ImageDescription="Workflow: ..." / Make="Prompt: ..." の JSON を辿る。
+            var comfy = TryComfyFromExifTags(tags, format, fileSize, width, height);
+            if (comfy is { HasAiData: true }) return comfy;
+
+            // 3) 従来経路: EXIF UserComment (ASCII/UNICODE prefix) を byte-scan で拾う。
+            var uc = FindUserCommentInBuffer(data, tiffStart, tiffEnd);
+            if (!string.IsNullOrEmpty(uc))
+                return BuildResult(uc, format, fileSize, width, height);
+        }
+
+        // 何も拾えなければ基本情報のみ。
+        return new AiImageMetadata { Format = format, FileSize = fileSize, Width = width, Height = height };
+    }
+
+    /// <summary>TIFF IFD0 を走査し、ASCII (type=2) タグを tag → 文字列の辞書で返す。
+    /// オフセットはすべて tiffStart 基準。エンディアン (II/MM) を解釈する簡易パーサ。</summary>
+    private static Dictionary<int, string> ParseExifAsciiStringTags(byte[] data, int tiffStart, int tiffEnd)
+    {
+        var result = new Dictionary<int, string>();
+        try
+        {
+            if (tiffStart + 8 > tiffEnd) return result;
+            bool le;
+            if (data[tiffStart] == 'I' && data[tiffStart + 1] == 'I') le = true;
+            else if (data[tiffStart] == 'M' && data[tiffStart + 1] == 'M') le = false;
+            else return result;
+
+            uint ReadU16(int o) => le
+                ? (uint)(data[o] | (data[o + 1] << 8))
+                : (uint)((data[o] << 8) | data[o + 1]);
+            uint ReadU32(int o) => le
+                ? (uint)(data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24))
+                : (uint)((data[o] << 24) | (data[o + 1] << 16) | (data[o + 2] << 8) | data[o + 3]);
+
+            int ifd = tiffStart + (int)ReadU32(tiffStart + 4);
+            if (ifd + 2 > tiffEnd || ifd < tiffStart) return result;
+            int n = (int)ReadU16(ifd);
+            int p = ifd + 2;
+            for (int k = 0; k < n && p + 12 <= tiffEnd; k++, p += 12)
+            {
+                int tag   = (int)ReadU16(p);
+                int type  = (int)ReadU16(p + 2);
+                int count = (int)ReadU32(p + 4);
+                if (type != 2 || count <= 0) continue; // ASCII のみ
+
+                int valStart = count <= 4 ? p + 8 : tiffStart + (int)ReadU32(p + 8);
+                if (valStart < tiffStart || valStart + count > tiffEnd) continue;
+
+                int len = count;
+                while (len > 0 && data[valStart + len - 1] == 0) len--; // 末尾 NUL を除去
+                if (len <= 0) continue;
+
+                var s = Encoding.UTF8.GetString(data, valStart, len);
+                if (!result.ContainsKey(tag)) result[tag] = s;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AiImageMeta] exif ascii tag parse failed: {ex.Message}");
+        }
+        return result;
+    }
+
+    /// <summary>ComfyUI が EXIF ASCII タグに書く "Prompt: {...}" / "Workflow: {...}" から API グラフ JSON を
+    /// 取り出して <see cref="TryParseComfyPrompt"/> に渡す。Make ("Prompt:") を優先。</summary>
+    private static AiImageMetadata? TryComfyFromExifTags(
+        Dictionary<int, string> tags, string format, long fileSize, int width, int height)
+    {
+        foreach (var tag in new[] { 0x010f, 0x010e }) // Make → ImageDescription の順
+        {
+            if (!tags.TryGetValue(tag, out var raw) || string.IsNullOrEmpty(raw)) continue;
+            int brace = raw.IndexOf('{');
+            if (brace < 0) continue;
+            var json = raw.Substring(brace);
+            var meta = TryParseComfyPrompt(json, format, fileSize, width, height);
+            if (meta is { HasAiData: true }) return meta;
         }
         return null;
     }
@@ -546,15 +650,33 @@ public sealed class AiImageMetadataService
                 negative ??= ResolveTextRef(gIn, "negative",     root, depth: 0);
             }
 
-            // パラメータ収集 (sampler の入力 + latent サイズ + model)
+            // sampler が positive/negative を直接持たない (Impact BasicPipe / rgthree パイプ系) 場合の保険。
+            // グラフ全体から positive と negative の両入力を持つノード (ToBasicPipe 等) を探して辿る。
+            if (string.IsNullOrEmpty(positive) || string.IsNullOrEmpty(negative))
+            {
+                foreach (var prop in root.EnumerateObject())
+                {
+                    var node = prop.Value;
+                    if (node.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                    if (!node.TryGetProperty("inputs", out var ip)) continue;
+                    if (!ip.TryGetProperty("positive", out _) || !ip.TryGetProperty("negative", out _)) continue;
+
+                    if (string.IsNullOrEmpty(positive)) positive = ResolveTextRef(ip, "positive", root, depth: 0);
+                    if (string.IsNullOrEmpty(negative)) negative = ResolveTextRef(ip, "negative", root, depth: 0);
+                    if (!string.IsNullOrEmpty(positive) && !string.IsNullOrEmpty(negative)) break;
+                }
+            }
+
+            // パラメータ収集 (sampler の入力 + latent サイズ + model)。
+            // 値が配列参照 (= 他ノードのウィジェット値: rgthree Seed/Config 等) の場合は 1 ホップ辿ってリテラル化する。
             var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
-            CopyComfyParam(sIn, "steps",         parameters, "Steps");
-            CopyComfyParam(sIn, "cfg",           parameters, "CFG scale");
-            CopyComfyParam(sIn, "sampler_name",  parameters, "Sampler");
-            CopyComfyParam(sIn, "scheduler",     parameters, "Scheduler");
-            CopyComfyParam(sIn, "seed",          parameters, "Seed");
-            CopyComfyParam(sIn, "noise_seed",    parameters, "Seed");          // KSamplerAdvanced 系
-            CopyComfyParam(sIn, "denoise",       parameters, "Denoise");
+            CopyComfyParam(sIn, "steps",         parameters, "Steps",     root);
+            CopyComfyParam(sIn, "cfg",           parameters, "CFG scale", root);
+            CopyComfyParam(sIn, "sampler_name",  parameters, "Sampler",   root);
+            CopyComfyParam(sIn, "scheduler",     parameters, "Scheduler", root);
+            CopyComfyParam(sIn, "seed",          parameters, "Seed",      root);
+            CopyComfyParam(sIn, "noise_seed",    parameters, "Seed",      root); // KSamplerAdvanced 系
+            CopyComfyParam(sIn, "denoise",       parameters, "Denoise",   root);
 
             if (latW is int lw && latH is int lh) parameters["Size"] = $"{lw}x{lh}";
             if (!string.IsNullOrEmpty(model))     parameters["Model"] = model!;
@@ -647,11 +769,13 @@ public sealed class AiImageMetadataService
     }
 
     private static void CopyComfyParam(System.Text.Json.JsonElement inputs, string srcKey,
-                                       Dictionary<string, string> parameters, string outKey)
+                                       Dictionary<string, string> parameters, string outKey,
+                                       System.Text.Json.JsonElement root)
     {
         // 既に同 outKey に他の sampler 系入力で値が入っていたら上書きしない (seed と noise_seed の優先順位差を吸収)。
         if (parameters.ContainsKey(outKey)) return;
         if (!inputs.TryGetProperty(srcKey, out var v)) return;
+        v = ResolveScalarRef(v, srcKey, root, depth: 0); // 配列参照ならリテラルまで辿る
         var s = v.ValueKind switch
         {
             System.Text.Json.JsonValueKind.String => v.GetString(),
@@ -662,6 +786,44 @@ public sealed class AiImageMetadataService
         };
         if (!string.IsNullOrEmpty(s)) parameters[outKey] = s!;
     }
+
+    /// <summary>パラメータ値が配列参照 (= [refNodeId, outIdx]) のとき、参照先ノードの input から
+    /// 同名 (または同義) のリテラル widget 値を辿って取り出す (rgthree の Seed / KSampler Config 等)。
+    /// リテラルが見つからなければ元の値を返す。depth で循環/深掘りを打ち切る。</summary>
+    private static System.Text.Json.JsonElement ResolveScalarRef(
+        System.Text.Json.JsonElement v, string key, System.Text.Json.JsonElement root, int depth)
+    {
+        if (depth > 8) return v;
+        if (v.ValueKind != System.Text.Json.JsonValueKind.Array || v.GetArrayLength() < 1) return v;
+        if (v[0].ValueKind != System.Text.Json.JsonValueKind.String) return v;
+        if (!root.TryGetProperty(v[0].GetString()!, out var node)) return v;
+        if (!node.TryGetProperty("inputs", out var ip)) return v;
+
+        foreach (var name in ScalarSynonyms(key))
+        {
+            if (!ip.TryGetProperty(name, out var nv)) continue;
+            if (nv.ValueKind is System.Text.Json.JsonValueKind.Number
+                or System.Text.Json.JsonValueKind.String
+                or System.Text.Json.JsonValueKind.True
+                or System.Text.Json.JsonValueKind.False)
+                return nv;
+            if (nv.ValueKind == System.Text.Json.JsonValueKind.Array)
+                return ResolveScalarRef(nv, key, root, depth + 1);
+        }
+        return v;
+    }
+
+    private static string[] ScalarSynonyms(string key) => key switch
+    {
+        "seed"         => new[] { "seed", "noise_seed", "value" },
+        "noise_seed"   => new[] { "noise_seed", "seed", "value" },
+        "steps"        => new[] { "steps", "steps_total", "value" },
+        "cfg"          => new[] { "cfg", "value" },
+        "sampler_name" => new[] { "sampler_name", "value" },
+        "scheduler"    => new[] { "scheduler", "value" },
+        "denoise"      => new[] { "denoise", "value" },
+        _              => new[] { key, "value" },
+    };
 
     // -----------------------------------------------------------------
     // SD WebUI infotext パース (file-details.js の parseSDWebUIInfotext を C# に移植)
