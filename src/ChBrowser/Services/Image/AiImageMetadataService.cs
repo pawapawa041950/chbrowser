@@ -733,9 +733,14 @@ public sealed class AiImageMetadataService
         if (!node.TryGetProperty("inputs", out var inputs)) return null;
 
         // 直接の text 系フィールド (CLIPTextEncode は "text"、SDXL は text_g/text_l、Flux は clip_l/t5xxl)。
+        // text が他ノードへの参照になっている場合に備え、文字列を保持/受け渡しする中継ノードのフィールドも辿る:
+        //   - PrimitiveString / PrimitiveStringMultiline / String (rgthree 等) は "value"
+        //   - RegexReplace / 文字列加工ノードは "string"
+        // これらを終端まで辿らないと、CLIPTextEncode.text が primitive ノード参照のときにプロンプトが空になる。
+        // text 系を優先し value/string は後置 (= 本物の text があればそちらを採用)。
         // 重複は除き改行で連結する。
         var texts = new List<string>();
-        foreach (var fieldName in new[] { "text", "text_g", "text_l", "clip_l", "t5xxl", "prompt" })
+        foreach (var fieldName in new[] { "text", "text_g", "text_l", "clip_l", "t5xxl", "prompt", "value", "string" })
         {
             if (!inputs.TryGetProperty(fieldName, out var p)) continue;
             if (p.ValueKind == System.Text.Json.JsonValueKind.String)
