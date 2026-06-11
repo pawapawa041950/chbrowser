@@ -163,6 +163,16 @@ public sealed class AiImageMetadataService
                 return BuildResult(v, "PNG", fileSize, w, h);
         }
 
+        // ---- 戦略 1.5: XMP (iTXt "XML:com.adobe.xmp") 内の exif:UserComment ----
+        // Affinity Photo 等の画像編集ソフトで再保存されると tEXt parameters が剥がれ、
+        // infotext が XMP の exif:UserComment へ移ることがある。
+        if (chunks.TryGetValue("XML:com.adobe.xmp", out var xmp))
+        {
+            var info = TryGetInfotextFromXmp(xmp);
+            if (!string.IsNullOrEmpty(info) && IsSDWebUIInfotext(info))
+                return BuildResult(info, "PNG", fileSize, w, h);
+        }
+
         // ---- 戦略 2: ComfyUI prompt JSON (workflow グラフを辿って positive/negative を取り出す) ----
         if (chunks.TryGetValue("prompt", out var comfyPrompt))
         {
@@ -367,7 +377,34 @@ public sealed class AiImageMetadataService
         long fileSize = data.LongLength;
         var (w, h) = GetWebpDimensions(data);
         var (tiffStart, tiffEnd) = FindWebpExifBlock(data);
-        return BuildFromExifBlock(data, tiffStart, tiffEnd, "WEBP", fileSize, w, h);
+        var meta = BuildFromExifBlock(data, tiffStart, tiffEnd, "WEBP", fileSize, w, h);
+        if (meta.HasAiData) return meta;
+
+        // EXIF から拾えなければ "XMP " チャンクを見る (PNG の戦略 1.5 と同じ Affinity Photo 等の再保存ケース)。
+        var xmp = FindWebpXmpText(data);
+        if (xmp is not null)
+        {
+            var info = TryGetInfotextFromXmp(xmp);
+            if (!string.IsNullOrEmpty(info) && IsSDWebUIInfotext(info))
+                return BuildResult(info, "WEBP", fileSize, w, h);
+        }
+        return meta;
+    }
+
+    /// <summary>WebP RIFF の "XMP " チャンク (XMP XML) を UTF-8 文字列で返す。無ければ null。</summary>
+    private static string? FindWebpXmpText(byte[] data)
+    {
+        int i = 12;
+        while (i + 8 <= data.Length)
+        {
+            string fourcc = Encoding.ASCII.GetString(data, i, 4);
+            int size      = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i + 4, 4));
+            int payload   = i + 8;
+            if (payload + size > data.Length) break;
+            if (fourcc == "XMP ") return Encoding.UTF8.GetString(data, payload, size);
+            i = payload + size + (size & 1);
+        }
+        return null;
     }
 
     private static (int w, int h) GetWebpDimensions(byte[] data)
@@ -440,6 +477,26 @@ public sealed class AiImageMetadataService
             i = payload + size + (size & 1);
         }
         return (-1, -1);
+    }
+
+    // -----------------------------------------------------------------
+    // XMP (PNG iTXt "XML:com.adobe.xmp" / WebP "XMP " チャンク 共通)
+    // -----------------------------------------------------------------
+
+    /// <summary>XMP XML から exif:UserComment の本文を取り出して XML エンティティを復号する。
+    /// Affinity Photo 2 等は再保存時に SD WebUI infotext を exif:UserComment として XMP へ書き込む。
+    /// 要素形式 (&lt;exif:UserComment&gt;&lt;rdf:Alt&gt;&lt;rdf:li&gt;...) と属性形式 (exif:UserComment="...") の両方を見る。</summary>
+    private static string? TryGetInfotextFromXmp(string xmp)
+    {
+        var m = Regex.Match(xmp, @"<exif:UserComment>.*?<rdf:li[^>]*>(.*?)</rdf:li>", RegexOptions.Singleline);
+        if (!m.Success)
+            m = Regex.Match(xmp, @"exif:UserComment\s*=\s*""([^""]*)""", RegexOptions.Singleline);
+        if (!m.Success) return null;
+
+        var s = m.Groups[1].Value;
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        // &lt; / &amp; / &#xA; 等の XML エンティティを復号 (XML エンティティは HTML エンティティの部分集合)。
+        return System.Net.WebUtility.HtmlDecode(s);
     }
 
     // -----------------------------------------------------------------
@@ -572,10 +629,14 @@ public sealed class AiImageMetadataService
 
             // sampler ノードを 1 つ選ぶ (= 最初に見つかった "Sampler" 含む class_type)。
             // モデル / latent 寸法は別途グラフ全体から拾う。
+            // sampler が無いワークフロー (画像加工のみ等) もあるので、class_type を 1 つでも持っていれば
+            // ComfyUI API グラフとみなし、取れる情報だけ (Generator / Model / Source image 等) を返す。
+            bool isComfyGraph = false;
             System.Text.Json.JsonElement? samplerInputs = null;
-            string? model = null;
-            int?    latW  = null;
-            int?    latH  = null;
+            string? model    = null;
+            string? srcImage = null;
+            int?    latW     = null;
+            int?    latH     = null;
 
             foreach (var prop in root.EnumerateObject())
             {
@@ -583,6 +644,7 @@ public sealed class AiImageMetadataService
                 if (node.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
                 if (!node.TryGetProperty("class_type", out var ctElem)) continue;
                 var ct = ctElem.GetString() ?? "";
+                isComfyGraph = true;
 
                 // sampler を 1 つ見つけたら hold (= 後段で positive/negative を辿る)
                 if (samplerInputs is null && ct.Contains("Sampler", StringComparison.OrdinalIgnoreCase))
@@ -628,26 +690,52 @@ public sealed class AiImageMetadataService
                         latH = hEl.GetInt32();
                     }
                 }
+
+                // 入力画像 (img2img / 画像加工ワークフロー): LoadImage / "D2 Load Image" 等の image 入力 (= ファイル名リテラル)。
+                if (srcImage is null
+                    && ct.Replace(" ", "").Contains("LoadImage", StringComparison.OrdinalIgnoreCase)
+                    && node.TryGetProperty("inputs", out var ip3)
+                    && ip3.TryGetProperty("image", out var imgEl)
+                    && imgEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    srcImage = imgEl.GetString();
+                }
             }
 
-            if (samplerInputs is null) return null;
-            var sIn = samplerInputs.Value;
+            if (!isComfyGraph) return null;
 
-            // positive / negative。SamplerCustomAdvanced は guider 経由なので fallback で辿る。
-            string? positive = ResolveTextRef(sIn, "positive", root, depth: 0);
-            string? negative = ResolveTextRef(sIn, "negative", root, depth: 0);
+            string? positive = null;
+            string? negative = null;
+            var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            if ((positive is null || negative is null)
-                && sIn.TryGetProperty("guider", out var gRef)
-                && gRef.ValueKind == System.Text.Json.JsonValueKind.Array
-                && gRef.GetArrayLength() >= 1
-                && gRef[0].ValueKind == System.Text.Json.JsonValueKind.String
-                && root.TryGetProperty(gRef[0].GetString()!, out var guiderNode)
-                && guiderNode.TryGetProperty("inputs", out var gIn))
+            if (samplerInputs is { } sIn)
             {
-                positive ??= ResolveTextRef(gIn, "positive",     root, depth: 0)
-                          ?? ResolveTextRef(gIn, "conditioning", root, depth: 0);
-                negative ??= ResolveTextRef(gIn, "negative",     root, depth: 0);
+                // positive / negative。SamplerCustomAdvanced は guider 経由なので fallback で辿る。
+                positive = ResolveTextRef(sIn, "positive", root, depth: 0);
+                negative = ResolveTextRef(sIn, "negative", root, depth: 0);
+
+                if ((positive is null || negative is null)
+                    && sIn.TryGetProperty("guider", out var gRef)
+                    && gRef.ValueKind == System.Text.Json.JsonValueKind.Array
+                    && gRef.GetArrayLength() >= 1
+                    && gRef[0].ValueKind == System.Text.Json.JsonValueKind.String
+                    && root.TryGetProperty(gRef[0].GetString()!, out var guiderNode)
+                    && guiderNode.TryGetProperty("inputs", out var gIn))
+                {
+                    positive ??= ResolveTextRef(gIn, "positive",     root, depth: 0)
+                              ?? ResolveTextRef(gIn, "conditioning", root, depth: 0);
+                    negative ??= ResolveTextRef(gIn, "negative",     root, depth: 0);
+                }
+
+                // パラメータ収集 (sampler の入力)。
+                // 値が配列参照 (= 他ノードのウィジェット値: rgthree Seed/Config 等) の場合は 1 ホップ辿ってリテラル化する。
+                CopyComfyParam(sIn, "steps",         parameters, "Steps",     root);
+                CopyComfyParam(sIn, "cfg",           parameters, "CFG scale", root);
+                CopyComfyParam(sIn, "sampler_name",  parameters, "Sampler",   root);
+                CopyComfyParam(sIn, "scheduler",     parameters, "Scheduler", root);
+                CopyComfyParam(sIn, "seed",          parameters, "Seed",      root);
+                CopyComfyParam(sIn, "noise_seed",    parameters, "Seed",      root); // KSamplerAdvanced 系
+                CopyComfyParam(sIn, "denoise",       parameters, "Denoise",   root);
             }
 
             // sampler が positive/negative を直接持たない (Impact BasicPipe / rgthree パイプ系) 場合の保険。
@@ -667,19 +755,9 @@ public sealed class AiImageMetadataService
                 }
             }
 
-            // パラメータ収集 (sampler の入力 + latent サイズ + model)。
-            // 値が配列参照 (= 他ノードのウィジェット値: rgthree Seed/Config 等) の場合は 1 ホップ辿ってリテラル化する。
-            var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
-            CopyComfyParam(sIn, "steps",         parameters, "Steps",     root);
-            CopyComfyParam(sIn, "cfg",           parameters, "CFG scale", root);
-            CopyComfyParam(sIn, "sampler_name",  parameters, "Sampler",   root);
-            CopyComfyParam(sIn, "scheduler",     parameters, "Scheduler", root);
-            CopyComfyParam(sIn, "seed",          parameters, "Seed",      root);
-            CopyComfyParam(sIn, "noise_seed",    parameters, "Seed",      root); // KSamplerAdvanced 系
-            CopyComfyParam(sIn, "denoise",       parameters, "Denoise",   root);
-
-            if (latW is int lw && latH is int lh) parameters["Size"] = $"{lw}x{lh}";
-            if (!string.IsNullOrEmpty(model))     parameters["Model"] = model!;
+            if (latW is int lw && latH is int lh)  parameters["Size"] = $"{lw}x{lh}";
+            if (!string.IsNullOrEmpty(model))      parameters["Model"] = model!;
+            if (!string.IsNullOrEmpty(srcImage))   parameters["Source image"] = srcImage!;
             // 参考 viewer に合わせて Generator を埋める。ComfyUI 由来 (= prompt JSON が valid だった) のは確定。
             parameters["Generator"] = "ComfyUI";
 
