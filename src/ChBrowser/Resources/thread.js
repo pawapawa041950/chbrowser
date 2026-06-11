@@ -3085,14 +3085,17 @@
         return frag;
     }
 
-    /** ポップアップを表示位置に配置。下に収まらないなら上に出す。viewport (= ペイン) 内に収める。 */
+    /** ポップアップを表示位置に配置。下に収まらないなら上に出す。viewport (= ペイン) 内に収める。
+     *  下にも上にも収まらない場合は anchor と縦に重なってしまう (= きっかけのレス番号やアンカーが
+     *  popup の下に隠れてクリックできなくなる) ので、anchor の右 (右が狭ければ左) に横ずらしして出す。 */
     function positionPopup(el, anchor) {
         const rect = anchor.getBoundingClientRect();
         const vw = document.documentElement.clientWidth;
         const vh = document.documentElement.clientHeight;
         const preferLeft = rect.left + window.scrollX;
 
-        // 一旦下に置いて offsetWidth/Height を測る
+        // 一旦下に置いて offsetWidth/Height を測る (横ずらし時に縮めた maxWidth が残らないようリセット)
+        el.style.maxWidth = '';
         el.style.visibility = 'hidden';
         el.style.display = 'block';
         el.style.left = preferLeft + 'px';
@@ -3101,26 +3104,39 @@
         const w = el.offsetWidth;
         const h = el.offsetHeight;
 
-        // 横位置: viewport 右端をはみ出すなら左に寄せる
-        let left = preferLeft;
-        if (left + w > vw - 4) left = Math.max(4, vw - w - 4);
-        el.style.left = left + 'px';
-
-        // 縦位置: 下に収まれば下、収まらず上に収まるなら上、どちらも無理ならスペースの広い側
+        // 縦位置: 下に収まれば下、収まらず上に収まるなら上
         const spaceBelow = vh - rect.bottom;
         const spaceAbove = rect.top;
-        let top;
-        if (h <= spaceBelow - 4) {
-            top = rect.bottom + window.scrollY + 2;
-        } else if (h <= spaceAbove - 4) {
-            top = rect.top + window.scrollY - h - 2;
-        } else if (spaceAbove > spaceBelow) {
-            // 上にもギリギリ。viewport 上端から表示 (はみ出した分は popup 内スクロール)
-            top = window.scrollY + 4;
-        } else {
-            top = rect.bottom + window.scrollY + 2;
+        if (h <= spaceBelow - 4 || h <= spaceAbove - 4) {
+            // 横位置: viewport 右端をはみ出すなら左に寄せる
+            let left = preferLeft;
+            if (left + w > vw - 4) left = Math.max(4, vw - w - 4);
+            el.style.left = left + 'px';
+            el.style.top = (h <= spaceBelow - 4
+                ? rect.bottom + window.scrollY + 2
+                : rect.top + window.scrollY - h - 2) + 'px';
+            el.style.visibility = '';
+            return;
         }
-        el.style.top = top + 'px';
+
+        // 上下どちらにも収まらない → anchor の横に出す。スペースの広い側を選び、
+        // そちらに収まるよう maxWidth を縮める (幅が縮むと折返しで高さが伸びるので再測定する)。
+        const gap = 6;
+        const rightSpace = vw - rect.right - gap - 4;
+        const leftSpace  = rect.left - gap - 4;
+        const useRight = rightSpace >= w || rightSpace >= leftSpace;
+        el.style.maxWidth = Math.max(120, useRight ? rightSpace : leftSpace) + 'px';
+        const w2 = el.offsetWidth;
+        const h2 = el.offsetHeight;
+
+        el.style.left = (useRight
+            ? rect.right + window.scrollX + gap
+            : Math.max(4, rect.left + window.scrollX - gap - w2)) + 'px';
+
+        // 縦は anchor 上端に揃えつつ viewport 内にクランプ (max-height 60vh なので必ず収まる)
+        let top = Math.min(rect.top, vh - h2 - 4);
+        top = Math.max(4, top);
+        el.style.top = (top + window.scrollY) + 'px';
 
         el.style.visibility = '';
     }
