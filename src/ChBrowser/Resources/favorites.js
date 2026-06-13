@@ -55,6 +55,11 @@
             post({ type: 'openAllLogs' });
             return;
         }
+        if (t === 'non-fav-logs') {
+            // クリック設定に関わらず単一クリックで開く (機能項目)
+            post({ type: 'openNonFavLogs' });
+            return;
+        }
         if (openOnSingleClick) {
             post({ type: 'openFavorite', id: li.dataset.id });
         }
@@ -70,7 +75,7 @@
             e.preventDefault();
             return;
         }
-        if (t === 'all-logs') {
+        if (t === 'all-logs' || t === 'non-fav-logs') {
             e.preventDefault();
             return; // single-click 経路で処理済
         }
@@ -228,7 +233,7 @@
         }
         var t = li.dataset.type;
         // 機能フォルダ / 全ログ には現状コンテキストメニューを出さない
-        if (t === 'function-folder' || t === 'all-logs') return;
+        if (t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs') return;
         setSelected(li);
         post({
             type:   'contextMenu',
@@ -255,7 +260,7 @@
         // 仮想ルート / 機能フォルダ / 全ログ は drag 不可 (= 永続化対象でないので動かしようがない)
         if (!li) { e.preventDefault(); return; }
         var t = li.dataset.type;
-        if (t === 'virtual-root' || t === 'function-folder' || t === 'all-logs') {
+        if (t === 'virtual-root' || t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs') {
             e.preventDefault();
             return;
         }
@@ -302,7 +307,7 @@
             return;
         }
         // 機能フォルダ / 全ログ は drop 受け付け不可
-        if (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs') {
+        if (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs') {
             clearDropIndicators();
             e.dataTransfer.dropEffect = 'none';
             return;
@@ -337,7 +342,7 @@
         if (!draggingId) return;
         var li = findItem(e.target);
         // 機能フォルダ / 全ログへの drop は無視
-        if (li && (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs')) {
+        if (li && (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs')) {
             clearDropIndicators();
             draggingId = null;
             return;

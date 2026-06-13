@@ -30,6 +30,9 @@ public static class FavoritesHtmlBuilder
           .Append(@"<li class=""fav-item board-row"" data-type=""all-logs"">")
           .Append(@"<span class=""icon icon-board""></span><span class=""label"">全ログ</span>")
           .Append(@"</li>")
+          .Append(@"<li class=""fav-item board-row"" data-type=""non-fav-logs"">")
+          .Append(@"<span class=""icon icon-board""></span><span class=""label"">お気に入り以外の全ログ</span>")
+          .Append(@"</li>")
           .Append(@"</ul></details></li>");
 
         // 全エントリを「お気に入り」仮想ルートフォルダの下に入れる。

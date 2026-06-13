@@ -14,6 +14,9 @@ public sealed partial class MainViewModel
     /// <summary>「全ログ」タブ識別用の固定 Guid (= <see cref="Guid.Empty"/> はお気に入り仮想ルートが使うので衝突回避)。</summary>
     private static readonly Guid AllLogsTabId = new("ffffffff-ffff-ffff-ffff-fffffffffffe");
 
+    /// <summary>「お気に入り以外の全ログ」タブ識別用の固定 Guid (= <see cref="AllLogsTabId"/> のお気に入り除外版)。</summary>
+    private static readonly Guid NonFavLogsTabId = new("ffffffff-ffff-ffff-ffff-fffffffffffd");
+
     /// <summary>「次スレ候補検索」タブの ID 計算で <see cref="ComputeNextThreadTabId"/> が使う prefix
     /// (= 同 (board, title) なら同タブを再利用するための deterministic hash)。</summary>
     private const string NextThreadSearchTabIdPrefix = "nextthread:";
@@ -157,6 +160,12 @@ public sealed partial class MainViewModel
             return Task.CompletedTask;
         }
 
+        if (tab.FavoritesFolderId == NonFavLogsTabId)
+        {
+            RefreshNonFavLogsTab(tab);
+            return Task.CompletedTask;
+        }
+
         if (tab.FavoritesFolderId is Guid id)
         {
             // 仮想ルート (= Guid.Empty) ならお気に入り全体、それ以外なら ID で folder 参照を引き戻す
@@ -191,6 +200,24 @@ public sealed partial class MainViewModel
         return Task.CompletedTask;
     }
 
+    /// <summary>「お気に入り以外の全ログ」タブを開く (= 全ログから ★ 付きスレを除外したもの)。
+    /// 既存タブがあればアクティブ化、無ければ生成して中身を構築する。</summary>
+    public Task OpenNonFavLogsAsync()
+    {
+        var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == NonFavLogsTabId);
+        if (existingTab is not null)
+        {
+            ActivateThreadListTab(existingTab);
+            return Task.CompletedTask;
+        }
+
+        var tab = new ThreadListTabViewModel(NonFavLogsTabId, "お気に入り以外の全ログ", t => RemoveThreadListTab(t));
+        ThreadListTabs.Add(tab);
+        ActivateThreadListTab(tab);
+        RefreshNonFavLogsTab(tab);
+        return Task.CompletedTask;
+    }
+
     /// <summary>「全ログ」タブの中身を再構築する (= ディスク walk + ローカル subject.txt との突合)。
     /// HTTP は呼ばない (ローカル状態のスナップショット)。</summary>
     private void RefreshAllLogsTab(ThreadListTabViewModel tab)
@@ -199,7 +226,7 @@ public sealed partial class MainViewModel
         {
             tab.IsBusy        = true;
             tab.StatusMessage = "全ログを収集中...";
-            var items         = BuildAllLogsItems();
+            var items         = BuildAllLogsItems(excludeFavorites: false);
             tab.SetItems(items, DateTimeOffset.UtcNow);
             tab.Header        = $"📁 全ログ ({items.Count})";
             tab.StatusMessage = $"全ログ: {items.Count} 件";
@@ -214,10 +241,33 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>「お気に入り以外の全ログ」タブの中身を再構築する (= 全ログから ★ 付きスレを除外)。</summary>
+    private void RefreshNonFavLogsTab(ThreadListTabViewModel tab)
+    {
+        try
+        {
+            tab.IsBusy        = true;
+            tab.StatusMessage = "お気に入り以外の全ログを収集中...";
+            var items         = BuildAllLogsItems(excludeFavorites: true);
+            tab.SetItems(items, DateTimeOffset.UtcNow);
+            tab.Header        = $"📁 お気に入り以外の全ログ ({items.Count})";
+            tab.StatusMessage = $"お気に入り以外の全ログ: {items.Count} 件";
+        }
+        catch (Exception ex)
+        {
+            tab.StatusMessage = $"お気に入り以外の全ログ取得失敗: {ex.Message}";
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
+    }
+
     /// <summary>data/&lt;rootDomain&gt;/&lt;dir&gt;/*.dat を全件走査し、各 dat を 1 行 (<see cref="ThreadListItem"/>) に変換する。
     /// subject.txt があれば突合してタイトル / postCount / 状態 (青/緑) を引き、
-    /// なければ dat の 1 行目から title を取って Dropped (茶) でマーク。</summary>
-    private List<ThreadListItem> BuildAllLogsItems()
+    /// なければ dat の 1 行目から title を取って Dropped (茶) でマーク。
+    /// <paramref name="excludeFavorites"/>=true ならお気に入り登録済みのスレを一覧から除外する。</summary>
+    private List<ThreadListItem> BuildAllLogsItems(bool excludeFavorites)
     {
         var items   = new List<ThreadListItem>();
         var favSet  = Favorites.CollectFavoriteThreadKeys();
@@ -261,6 +311,7 @@ public sealed partial class MainViewModel
                     }
 
                     var fav = favSet.Contains((board.Host, dirName, key));
+                    if (excludeFavorites && fav) continue;
                     items.Add(new ThreadListItem(info, board.Host, dirName, board.BoardName, state, fav));
                 }
             }
