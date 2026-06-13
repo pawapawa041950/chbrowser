@@ -2,6 +2,8 @@
 
 Windows 用の 5ch.io 専用ブラウザ。
 
+本アプリ全編をClaude Code(コーディングAI)により作成しています。
+
 <!-- スクリーンショット (任意): docs/screenshots/ にファイルを置いて差し替え -->
 <!-- ![スクリーンショット](docs/screenshots/main.png) -->
 
