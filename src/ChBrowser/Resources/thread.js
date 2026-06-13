@@ -2545,6 +2545,18 @@
         debugLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
     }
 
+    /** 比例スクロール復帰の基準 Y (ドキュメント座標)。
+     *  「以降新レス」ラベルがあればそのラベルの上端、無ければ section A 終端 (= #posts 下端) を返す。
+     *  差分取得の前後で同じ基準を使い、「トップ〜ここまで」を 1.0 とした相対位置を保つために用いる。 */
+    function labelOrContentEndY() {
+        const sy = window.scrollY || window.pageYOffset || 0;
+        const band = document.getElementById('new-posts-mark-band');
+        if (band) return band.getBoundingClientRect().top + sy;
+        const root = document.getElementById('posts');
+        if (root) return root.getBoundingClientRect().bottom + sy;
+        return 0;
+    }
+
     /** スレッド末尾に「最後尾」ラベル (= 最終レスの直後) を 1 つだけ常時配置する。
      *  デザインは new-posts-mark-band と同形 (細い横帯)、色だけ暗いスレート系で別 CSS クラスを使う。
      *  flat / tree / dedupTree いずれの表示モードでも `#posts` の最後の子として末尾に出る。
@@ -3707,6 +3719,16 @@
         // appendPosts 経路だけが書き込む lastDeltaMark を見る。
         const isNewRefresh = isDelta && newMark != null && newMark !== lastDeltaMark;
 
+        // 比例スクロール復帰の捕捉: isNewRefresh では promoteOnNewRefresh が section A のツリーを
+        // 組み替えてラベル (= 既読の終端) の位置が動くため、描画前に「トップ〜ラベルまでの読書位置 (%)」
+        // を記録しておき、描画後に同じ % へ復帰させる (= 構造変更による scroll ずれを吸収する)。
+        // ユーザーが手動スクロール済のときだけ対象 (未スクロール時は tryScrollToTarget の従来復元に任せる)。
+        let deltaScrollFraction = null;
+        if (isNewRefresh && userHasScrolled) {
+            const refBefore = labelOrContentEndY();
+            if (refBefore > 0) deltaScrollFraction = (window.scrollY || 0) / refBefore;
+        }
+
         // 新 refresh 境界処理:
         //   1. 前 refresh で太字 (= is-new) になっていたレスを細字に戻す (全モード共通)。
         //   2. モード戦略の promoteOnNewRefresh に dispatch (dedupTree は section B 撤去 + 昇格、他は nop)。
@@ -3789,6 +3811,19 @@
         clearMetaDecorations(root);
         recomputeMetaMaps();
         decorateMeta(root);
+
+        // 差分前に記録した読書位置 (%) を、組み替え後の新しいラベル位置基準で復帰させる
+        // (= promoteOnNewRefresh による section A の高さ変化で生じる scroll ずれを吸収する)。
+        // ここはフィルタ / 装飾まで終えた最終レイアウトで実行する (= ラベル Y が確定している)。
+        if (deltaScrollFraction != null) {
+            const refAfter = labelOrContentEndY();
+            if (refAfter > 0) {
+                const vh     = document.documentElement.clientHeight;
+                const maxTop = Math.max(0, document.documentElement.scrollHeight - vh);
+                const target = Math.min(deltaScrollFraction * refAfter, maxTop);
+                window.scrollTo(0, Math.max(0, target));
+            }
+        }
     };
 
     window.setViewMode = function (mode) {
