@@ -3824,6 +3824,13 @@
                 window.scrollTo(0, Math.max(0, target));
             }
         }
+        // 未スクロール (= スレを開いた直後に差分が来た等) は比例復帰の対象外で、保存済み読了位置への
+        // 復帰は前半の tryScrollToTarget が担う。しかしそれは applyFilterToAllPosts / updateNewPostsMarkBand /
+        // 再装飾より前に走るため、その後の section A 高さ変化で揃えた位置がずれる。確定レイアウトで
+        // もう一度合わせ直す (tryScrollToTarget は userHasScrolled 時は即 return するので二重呼び出しは安価)。
+        else if (!userHasScrolled) {
+            tryScrollToTarget();
+        }
     };
 
     window.setViewMode = function (mode) {
