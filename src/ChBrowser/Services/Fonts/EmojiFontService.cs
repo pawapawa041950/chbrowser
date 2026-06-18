@@ -69,8 +69,17 @@ public static class EmojiFontService
     {
         if (!Active || _virtualUrl is null) return null;
         return
-            $"\n@font-face{{font-family:'{FamilyName}';src:url('{_virtualUrl}');}}\n" +
+            $"\n{BuildFontFaceCssOrNull()}\n" +
             $"body{{font-family:{textFonts},'{FamilyName}','Segoe UI Emoji',{generic};}}\n";
+    }
+
+    /// <summary><c>@font-face</c> 宣言だけを返す (font-family の上書きは呼び出し側で行うケース用)。
+    /// <see cref="Active"/> でなければ null。書き込みウィンドウのテキスト入力 (textarea) のように
+    /// body ではなく特定要素にフォントを当てたいときに使う。</summary>
+    public static string? BuildFontFaceCssOrNull()
+    {
+        if (!Active || _virtualUrl is null) return null;
+        return $"@font-face{{font-family:'{FamilyName}';src:url('{_virtualUrl}');}}";
     }
 
     /// <summary>COLRv1 版 Noto Color Emoji をダウンロードして保存先に配置する。

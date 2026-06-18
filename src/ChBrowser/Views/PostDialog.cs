@@ -42,6 +42,14 @@ public sealed class PostDialog : Window
     private WebView2?           _previewWebView;
     private DispatcherTimer?    _previewDebounceTimer;
     private Button?             _previewToggleBtn;
+
+    // ---- 本文入力 (= WebView2 化したテキストエディタ) ----
+    // 本文だけ WPF TextBox ではなく WebView2 内の <textarea> にして、カラー絵文字 (Noto) を表示できるようにする。
+    // WPF はカラーフォント非対応のため。プレーンテキストの textarea で従来の TextBox 互換 (IME / 複数行) を保つ。
+    private WebView2?           _messageWebView;
+    private bool                _editorReady;   // textarea シェルの 'ready' を受けたか
+    private bool                _editorEcho;     // editor→VM 反映中フラグ (= VM→editor の押し戻しでキャレットを壊さないため)
+
     private Button?             _cookieSettingsToggleBtn;
     private FrameworkElement?   _cookieSettingsPanel;
     private Grid?               _outerGrid;
@@ -76,6 +84,7 @@ public sealed class PostDialog : Window
         {
             vm.PropertyChanged -= OnVmPropertyChanged;
             _previewDebounceTimer?.Stop();
+            try { _messageWebView?.Dispose(); } catch { /* 破棄失敗は無視 */ }
         };
     }
 
@@ -179,6 +188,13 @@ public sealed class PostDialog : Window
             WasSubmitted = true;
             Close();
         }
+        // 本文が editor 以外の経路 (引用挿入 / 初期値 / 送信後リセット等) で変わったら textarea に反映。
+        // editor 由来の変更 (_editorEcho 中) は押し戻さない (= キャレット位置を壊さない)。
+        if (e.PropertyName == nameof(PostFormViewModel.Message) && !_editorEcho)
+        {
+            PushEditorText();
+        }
+
         // プレビュー反映対象 (= 名前 / メール / 本文 / 題名 / IsSage)。
         if (e.PropertyName is nameof(PostFormViewModel.Name)
                           or nameof(PostFormViewModel.Mail)
@@ -316,20 +332,22 @@ public sealed class PostDialog : Window
         Grid.SetRow(bodyHeader, 2);
         root.Children.Add(bodyHeader);
 
-        // (3) message text box (multi-line)
-        var msgBox = new TextBox
+        // (3) 本文入力 — WebView2 内の <textarea> (カラー絵文字対応)。TextBox の見た目に合わせて枠を付ける。
+        // 実際の初期化 (EnsureCoreAsync + NavigateToString) はウィンドウ Loaded 後に行う
+        // (= 表示前に EnsureCoreWebView2Async すると「初期化済みだが非表示」になる事象を避けるため)。
+        _messageWebView = new WebView2
         {
-            AcceptsReturn         = true,
-            AcceptsTab            = true,
-            TextWrapping          = TextWrapping.Wrap,
-            VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            FontFamily            = new FontFamily("Yu Gothic UI, Meiryo, Segoe UI"),
-            MinHeight             = 120,
+            DefaultBackgroundColor = System.Drawing.Color.White,
+            MinHeight              = 120,
         };
-        msgBox.SetBinding(TextBox.TextProperty, new Binding(nameof(PostFormViewModel.Message)) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
-        Grid.SetRow(msgBox, 3);
-        root.Children.Add(msgBox);
+        var msgBorder = new Border
+        {
+            BorderBrush     = new SolidColorBrush(Color.FromRgb(0xAB, 0xAD, 0xB3)),
+            BorderThickness = new Thickness(1),
+            Child           = _messageWebView,
+        };
+        Grid.SetRow(msgBorder, 3);
+        root.Children.Add(msgBorder);
 
         // (4) Cookie 設定パネル — フッターの「Cookie 設定」ボタンで開閉する折り畳み領域。
         // 中身は認証モード切替 (どんぐり: なし / 通常 / メール認証) と Cookie 削除ボタン。
@@ -403,7 +421,10 @@ public sealed class PostDialog : Window
 
         Loaded += (_, _) =>
         {
-            // 編集 UX: スレ立てなら題名から、レスなら本文からフォーカス
+            // 本文エディタ (WebView2) を初期化。'ready' 受信後に初期テキスト流し込み + (レス時は) フォーカス。
+            _ = NavigateMessageEditorAsync();
+
+            // 編集 UX: スレ立てなら題名からフォーカス (レス時の本文フォーカスは editor 'ready' 側で行う)。
             if (_vm.IsNewThread)
             {
                 var subjectBoxes = FindVisualChildrenOfType<TextBox>(this);
@@ -416,10 +437,6 @@ public sealed class PostDialog : Window
                         break;
                     }
                 }
-            }
-            else
-            {
-                Keyboard.Focus(msgBox);
             }
         };
 
@@ -532,6 +549,127 @@ public sealed class PostDialog : Window
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[PostDialog] preview shell nav failed: {ex.Message}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 本文エディタ (WebView2 内の textarea)
+    // -----------------------------------------------------------------
+
+    /// <summary>本文エディタ WebView を初期化してエディタ HTML をロードする。
+    /// EnsureCoreAsync 経由なので絵文字フォントの CORS 配信ハンドラ / 仮想ホストも同梱で入る。</summary>
+    private async Task NavigateMessageEditorAsync()
+    {
+        if (_messageWebView is null) return;
+        try
+        {
+            await WebView2Helper.EnsureCoreAsync(_messageWebView).ConfigureAwait(true);
+            // 'ready' を取りこぼさないよう NavigateToString より前に購読する。
+            _messageWebView.WebMessageReceived += OnEditorWebMessageReceived;
+            _messageWebView.CoreWebView2.NavigateToString(BuildMessageEditorHtml());
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostDialog] message editor nav failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>本文 textarea を内包する最小 HTML。絵文字フォントが有効なら @font-face を注入し、
+    /// textarea の font-family に絵文字フォントを差し込んでカラー表示する (無効時は従来の WPF と同じ顔ぶれ)。</summary>
+    private static string BuildMessageEditorHtml()
+    {
+        var fontFace = ChBrowser.Services.Fonts.EmojiFontService.BuildFontFaceCssOrNull() ?? "";
+        var emojiFam = ChBrowser.Services.Fonts.EmojiFontService.Active
+            ? "'" + ChBrowser.Services.Fonts.EmojiFontService.FamilyName + "',"
+            : "";
+        return @"<!DOCTYPE html><html><head><meta charset=""utf-8""><style>
+html,body{margin:0;height:100%;overflow:hidden;}
+body{background:#fff;}
+" + fontFace + @"
+#ed{display:block;box-sizing:border-box;width:100%;height:100%;border:none;outline:none;resize:none;
+ padding:6px;font-family:'Yu Gothic UI','Meiryo'," + emojiFam + @"'Segoe UI Emoji','Segoe UI',sans-serif;
+ font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;overflow-y:auto;overflow-x:hidden;}
+</style></head><body><textarea id=""ed"" spellcheck=""false""></textarea>
+<script>
+var ed=document.getElementById('ed');
+function send(o){if(window.chrome&&window.chrome.webview)window.chrome.webview.postMessage(o);}
+ed.addEventListener('input',function(){send({type:'edit',text:ed.value});});
+ed.addEventListener('keydown',function(e){
+ if(e.key==='Escape'){e.preventDefault();send({type:'cancel'});}
+ else if(e.key==='Tab'){e.preventDefault();var s=ed.selectionStart,en=ed.selectionEnd,v=ed.value;
+  ed.value=v.slice(0,s)+'\t'+v.slice(en);ed.selectionStart=ed.selectionEnd=s+1;send({type:'edit',text:ed.value});}
+});
+if(window.chrome&&window.chrome.webview){window.chrome.webview.addEventListener('message',function(ev){
+ var d=ev.data;if(!d||typeof d!=='object')return;
+ if(d.type==='setText'){if(ed.value!==d.text)ed.value=(d.text||'');}
+ else if(d.type==='focus'){ed.focus();}
+});}
+send({type:'ready'});
+</script></body></html>";
+    }
+
+    /// <summary>本文エディタ WebView からの postMessage を処理する (ready / edit / cancel)。</summary>
+    private void OnEditorWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = doc.RootElement;
+            var type = root.TryGetProperty("type", out var tp) ? tp.GetString() : null;
+            switch (type)
+            {
+                case "ready":
+                    _editorReady = true;
+                    PushEditorText();                 // 初期値 (引用や復元された本文) を流し込む
+                    if (!_vm.IsNewThread) FocusEditor();
+                    break;
+                case "edit":
+                    // textarea の改行は LF のみ。旧 WPF TextBox は CRLF だったので、それに合わせて正規化し
+                    // 下流 (送信 / 行数カウント / kakikomi ログ / プレビュー正規化) の挙動を従来どおりに保つ。
+                    var text = (root.TryGetProperty("text", out var xp) ? (xp.GetString() ?? "") : "")
+                        .Replace("\r\n", "\n").Replace("\n", "\r\n");
+                    _editorEcho = true;
+                    _vm.Message = text;
+                    _editorEcho = false;
+                    break;
+                case "cancel":
+                    if (!_vm.IsBusy) Close();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostDialog] editor message failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>VM の Message を textarea に流し込む (外部経路での変更を反映)。</summary>
+    private void PushEditorText()
+    {
+        if (!_editorReady || _messageWebView?.CoreWebView2 is null) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(new { type = "setText", text = _vm.Message ?? "" });
+            _messageWebView.CoreWebView2.PostWebMessageAsJson(json);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostDialog] editor setText failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>本文エディタにフォーカスを移す (WPF 側 + textarea 側の両方)。</summary>
+    private void FocusEditor()
+    {
+        if (_messageWebView?.CoreWebView2 is null) return;
+        try
+        {
+            _messageWebView.Focus();
+            _messageWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "focus" }));
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostDialog] editor focus failed: {ex.Message}");
         }
     }
 
