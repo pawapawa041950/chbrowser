@@ -176,6 +176,14 @@ public partial class App : Application
 
         // WebResourceRequested による透過キャッシュ介在を有効化
         WebView2Helper.RegisterImageCache(_imageCache);
+
+        // 絵文字フォント (Noto Color Emoji) サービスを初期化。
+        // 画像キャッシュ仮想ホストにマウントされたキャッシュルート直下の fonts/ に置き、
+        // https://<host>/fonts/<file> で配信する (= スレ表示 / 一覧 / お気に入りの各シェルから参照)。
+        ChBrowser.Services.Fonts.EmojiFontService.Initialize(
+            fontsDir:   System.IO.Path.Combine(_imageCache.CacheRootDir, "fonts"),
+            virtualUrl: $"https://{ImageCacheService.VirtualHostName}/fonts/NotoColorEmoji-COLRv1.ttf",
+            enabled:    _currentConfig.UseNotoColorEmoji);
         // Phase 3: CORS proxy 用に HttpClient を登録 (動画サムネ抽出時の crossOrigin リクエストを横取り)。
         // MonazillaClient.Http を流用 (= 既存設定 Timeout / UA がそのまま効く)。
         WebView2Helper.RegisterHttpClient(_monazilla.Http);
@@ -813,6 +821,15 @@ public partial class App : Application
         // ビューアサムネサイズ
         if (_imageViewerVm is not null)
             _imageViewerVm.ThumbnailSize = Math.Clamp(config.ViewerThumbnailSize, 32, 256);
+
+        // 絵文字フォント利用 ON/OFF。変わったらシェルキャッシュを破棄して各ペインを再構築
+        // (= スレ表示は開き直しで反映、3 ペインは即再描画)。
+        if (prev.UseNotoColorEmoji != config.UseNotoColorEmoji)
+        {
+            ChBrowser.Services.Fonts.EmojiFontService.SetEnabled(config.UseNotoColorEmoji);
+            if (_mainVm is not null && _themeService is not null)
+                _mainVm.ReloadAllPaneCss(_themeService);
+        }
 
         // スレ表示 JS への broadcast (popularThreshold / imageSizeThresholdMb)
         _mainVm?.ApplyConfig(config);

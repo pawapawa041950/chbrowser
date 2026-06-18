@@ -288,11 +288,29 @@ public static partial class WebView2Helper
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Image);
         // <video> / <audio> 要素のメディアリクエストも対象 (Phase 3 で CORS proxy が必要)。
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Media);
+        // @font-face で読むダウンロード済み絵文字フォントを CORS 許可付きで配信するため Font も対象にする。
+        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Font);
 
         core.WebResourceRequested += (s, e) =>
         {
             var url = e.Request.Uri;
             var ctx = e.ResourceContext;
+
+            // ---- Font (= @font-face) リクエスト処理 ----
+            if (ctx == CoreWebView2WebResourceContext.Font)
+            {
+                // シェルは NavigateToString の opaque origin なので、仮想ホストのフォントは cross-origin 扱いと
+                // なりフォント CORS でブロックされうる。ダウンロード済み絵文字フォントだけ ACAO:* を付けて返す。
+                var fontPath = ChBrowser.Services.Fonts.EmojiFontService.FilePath;
+                if (fontPath is not null
+                    && url.IndexOf("/fonts/NotoColorEmoji-COLRv1.ttf", StringComparison.OrdinalIgnoreCase) >= 0
+                    && System.IO.File.Exists(fontPath))
+                {
+                    var deferralFont = e.GetDeferral();
+                    _ = ServeFontWithCorsAsync(core, e, fontPath, deferralFont);
+                }
+                return; // それ以外のフォントは素通り
+            }
 
             // ---- Media (= <video> / <audio>) リクエスト処理 ----
             if (ctx == CoreWebView2WebResourceContext.Media)
@@ -486,6 +504,33 @@ public static partial class WebView2Helper
     /// <summary>キャッシュヒットしたローカルファイルを <see cref="FileStream"/> で開いて
     /// WebView2 に応答として渡す。Worker thread で実行することで dispatcher を即時解放する。
     /// FileStream は WebView2 が必要分だけ lazy に読み、応答完了後に dispose する。</summary>
+    /// <summary>ダウンロード済み絵文字フォント (.ttf) を <c>Access-Control-Allow-Origin: *</c> 付きで配信する。
+    /// NavigateToString シェル (opaque origin) からの cross-origin @font-face をフォント CORS で
+    /// ブロックされないようにするため、仮想ホストの自動配信ではなくここで明示的にヘッダを付けて返す。</summary>
+    private static async Task ServeFontWithCorsAsync(
+        CoreWebView2 core,
+        CoreWebView2WebResourceRequestedEventArgs e,
+        string fontPath,
+        CoreWebView2Deferral deferral)
+    {
+        try
+        {
+            await Task.Yield();
+            var fs = new FileStream(fontPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var headers = "Content-Type: font/ttf\r\nAccess-Control-Allow-Origin: *";
+            e.Response  = core.Environment.CreateWebResourceResponse(fs, 200, "OK", headers);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[EmojiFont] serve failed for {fontPath}: {ex.Message}");
+            // Response 未設定 → 仮想ホストの通常配信にフォールバック
+        }
+        finally
+        {
+            deferral.Complete();
+        }
+    }
+
     private static async Task ServeFromCacheAsync(
         CoreWebView2 core,
         CoreWebView2WebResourceRequestedEventArgs e,
@@ -673,8 +718,13 @@ public static partial class WebView2Helper
             var postTemplate = theme?.PostHtmlTemplate ?? ChBrowser.Services.Render.EmbeddedAssets.Read("post.html");
             var postCss      = theme?.PostCss          ?? ChBrowser.Services.Render.EmbeddedAssets.Read("post.css");
 
+            // 絵文字フォント (Noto Color Emoji) が有効なら @font-face + body フォント上書きを末尾に追記。
+            // 本文は MS Pゴシック系。絵文字グリフだけ Noto に回す (= テキストフォントは据え置き)。
+            var emojiCss = ChBrowser.Services.Fonts.EmojiFontService
+                .BuildBodyFontCssOrNull("'MS Pゴシック','MS PGothic'", "monospace") ?? "";
+
             _shellHtmlCache = html
-                .Replace("/*{{CSS}}*/",                css + "\n" + postCss)
+                .Replace("/*{{CSS}}*/",                css + "\n" + postCss + emojiCss)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/",    bridge)
                 .Replace("/*{{JS}}*/",                 js)
                 .Replace("<!--{{POST_TEMPLATE}}-->",   postTemplate);

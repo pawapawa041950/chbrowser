@@ -29,6 +29,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _restoreOpenTabsOnStartup = true;
     /// <summary>(デバッグ用) 自動リカバリを止めて分析ログを出力するか。全般カテゴリ最下部のチェック。</summary>
     [ObservableProperty] private bool   _debugDisableRecovery  = false;
+    /// <summary>絵文字表示に Noto Color Emoji を使うか (全般カテゴリ)。未ダウンロード時は ON にできない。</summary>
+    [ObservableProperty] private bool   _useNotoColorEmoji     = false;
+    /// <summary>絵文字フォントがダウンロード済みか (表示専用・ConfigStorage には保存しない)。
+    /// false の間はチェックボックスを無効化し、ダウンロードボタンを押せる状態にする。</summary>
+    [ObservableProperty] private bool   _emojiFontDownloaded   = false;
+    /// <summary>絵文字フォントのダウンロード状況テキスト (表示専用)。</summary>
+    [ObservableProperty] private string _emojiFontStatus       = "";
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
     // AI カテゴリ (LLM 連携)
@@ -132,10 +139,55 @@ public sealed partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsThreadTabWidthByPx));
     }
 
+    /// <summary>ダウンロードボタンの表示文言 (未DL時「ダウンロード」/ DL済み時「ダウンロード済み」)。</summary>
+    public string EmojiFontButtonText => EmojiFontDownloaded ? "ダウンロード済み" : "ダウンロード";
+
+    // 絵文字フォントの DL 状態が変わったら、ボタン文言・CanExecute・チェックボックス可否を更新。
+    partial void OnEmojiFontDownloadedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(EmojiFontButtonText));
+        // コンストラクタの初期化ブロック (コマンド生成より前) からも呼ばれるため null 安全に。
+        DownloadEmojiFontCommand?.NotifyCanExecuteChanged();
+        // フォントが無くなった (削除等) のに ON のままなら OFF に落とす。
+        if (!value && UseNotoColorEmoji) UseNotoColorEmoji = false;
+    }
+
+    // 未ダウンロードのまま「利用する」を ON にはできない (XAML でも無効化するが二重の防御)。
+    partial void OnUseNotoColorEmojiChanged(bool value)
+    {
+        if (value && !EmojiFontDownloaded) UseNotoColorEmoji = false;
+    }
+
+    /// <summary>「Noto Color Emoji をダウンロード」ボタンの本体。COLRv1 版を自ディレクトリへ落とし、
+    /// 成功したらシェルキャッシュを破棄して各ペインに反映 (スレ表示は開き直しで反映)。</summary>
+    private async System.Threading.Tasks.Task DownloadEmojiFontAsync()
+    {
+        EmojiFontStatus = "ダウンロード中…";
+        try
+        {
+            var progress = new Progress<double>(p => EmojiFontStatus = $"ダウンロード中… {p * 100:F0}%");
+            await ChBrowser.Services.Fonts.EmojiFontService
+                .DownloadAsync(progress, System.Threading.CancellationToken.None)
+                .ConfigureAwait(true);
+            EmojiFontDownloaded = true;
+            EmojiFontStatus     = "ダウンロード済み";
+            // 設定 ON 済みなら即反映、OFF ならチェック可能になるだけ (= 次にチェックした時点で反映)。
+            _reloadAllCssAction?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            EmojiFontStatus = $"ダウンロード失敗: {ex.Message}";
+        }
+    }
+
     /// <summary>「画像」カテゴリで現在のキャッシュ使用量を表示するための文字列 (例: "512.3 MB / 1024 MB")。
     /// 設定ウィンドウを開くたびに <see cref="RefreshCacheSizeDisplay"/> で更新する。</summary>
     [ObservableProperty]
     private string _cacheSizeDisplay = "計算中…";
+
+    /// <summary>全般カテゴリの「Noto Color Emoji をダウンロード」ボタン用。
+    /// ダウンロード済みのときは <see cref="EmojiFontDownloaded"/> が true になり CanExecute=false で押せなくなる。</summary>
+    public IAsyncRelayCommand DownloadEmojiFontCommand { get; }
 
     public IRelayCommand RestartNowCommand     { get; }
     public IRelayCommand OpenCacheFolderCommand{ get; }
@@ -247,6 +299,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         EnableKakikomiLog            = initial.EnableKakikomiLog;
         RestoreOpenTabsOnStartup  = initial.RestoreOpenTabsOnStartup;
         DebugDisableRecovery         = initial.DebugDisableRecovery;
+        // 絵文字フォントの DL 状態 (表示専用・保存対象外) は UseNotoColorEmoji より先に確定させる。
+        // OnUseNotoColorEmojiChanged のクランプが EmojiFontDownloaded を参照するため、順序が逆だと
+        // 「DL 済みなのに未 DL 扱い」で設定 ON を毎回 OFF に戻してしまう。
+        EmojiFontDownloaded          = ChBrowser.Services.Fonts.EmojiFontService.IsDownloaded;
+        EmojiFontStatus              = EmojiFontDownloaded ? "ダウンロード済み" : "未ダウンロード";
+        UseNotoColorEmoji            = initial.UseNotoColorEmoji;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
         LlmApiUrl                    = initial.LlmApiUrl;
@@ -295,6 +353,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         // 全プロパティ変更を監視して debounce 開始
         PropertyChanged += OnAnyPropertyChanged;
+
+        // 絵文字フォントのダウンロード。実行中は AsyncRelayCommand が自動で再入を防ぐ。
+        // ダウンロード済みのときは CanExecute=false (= ボタンを押せない)。
+        DownloadEmojiFontCommand = new AsyncRelayCommand(DownloadEmojiFontAsync, () => !EmojiFontDownloaded);
 
         RestartNowCommand      = new RelayCommand(() => _restartNowAction());
         OpenCacheFolderCommand = new RelayCommand(() => _openCacheFolderAction());
@@ -414,6 +476,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
             case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
             case nameof(NgAiConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
+            case nameof(EmojiFontDownloaded):   // 絵文字フォントの DL 状態は表示専用 (ConfigStorage に書かない)
+            case nameof(EmojiFontStatus):       // 絵文字フォントの DL 状況テキストも表示専用
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -448,6 +512,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         EnableKakikomiLog           = EnableKakikomiLog,
         RestoreOpenTabsOnStartup = RestoreOpenTabsOnStartup,
         DebugDisableRecovery        = DebugDisableRecovery,
+        UseNotoColorEmoji           = UseNotoColorEmoji,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
         LlmApiUrl                   = LlmApiUrl,

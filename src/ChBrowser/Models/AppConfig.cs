@@ -22,6 +22,11 @@ public sealed record AppConfig
     /// 即時反映 — 設定変更タイミングではなく次回起動・終了で効く。</summary>
     public bool RestoreOpenTabsOnStartup { get; init; } = true;
 
+    /// <summary>絵文字表示にダウンロードした Noto Color Emoji (COLRv1) フォントを使うか。既定 OFF。
+    /// ON でもフォント未ダウンロードなら無効扱い (= Windows 標準フォントにフォールバック)。
+    /// 反映は開き直しから (各 WebView シェルの再構築が必要)。Android と同系統の絵文字デザインになる。</summary>
+    public bool UseNotoColorEmoji { get; init; } = false;
+
     /// <summary>(デバッグ用) ON の間だけ「スレ表示真っ白」現象の分析ログを出力し、
     /// バグ発生時の自動リカバリ (ProcessFailed→Reload / 内部 reload→resync) を止める。
     /// 既定 OFF。通常運用では使わない。即時反映 (= <see cref="ChBrowser.Services.Logging.DebugFlags"/> と同期)。</summary>

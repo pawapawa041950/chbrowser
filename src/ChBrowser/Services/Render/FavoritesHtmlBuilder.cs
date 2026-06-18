@@ -124,8 +124,11 @@ public static class FavoritesHtmlBuilder
             var css    = EmbeddedAssets.ReadCss("favorites.css");  // disk-first
             var js     = EmbeddedAssets.Read("favorites.js");
             var bridge = EmbeddedAssets.Read("shortcut-bridge.js");
+            // 絵文字フォント (Noto Color Emoji) が有効なら絵文字グリフだけ Noto に回す (テキストは据え置き)。
+            var emojiCss = ChBrowser.Services.Fonts.EmojiFontService
+                .BuildBodyFontCssOrNull("'Segoe UI','Yu Gothic UI','Meiryo'", "sans-serif") ?? "";
             _shellHtmlCache = html
-                .Replace("/*{{CSS}}*/",             css)
+                .Replace("/*{{CSS}}*/",             css + emojiCss)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
                 .Replace("/*{{JS}}*/",              js);
             return _shellHtmlCache;

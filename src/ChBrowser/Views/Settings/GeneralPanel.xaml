@@ -45,6 +45,31 @@
                   IsChecked="{Binding RestoreOpenTabsOnStartup, Mode=TwoWay}"
                   Margin="0,0,0,4" />
 
+        <!-- 絵文字フォント。Noto Color Emoji (COLRv1) を自ディレクトリにダウンロードし、絵文字表示に使う。 -->
+        <Separator Margin="0,20,0,12" />
+        <TextBlock Text="絵文字フォント" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,8">
+            Windows 標準フォントが未対応の新しい絵文字も表示できるようになります。
+            Android と同じ絵文字デザインになります。
+        </TextBlock>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+            <CheckBox Content="絵文字の表示に Noto Color Emoji フォントを利用する"
+                      VerticalAlignment="Center"
+                      IsChecked="{Binding UseNotoColorEmoji, Mode=TwoWay}"
+                      IsEnabled="{Binding EmojiFontDownloaded}" />
+            <Button Content="{Binding EmojiFontButtonText}"
+                    Command="{Binding DownloadEmojiFontCommand}"
+                    MinWidth="120"
+                    Padding="10,3"
+                    Margin="16,0,0,0"
+                    VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock Text="{Binding EmojiFontStatus}"
+                   Foreground="#666"
+                   Margin="0,0,0,4" />
+
         <!-- (デバッグ) スレ表示真っ白現象の分析用。ON の間だけ自動リカバリを止めて分析ログを出力する。 -->
         <Separator Margin="0,20,0,12" />
         <TextBlock Text="デバッグ" FontWeight="SemiBold" Margin="0,0,0,4" />
