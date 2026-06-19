@@ -587,8 +587,8 @@ html,body{margin:0;height:100%;overflow:hidden;}
 body{background:#fff;}
 " + fontFace + @"
 #ed{display:block;box-sizing:border-box;width:100%;height:100%;border:none;outline:none;resize:none;
- padding:6px;font-family:'Yu Gothic UI','Meiryo'," + emojiFam + @"'Segoe UI Emoji','Segoe UI',sans-serif;
- font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;overflow-y:auto;overflow-x:hidden;}
+ padding:6px;font-family:'MS Pゴシック','MS PGothic'," + emojiFam + @"'Segoe UI Emoji',monospace;
+ font-size:14px;line-height:1.25;white-space:pre-wrap;word-break:break-word;overflow-y:auto;overflow-x:hidden;}
 </style></head><body><textarea id=""ed"" spellcheck=""false""></textarea>
 <script>
 var ed=document.getElementById('ed');

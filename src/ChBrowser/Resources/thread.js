@@ -1606,7 +1606,15 @@
         }, 200);
     }
     document.addEventListener('load', function (e) {
-        if (e.target && e.target.tagName === 'IMG') scheduleScrollbarUpdate();
+        if (e.target && e.target.tagName === 'IMG') {
+            scheduleScrollbarUpdate();
+            // 既読位置復元中 (= まだユーザーがスクロールしていない) に section A 上方の画像が遅延ロードで
+            // 高さを得ると、それまで合わせていたターゲットが下方向へずれる。巡回 (プリフェッチ) 経由は
+            // 差分がメモリ即時投入されるためこのズレが顕著に出る (通常経路はネット往復が偶然これを隠す)。
+            // 画像ロードのたびに再アラインして追従する。tryScrollToTarget は userHasScrolled なら即 return し、
+            // 既に揃っていれば jolt 防止の no-op 判定で何もしないので、繰り返し呼んでも安価。
+            tryScrollToTarget();
+        }
     }, true);
 
     // ---------- 画像サイズしきい値 (HEAD で size 確認 → 自動ロード or プレースホルダ) ----------
