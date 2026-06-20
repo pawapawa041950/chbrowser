@@ -2489,6 +2489,30 @@
         return best;
     }
 
+    /** 保存された読了 prefix (= pendingScrollTarget) が「前回スレを末尾まで読み終えていた」を意味するか。
+     *
+     *  判定: 保存値 N が「section A (= 旧レス) の最後のレス番号」以上か。
+     *    findReadProgressMaxNumber は末尾まで見ていれば maxN (= その時点の最後のレス) を返すので、
+     *    再オープン時に旧レス側 (= 新着境界 markPostNumber より手前) の最大番号と一致すれば「末尾まで読了」。
+     *  これが true のときは、ツリーのネストでレイアウトが前回と変わっていても、番号ベースの
+     *  findBottommostPrimaryInRange に頼らず「絶対最下部」へ復帰させる (= 末尾の意図を確実に再現)。
+     *  新着があれば最下部 = 新着の末尾になる (= 末尾に追従)。 */
+    function savedTargetMeansBottom() {
+        if (pendingScrollTarget == null || allPosts.length === 0) return false;
+        let lastOld;
+        if (markPostNumber == null) {
+            // 新着セクション無し → 全レスが旧レス。最後のレス番号が境界。
+            lastOld = allPosts[allPosts.length - 1].number;
+        } else {
+            // markPostNumber 以降は section B (新着)。その手前の最大番号が「旧レスの末尾」。
+            lastOld = 0;
+            for (let i = allPosts.length - 1; i >= 0; i--) {
+                if (allPosts[i].number < markPostNumber) { lastOld = allPosts[i].number; break; }
+            }
+        }
+        return lastOld > 0 && pendingScrollTarget >= lastOld;
+    }
+
     /** スレ開いた直後に保存値 N にあわせて復元スクロールを行う。
      *
      *  方針 (= ユーザ仕様):
@@ -2516,6 +2540,29 @@
         //   allPosts は番号昇順なので末尾要素の number が「到達済み最大番号」= ストリーミング進捗を表す。
         const loadedMaxNumber = allPosts[allPosts.length - 1].number;
         if (loadedMaxNumber < N) return;
+
+        // 「前回、旧レスを末尾まで読了していた」場合は、閉じたときの位置 (= 旧レスの末尾) を再現する。
+        // レイアウト依存の番号アンカー (findBottommost) ではなく、境界に確実に合わせるのが狙い。
+        if (savedTargetMeansBottom()) {
+            if (markPostNumber == null) {
+                // 新着なし → 旧レスの末尾 = 絶対最下部。
+                const docEl  = document.documentElement;
+                const maxTop = Math.max(0, docEl.scrollHeight - docEl.clientHeight);
+                if (Math.abs((window.scrollY || 0) - maxTop) > 4) window.scrollTo(0, maxTop);
+                return;
+            }
+            // 新着あり → 旧レスの末尾 = 「以降新レス」ラベル。ラベルを画面下端に置く
+            // (= 旧レスが画面を満たし、新着はラベルの下=画面外。閉じたときの位置を再現)。
+            const label = document.getElementById('new-posts-mark-band');
+            if (label) {
+                const r  = label.getBoundingClientRect();
+                const vh = document.documentElement.clientHeight;
+                if (Math.abs(r.bottom - vh) > 4) label.scrollIntoView({ block: 'end' });
+                return;
+            }
+            // ラベル未配置の段階 (updateNewPostsMarkBand 前) では、下の findBottommost(N) で
+            // 暫定的に旧レス末尾へ寄せ、ラベル配置後の再アラインで label を画面下端に合わせ直す。
+        }
 
         const bottomMost = findBottommostPrimaryInRange(N);
         if (!bottomMost) return;
