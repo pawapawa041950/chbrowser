@@ -1052,6 +1052,104 @@
         return renderPost(postDataFor(post, isEmbedded, /*omitId*/ !isInc, childrenHtml));
     }
 
+    // ---- dedupTree2 モード専用: 「開いたままの差分取得」の section B 構築 (ゼロ実装 / 旧 dedupTree 非参照) ----
+    // 仕様: 新着レスを「後方アンカーがちょうど 1 個」である限り親へ遡ってチェーン化し、共通祖先は
+    //       1 つに統合した forest として section B に描く。アンカーが 1 個でない (0 個/複数個) レスは
+    //       その時点で chain の根 (= section B の親) になる。section A には一切触れない。
+
+    /** num から「有効後方アンカーがちょうど 1 個」を辿れる限り親へ遡った [root, ..., num] を返す。
+     *  停止条件: 現在レスの有効後方アンカーが 1 個でない (= 0 個/複数個) / 循環検出。
+     *  ⇒ 返り値の先頭 (root) は「アンカーが 1 個でないレス」または「これ以上遡れないレス」になる。 */
+    function buildDedupTree2Chain(num) {
+        const chain = [num];
+        const guard = new Set([num]);
+        let cur = num;
+        while (true) {
+            const anchors = getValidForwardAnchors(postsByNumber.get(cur));
+            if (anchors.length !== 1) break;     // ちょうど 1 個でなければここが根
+            const parent = anchors[0];
+            if (guard.has(parent)) break;        // 循環防御
+            guard.add(parent);
+            chain.unshift(parent);
+            cur = parent;
+        }
+        return chain;
+    }
+
+    /** 新着番号配列から、共通祖先を統合した forest (Map&lt;number, node&gt;) を作る。
+     *  node = { number, childMap }。各レスの chain を rootMap に畳み込んでいくことで、
+     *  同じ親を共有する複数の新着レスが 1 つの親ノード配下にまとまる (= 親の二重描画を防ぐ)。 */
+    function buildDedupTree2Forest(incNumbers) {
+        const rootMap = new Map();
+        for (const num of incNumbers) {
+            let curMap = rootMap;
+            for (const n of buildDedupTree2Chain(num)) {
+                let node = curMap.get(n);
+                if (!node) { node = { number: n, childMap: new Map() }; curMap.set(n, node); }
+                curMap = node.childMap;
+            }
+        }
+        return rootMap;
+    }
+
+    /** dedupTree2 モードの「ライブ」section B (= .incremental-section.dt2-live) を incNumbers から作り直す共通処理。
+     *  ライブ section B だけを撤去して作り直し、凍結済み section B (= .dt2-live を外したもの) と
+     *  section A には一切触れない。
+     *
+     *  @param incNumbers 対象レス番号 (= section B の forest を組む元。昇順前提)。
+     *  @param idNumbers  id を振るレス番号の Set。renderIncrementalForestNode の omitId=!has(number) に渡す。
+     *    - ケース1 (差分 / Aは新着を含まない): 新着レスに id を振る (= incNumbers と同じ Set)。新着の正本がBにしか無いため。
+     *    - ケース2 (フル描画 / Aが全レスの完全ツリー): 誰にも id を振らない (= 空 Set)。正本は全てA側にあり、Bは複製のため。 */
+    function renderDedupTree2SectionB(incNumbers, idNumbers) {
+        const root = document.getElementById('posts');
+        if (!root) return;
+
+        const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
+        if (liveOld) liveOld.remove();
+
+        if (!incNumbers || incNumbers.length === 0) return;
+        const forest = buildDedupTree2Forest(incNumbers);
+        if (forest.size === 0) return;
+
+        let html = '<div class="incremental-section dt2-live">';
+        for (const node of forest.values()) {
+            html += '<div class="incremental-block">';
+            html += renderIncrementalForestNode(node, idNumbers, /*isEmbedded*/ false);
+            html += '</div>';
+        }
+        html += '</div>';
+        insertHtmlIntoContainer(root, html, /*before*/ null);
+    }
+
+    /** ケース1 (開いたままの差分取得): 「今リフレッシュ分 (sessionNewPostNumbers)」から section B を作る。
+     *  新着レスは id 付き (= section A は凍結されており新着の正本が無いため、Bが正本)。 */
+    function rebuildDedupTree2SectionBDelta() {
+        const incNumbers = [];
+        for (const p of allPosts) {
+            if (sessionNewPostNumbers.has(p.number)) incNumbers.push(p.number);
+        }
+        renderDedupTree2SectionB(incNumbers, new Set(incNumbers));
+    }
+
+    /** ケース2 (フル描画 / 新規オープン / resync): 「ラベル位置 (markPostNumber) 以降の全レス」から section B を作る。
+     *  これらのレスは section A の完全ツリーにも id 付きで存在するため、B 側は全て id 無しの複製として描く
+     *  (= idNumbers を空 Set にして全ノード omitId=true)。markPostNumber が無ければ section B は作らない。 */
+    function rebuildDedupTree2SectionBFull() {
+        const root = document.getElementById('posts');
+        if (!root) return;
+        // markPostNumber が無い (= 新着なし) ならライブ section B を消すだけ。
+        if (markPostNumber == null) {
+            const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
+            if (liveOld) liveOld.remove();
+            return;
+        }
+        const incNumbers = [];
+        for (const p of allPosts) {
+            if (p.number >= markPostNumber) incNumbers.push(p.number);
+        }
+        renderDedupTree2SectionB(incNumbers, /*idNumbers*/ new Set());
+    }
+
     /** ツリー (重複あり) の 1 レス分 HTML。
      *  - !isEmbedded (= primary): forward 親を inline で 1 段だけ embed する (= 「自分宛のアンカー先を本文の上に添える」見た目)。
      *    reverse-expansion (= 自分への返信を直下に展開) はもう作らない。返信が来たときに embedUnderParentReverse が
@@ -1113,6 +1211,11 @@
         } else {
             for (const p of allPosts) replayPostIntoDom(p);
         }
+
+        // ケース2 (dedupTree2 モードのフル描画): A の完全ツリーの後ろに、ラベル以降のレスを
+        // id 無しの複製 forest として section B に描く (= 同じレスが A と B の両方に出る)。
+        // 他モードは本フックを持たないので無害。updateNewPostsMarkBand より前に呼んでラベルを B 直前へ置けるようにする。
+        if (vm().buildSectionBOnFullRender) vm().buildSectionBOnFullRender();
 
         // 描画後の汎用フック群 (= per-post 経路の appendPosts と同じセット)
         document.querySelectorAll('a.anchor').forEach(function (a) {
@@ -1606,15 +1709,10 @@
         }, 200);
     }
     document.addEventListener('load', function (e) {
-        if (e.target && e.target.tagName === 'IMG') {
-            scheduleScrollbarUpdate();
-            // 既読位置復元中 (= まだユーザーがスクロールしていない) に section A 上方の画像が遅延ロードで
-            // 高さを得ると、それまで合わせていたターゲットが下方向へずれる。巡回 (プリフェッチ) 経由は
-            // 差分がメモリ即時投入されるためこのズレが顕著に出る (通常経路はネット往復が偶然これを隠す)。
-            // 画像ロードのたびに再アラインして追従する。tryScrollToTarget は userHasScrolled なら即 return し、
-            // 既に揃っていれば jolt 防止の no-op 判定で何もしないので、繰り返し呼んでも安価。
-            tryScrollToTarget();
-        }
+        // サムネイルは .image-slot が固定サイズ (240×240 等) で、実画像は object-fit:contain で
+        // その枠を満たすだけ (= thread.css 参照)。よって画像ロードでレイアウトは揺れず、スクロール位置の
+        // 再アラインは不要。scrollHeight 変化に追従するスクロールバー更新だけ行う。
+        if (e.target && e.target.tagName === 'IMG') scheduleScrollbarUpdate();
     }, true);
 
     // ---------- 画像サイズしきい値 (HEAD で size 確認 → 自動ロード or プレースホルダ) ----------
@@ -2508,6 +2606,25 @@
 
         const root = document.getElementById('posts');
         if (!root) return;
+
+        // dedupTree2 モード特例: ラベルは常に「ライブ section B (.dt2-live)」の直前に置く。
+        //   ケース2 では同じレスが A の完全ツリーにも居て id 付きなので、汎用の getElementById('r'+mark) は
+        //   A 側を拾ってしまい、ラベルが A の途中に入ってしまう。ライブ section B を直接 target にすればよい
+        //   (ケース1 でも r{mark} の top-level は同じライブ section B なので結果は一致する)。
+        //   ライブ section B が無い (= 新着 0) ならラベルは出さない。
+        if (viewMode === 'dedupTree2') {
+            const liveB = root.querySelector(':scope > .incremental-section.dt2-live');
+            if (liveB) {
+                const band = document.createElement('div');
+                band.id        = 'new-posts-mark-band';
+                band.className = 'new-posts-mark-band';
+                liveB.parentNode.insertBefore(band, liveB);
+                debugLog('updateNewPostsMarkBand[dt2]: placed before live section B (mark=' + markPostNumber + ')');
+            } else {
+                debugLog('updateNewPostsMarkBand[dt2]: no live section B → no band');
+            }
+            return;
+        }
 
         let target = null;
         let route  = '';
@@ -3625,6 +3742,61 @@
             usesBulkDeltaRebuild()    { return false; },
             promoteOnNewRefresh(_root) { /* nop */ },
         },
+        // 重複なしツリーの新実装 (ゼロから実装 / 旧 dedupTree は参照しない)。
+        //
+        // 【新規オープン / フル再描画 (= 非 delta)】 ※ insertOnArrival 経由
+        //   1. レスを 1 番から 1 件ずつ順に処理する (= ループ自体が番号昇順なので順序は担保される)。
+        //   2. 後方参照アンカーがちょうど 1 個のレスは、その参照先 (= 既に描画済みの過去レス) の子として描画する。
+        //      ⇒ 自分より未来のレスへのアンカー (= まだ描画されていない) は子化対象にしない。
+        //      ⇒ アンカー 0 個 / 2 個以上のレスは末尾に primary として並べる。
+        //   ※「アンカー 1 個」は getValidForwardAnchors の distinct 件数で数える:
+        //      `>>5 >>5` は 1 個、`>>5-7` や `>>5,8` は複数扱い (= 子化しない)。
+        //
+        // 【スレを開いたままの差分取得 (= delta)】 ※ usesBulkDeltaRebuild()=true 経由
+        //   1. 既に「以降新レス」ラベル付き section B があれば、それを「凍結」する (promoteOnNewRefresh)。
+        //      = .dt2-live を外すだけで中身も位置も保持。以後リフレッシュしても作り直さず section A 扱いになる。
+        //   2. 新着 0 件なら何もしない (空 batch は appendPosts 冒頭で return / ラベルは C# の mark=null push で消える)。
+        //   3. 末尾に新しいライブ section B を作り、その直前に「以降新レス」ラベルが置かれる (updateNewPostsMarkBand)。
+        //   4. 新着レスを forest 化: アンカー 1 個でないレスは section B の親 (根)、アンカー 1 個のレスは親とともに、
+        //      親もアンカー 1 個ならさらに遡って描く (buildDedupTree2Forest)。section A の DOM には一切触れない。
+        dedupTree2: {
+            insertOnArrival(p, root) {
+                // usesBulkDeltaRebuild()=true なので delta はここに来ない (= 本メソッドは非 delta 専用)。
+                // 後方参照アンカーが 1 個だけなら親の配下に embed、それ以外は末尾 primary。
+                // 親 (= 参照先) は番号が小さく既に DOM に居るので getElementById で見つかる。
+                const anchors = getValidForwardAnchors(p);
+                if (anchors.length === 1) {
+                    // 子はそのまま id 付きで描画する (= dedupTree2 では 1 レス 1 箇所しか出ないため
+                    //  primary leaf を出さず、ここを唯一の実体にしてアンカー/スクロール/バッジを成立させる)。
+                    const ok = embedUnderParentReverse(anchors[0], p,
+                        function (q) { return renderPost(postDataFor(q, /*isEmbedded*/ true, /*omitId*/ false, '')); });
+                    // 参照先 DOM が無い (= まれ) ときだけ末尾 primary に退避。
+                    if (!ok) appendPrimaryAtEnd(p, root);
+                } else {
+                    appendPrimaryAtEnd(p, root);
+                }
+            },
+            // primary は forward 子を持たない leaf 形式 (= 子は上記 reverse embed 側で付くので不要)。
+            buildPrimaryHtml(p)       { return buildPostHtml(p); },
+            expandsPopularChain()     { return false; },
+            splitBySectionMark()      { return false; },
+            // 差分は per-post 挿入ではなく section B 一括再構築で扱う (= section A 不可侵)。
+            usesBulkDeltaRebuild()    { return true; },
+            // 差分時に section A の返信バッジ DOM を更新しない (= 「Aセクションに手を付けない」を厳守)。
+            skipsSectionABadgeOnDelta() { return true; },
+            // 新リフレッシュ境界 (ケース1): 旧ライブ section B を「凍結」する (= .dt2-live を外すだけ。
+            //   中身も位置も保持し、以後作り直さない = 新ラベル以降だけが section B)。
+            promoteOnNewRefresh(root) {
+                const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
+                if (liveOld) liveOld.classList.remove('dt2-live');
+            },
+            // ケース1 (差分): ライブ section B を sessionNewPostNumbers (id 付き) から作り直す
+            //   (= 凍結済み / section A には触れない)。
+            rebuildSectionBDelta()    { rebuildDedupTree2SectionBDelta(); },
+            // ケース2 (フル描画 / resync): A の完全ツリーの後ろに、ラベル以降のレスを id 無しの複製 forest として
+            //   section B に描く。renderCurrentViewMode と appendPosts(非 delta) の末尾から呼ばれる。
+            buildSectionBOnFullRender() { rebuildDedupTree2SectionBFull(); },
+        },
         dedupTree: {
             insertOnArrival(p, root) {
                 // dedupTree (非 delta = ストリーミング初回 / 全表示):
@@ -3731,8 +3903,12 @@
         // 組み替えてラベル (= 既読の終端) の位置が動くため、描画前に「トップ〜ラベルまでの読書位置 (%)」
         // を記録しておき、描画後に同じ % へ復帰させる (= 構造変更による scroll ずれを吸収する)。
         // ユーザーが手動スクロール済のときだけ対象 (未スクロール時は tryScrollToTarget の従来復元に任せる)。
+        //
+        // dedupTree2 は除外する: section A は凍結・新着は末尾の section B に追加されるだけで viewport より上の
+        // 高さは変わらないため補正は本来不要。むしろラベルが末尾へ動いて labelOrContentEndY() が大きく変化し、
+        // 比例計算が下方向への大きなジャンプを生んでしまう (= スクロール調整が悪さをする) ので捕捉しない。
         let deltaScrollFraction = null;
-        if (isNewRefresh && userHasScrolled) {
+        if (isNewRefresh && userHasScrolled && viewMode !== 'dedupTree2') {
             const refBefore = labelOrContentEndY();
             if (refBefore > 0) deltaScrollFraction = (window.scrollY || 0) / refBefore;
         }
@@ -3787,14 +3963,26 @@
                         currentReverseIndex.get(n).push(p.number);
                     }
                 }
-                for (const n of seen) updateReplyCountBadge(n);
+                // dedupTree2 は「Aセクションに手を付けない」仕様のため section A の返信バッジ DOM 更新を
+                // スキップする (currentReverseIndex のデータ更新自体は上で済んでおり section B の件数表示に使う)。
+                if (!(vm().skipsSectionABadgeOnDelta && vm().skipsSectionABadgeOnDelta())) {
+                    for (const n of seen) updateReplyCountBadge(n);
+                }
             } else {
                 replayPostIntoDom(p);
             }
         }
 
-        // dedupTree-delta は batch 末に section B を再構築 (= section A の DOM はいじらない)
-        if (useDedupBulkRebuild) rebuildSectionB();
+        // bulk-delta は batch 末に section B を再構築 (= section A の DOM はいじらない)。
+        // dedupTree2 は専用の rebuildSectionBDelta (= 凍結済みを残しライブ分のみ作り直す) を持つのでそちらへ dispatch。
+        if (useDedupBulkRebuild) {
+            if (vm().rebuildSectionBDelta) vm().rebuildSectionBDelta();
+            else rebuildSectionB();
+        } else if (vm().buildSectionBOnFullRender) {
+            // 非 delta (= resync 等のフル描画) の dedupTree2: A の完全ツリーの後ろに
+            // ケース2 の section B (ラベル以降のレスの id 無し複製 forest) を描く。
+            vm().buildSectionBOnFullRender();
+        }
 
         // 既存 .anchor.missing が新着レスにより解決可能になったケースを救う (= 末尾 batch ごと走査)
         document.querySelectorAll('a.anchor.missing').forEach(function (a) {

@@ -1325,9 +1325,12 @@ public sealed partial class MainViewModel
 
         tab.ViewMode = CurrentConfig.DefaultThreadViewMode switch
         {
-            "Tree"      => ThreadViewMode.Tree,
-            "DedupTree" => ThreadViewMode.DedupTree,
-            _           => ThreadViewMode.Flat,
+            "Tree"       => ThreadViewMode.Tree,
+            // 設定「ツリー(重複なし)」は dedupTree2 を指す。旧 config 値 "DedupTree" も dedupTree2 に解決する
+            // (= UI から旧 DedupTree は選べなくなったため)。後日 DedupTree 削除時にこの後方互換行も消す。
+            "DedupTree"  => ThreadViewMode.DedupTree2,
+            "DedupTree2" => ThreadViewMode.DedupTree2,
+            _            => ThreadViewMode.Flat,
         };
         return tab;
     }

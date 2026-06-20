@@ -30,7 +30,8 @@
                   Margin="0,0,0,16">
             <ComboBoxItem Content="レス順 (Flat)"             Tag="Flat" />
             <ComboBoxItem Content="ツリー (重複あり)"          Tag="Tree" />
-            <ComboBoxItem Content="ツリー (重複なし)" Tag="DedupTree" />
+            <!-- 表示名は「ツリー(重複なし)」のまま、内部値は dedupTree2 を指す (旧 DedupTree の置き換え)。 -->
+            <ComboBoxItem Content="ツリー (重複なし)" Tag="DedupTree2" />
         </ComboBox>
 
         <TextBlock Text="自動取得する画像サイズの上限 (MB)" FontWeight="SemiBold" Margin="0,0,0,4" />

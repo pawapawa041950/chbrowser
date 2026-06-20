@@ -137,8 +137,9 @@ public sealed record AppConfig
     /// <summary>人気レス閾値 (= 被アンカー数 ≥ この値で赤マーカー)。即時反映 (setConfig メッセージ)。</summary>
     public int PopularThreshold { get; init; } = 3;
 
-    /// <summary>新規スレタブ生成時のデフォルト表示モード (Flat / Tree / DedupTree)。</summary>
-    public string DefaultThreadViewMode { get; init; } = "DedupTree";
+    /// <summary>新規スレタブ生成時のデフォルト表示モード (Flat / Tree / DedupTree2)。
+    /// 旧 config 値 "DedupTree" は読み込み時に dedupTree2 へ解決される (CreateThreadTab の switch)。</summary>
+    public string DefaultThreadViewMode { get; init; } = "DedupTree2";
 
     /// <summary>画像 HEAD 自動取得しきい値 (MB)。これ以上の画像はクリックされるまで取得しない。即時反映。</summary>
     public int ImageSizeThresholdMb { get; init; } = 5;

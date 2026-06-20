@@ -76,7 +76,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// 設定画面オープン時に App から最新値を流し込む + ログイン試行のたびに更新する。</summary>
     [ObservableProperty] private string _donguriLoginStatus    = "未試行";
     [ObservableProperty] private int    _popularThreshold      = 3;
-    [ObservableProperty] private string _defaultThreadViewMode = "DedupTree";
+    [ObservableProperty] private string _defaultThreadViewMode = "DedupTree2";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
     [ObservableProperty] private int    _idHighlightThreshold  = 5;
     [ObservableProperty] private bool   _metaPopupClickOnly    = true;

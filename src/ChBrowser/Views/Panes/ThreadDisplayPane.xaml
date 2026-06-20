@@ -191,6 +191,11 @@
                                     <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.Tree}">
                                         <Setter Property="ToolTip" Value="現在: ツリー表示 (重複あり) (クリック → ツリー (重複なし))" />
                                     </DataTrigger>
+                                    <!-- dedupTree2 が現行の「ツリー(重複なし)」。クリックでサイクル先頭(レス順)へ戻る。 -->
+                                    <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.DedupTree2}">
+                                        <Setter Property="ToolTip" Value="現在: ツリー表示 (重複なし) (クリック → レス順表示)" />
+                                    </DataTrigger>
+                                    <!-- 旧 DedupTree はサイクルから除外済み (UI 非到達)。万一アクティブでもクリックで先頭(レス順)へ。 -->
                                     <DataTrigger Binding="{Binding SelectedTab.ViewMode}" Value="{x:Static vm:ThreadViewMode.DedupTree}">
                                         <Setter Property="ToolTip" Value="現在: ツリー表示 (重複なし) (クリック → レス順表示)" />
                                     </DataTrigger>
@@ -242,6 +247,11 @@
                                     <Style TargetType="Path">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
+                                            <!-- 重複なしツリーのアイコン: 現行 dedupTree2 と、UI 非到達の旧 DedupTree の両方で表示。 -->
+                                            <DataTrigger Binding="{Binding SelectedTab.ViewMode}"
+                                                         Value="{x:Static vm:ThreadViewMode.DedupTree2}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
                                             <DataTrigger Binding="{Binding SelectedTab.ViewMode}"
                                                          Value="{x:Static vm:ThreadViewMode.DedupTree}">
                                                 <Setter Property="Visibility" Value="Visible" />

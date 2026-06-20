@@ -12,6 +12,10 @@ public enum ThreadViewMode
     Flat,
     Tree,
     DedupTree,
+    // 重複なしツリーの新実装。JsonStringEnumConverter(camelCase) で "dedupTree2" に変換され、
+    // JS 側 VIEW_MODE_STRATEGIES.dedupTree2 と対応する。UI (サイクル / 設定の「ツリー(重複なし)」) は
+    // 旧 DedupTree から dedupTree2 へ置き換え済み。旧 DedupTree のソースは当面残すが UI からは呼ばず、後日削除予定。
+    DedupTree2,
 }
 
 /// <summary>JS の <c>appendPosts</c> に渡すペイロード (Phase 20)。
@@ -128,6 +132,10 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
 
     [ObservableProperty]
     private ThreadViewMode _viewMode = ThreadViewMode.Flat;
+
+    // 表示モード切替ボタンが巡回するモード順。旧 DedupTree は dedupTree2 へ置き換え中のため除外 (= UI から呼ばない)。
+    private static readonly ThreadViewMode[] CycleViewModes =
+        { ThreadViewMode.Flat, ThreadViewMode.Tree, ThreadViewMode.DedupTree2 };
 
     /// <summary>このタブが現在保持しているレス全件。スレ ViewModel 内/MainViewModel 内での件数読みだけに使う。
     /// PropertyChanged は発火させない (= WebView2 への描画は <see cref="LatestAppendBatch"/> を経由する単一チャネル)。
@@ -289,13 +297,12 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         AddToFavoritesCommand  = new RelayCommand(() => addToFavoritesCallback?.Invoke(this));
         WriteCommand           = new RelayCommand(() => writeCallback?.Invoke(this));
         AiChatCommand          = new RelayCommand(() => aiChatCallback?.Invoke(this));
-        // enum 順で次のモードに進む (一周したら先頭に戻る)。新モードを <see cref="ThreadViewMode"/> に
-        // 追加すると、ここを触らずにそのままサイクルに含まれる。
+        // 表示モード切替ボタンのサイクル順で次へ進む (一周したら先頭へ)。
+        // 旧 DedupTree は dedupTree2 へ置き換え中のためサイクルから除外している (ソースは残すが UI からは呼ばない)。
         CycleViewModeCommand   = new RelayCommand(() =>
         {
-            var values = (ThreadViewMode[])Enum.GetValues(typeof(ThreadViewMode));
-            var idx    = Array.IndexOf(values, ViewMode);
-            ViewMode   = values[(idx + 1) % values.Length];
+            var idx  = Array.IndexOf(CycleViewModes, ViewMode);
+            ViewMode = CycleViewModes[(idx + 1) % CycleViewModes.Length]; // idx=-1 (サイクル外) → 先頭(Flat)
         });
     }
 
