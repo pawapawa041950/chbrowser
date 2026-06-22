@@ -324,6 +324,26 @@
         window.addEventListener(ev, function() { userHasScrolled = true; }, { passive: true, capture: true });
     });
 
+    // 可視化 (= Collapsed → Visible) 時の scroll restore やり直し。
+    //   お気に入り巡回は activate:false で「非選択タブ」(= WebView Visibility=Collapsed) のまま
+    //   appendPosts を流し込むため、tryScrollToTarget が clientHeight=0 / レンダリング休止状態で
+    //   走り、保存位置に着地できない (= 後でタブを開くとスクロールがずれて見える)。
+    //   タブが可視化されると WebView の bounds が 0→実寸に変わり window 'resize' が飛ぶ
+    //   (平常時は真っ白対策の 1px ナッジでも必ず飛ぶ) ので、その瞬間に未スクロールなら復元し直す。
+    //   tryScrollToTarget は userHasScrolled 時は即 return するので、手動スクロール後の resize
+    //   (ウィンドウサイズ変更等) では発火せずユーザーの位置を尊重する。
+    let resizeRealignTimer = null;
+    window.addEventListener('resize', function () {
+        if (userHasScrolled) return;
+        if (pendingScrollTarget == null) return;
+        if (resizeRealignTimer != null) return;
+        resizeRealignTimer = setTimeout(function () {
+            resizeRealignTimer = null;
+            if (userHasScrolled) return;
+            tryScrollToTarget();
+        }, 60);
+    }, { passive: true });
+
     // ---------- C# 側 LogService への汎用デバッグ出力 ----------
     // 用途: リリースビルド (= F12 DevTools が無い環境) でも JS の挙動を追えるようにする一時的な仕掛け。
     // 必要なくなったら debugLog 呼び出し + WebMessageBridge.cs の "debugLog" case + 本ヘルパを削除する。
