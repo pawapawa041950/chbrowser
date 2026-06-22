@@ -394,13 +394,17 @@
     // ユーザが意図した省略 URL は通常 行頭 / 空白 / 句読点 等の直後に書かれるので実用上影響しない。
     // フル形 (https?://) は既存挙動 (= 前置文字を問わず拾う) を維持。
     //
-    // sssp://img.5ch.io/<path> は 5ch のレス毎アイコン記法で、実体は http://img.5ch.io/<path>。
-    // 当初 "ico/" まで固定と聞いていたが、実際は ico/ 以外の path もあるため img.5ch.io/ までで判定する。
-    // 文書中のその位置に <img> で表示し、後ろに元の "sssp://～" 文字列をそのまま並べる (= ユーザ要件)。
+    // sssp://<host>/<path> は 5ch 系の特殊記法で、実体は <host>/<path> を http(s):// で取得する。
+    // 2 種類あり、isSsspIcon で判別する (= host/ の後にさらに / があるか):
+    //   (a) レス毎アイコン記法 (ディレクトリ配下、例 sssp://img.5ch.io/ico/xxx.gif)
+    //       → renderSsspIcon でインラインアイコン + 元 "sssp://～" 文字列を並べる。
+    //   (b) 通常の画像貼り付け (ディレクトリ無し、例 sssp://o.5ch.io/26mug.png)
+    //       → 通常 URL と同様に扱い、表示は元の sssp:// 文字列のまま、実体 https:// 経路でサムネ化する。
+    // host を限定せず sssp:// 全般を拾う (= o.5ch.io 等のアップローダ host も対象にするため)。
     // URL_OR_ANCHOR_RE の他の alt より先に置いて優先マッチさせる (= truncated の "s"/"ps" 等への巻き込みを避ける)。
     // 末尾の anchor 部 group 2 = ">>..." 表示テキスト全体、group 3 = 番号指定 (例 "3-5,7")。
     const URL_OR_ANCHOR_RE =
-        /(sssp:\/\/img\.5ch\.io\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*))/g;
+        /(sssp:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*))/g;
 
     /** ">>" 後の番号指定文字列 (例 "3-5,7、9") を {from,to} 範囲オブジェクト配列に分解する。
      *  カンマは半角"," / 全角"，" / 読点"、" を許容。各範囲は from<=to に正規化。数字が取れない部分は無視。 */
@@ -418,12 +422,27 @@
         return ranges;
     }
 
-    /** sssp://img.5ch.io/ico/<path> 形式 (5ch のレス毎アイコン記法) の判定。 */
+    /** sssp:// 記法 (5ch 系の特殊スキーム) かどうか。 */
     const SSSP_PREFIX = 'sssp://';
     function isSsspUrl(s) {
         return typeof s === 'string' && s.startsWith(SSSP_PREFIX);
     }
-    /** sssp 記法を <img class="sssp-icon"> + 元の "sssp://～" 文字列ペアの HTML に変換する。
+    /** sssp:// が「レス毎アイコン記法」(= ディレクトリ配下) かどうか。
+     *  host/ の後にさらに / がある (= パスが複数セグメント) ならアイコン扱い。
+     *    sssp://img.5ch.io/ico/xxx.gif → host=img.5ch.io, path="ico/xxx.gif" (/ あり) → アイコン。
+     *    sssp://o.5ch.io/26mug.png     → host=o.5ch.io,  path="26mug.png"   (/ なし) → 通常画像。
+     *  host だけ (= パス無し) も通常扱い (= false)。 */
+    function isSsspIcon(s) {
+        const rest  = s.slice(SSSP_PREFIX.length); // "host/..." 以降
+        const slash = rest.indexOf('/');
+        if (slash < 0) return false;               // host だけ → 通常扱い
+        return rest.indexOf('/', slash + 1) >= 0;  // path 内にさらに / → ディレクトリ配下 = アイコン
+    }
+    /** sssp:// を実体の https:// に変換する (= 通常画像のサムネ取得 / data-url 用)。 */
+    function ssspToHttps(s) {
+        return 'https://' + s.slice(SSSP_PREFIX.length);
+    }
+    /** sssp アイコン記法を <img class="sssp-icon"> + 元の "sssp://～" 文字列ペアの HTML に変換する。
      *  実体 URL は http:// 経路。クリックや link 化はせず、純粋なインライン装飾として扱う。 */
     function renderSsspIcon(matched) {
         const httpUrl = 'http://' + matched.slice(SSSP_PREFIX.length);
@@ -522,8 +541,17 @@
             if (m.index > pos) html += escapeHtml(line.slice(pos, m.index));
             if (m[1]) {
                 if (isSsspUrl(m[1])) {
-                    // sssp:// は link / media slot を作らず、インラインアイコン + 元文字列に置換する。
-                    html += renderSsspIcon(m[1]);
+                    if (isSsspIcon(m[1])) {
+                        // (a) アイコン記法 (ディレクトリ配下): link / media slot を作らず、
+                        //     インラインアイコン + 元文字列に置換する。
+                        html += renderSsspIcon(m[1]);
+                    } else {
+                        // (b) 通常の画像貼り付け (ディレクトリ無し): 通常 URL と同様に扱う。
+                        //     表示テキストは元の sssp:// 文字列を維持しつつ、data-url / サムネは
+                        //     実体 https:// 経路にする (= 省略形 URL と同じ「表示は元・実体は正規化」方針)。
+                        //     直リンク画像なのでリンククリックは内蔵ビューアで開く (viewerImage)。
+                        html += renderExternalLink(ssspToHttps(m[1]), m[1], { viewerImage: true });
+                    }
                 } else {
                     // 省略形 (ttp:// / s:// 等) の場合は data-url 側だけ正規化して、表示は元のまま残す。
                     const normalized = normalizeUrlScheme(m[1]);
@@ -727,7 +755,7 @@
              + escapeHtml(visible) + '</a>';
     }
 
-    function renderExternalLink(href, visible) {
+    function renderExternalLink(href, visible, opts) {
         const lower = (href || '').toLowerCase();
         if (lower.indexOf('http://') !== 0 && lower.indexOf('https://') !== 0) {
             return '<span class="link-disabled">' + escapeHtml(visible) + '</span>';
@@ -739,8 +767,13 @@
             // スレ URL はサムネ枠 (= media slot) を作らない (= 画像 URL ではないため)。
             return renderThreadLink(href, visible, fiveCh);
         }
+        // opts.viewerImage: リンク自体のクリックを外部ブラウザではなく内蔵ビューアで開く指定
+        // (sssp 通常画像など)。href が実画像 URL に解決できるときだけ有効 (= 画像でない URL は従来通り)。
+        const viewerImage = !!(opts && opts.viewerImage) && !!getInlineImageSrc(href);
         // href は意図的に付けない (focus 由来 auto-scroll を防ぐため)。click は data-url で識別。
-        const linkHtml = '<a data-url="' + escapeHtml(href) + '">' + escapeHtml(visible) + '</a>';
+        const linkHtml = '<a data-url="' + escapeHtml(href) + '"'
+                       + (viewerImage ? ' data-viewer-image="1"' : '')
+                       + '>' + escapeHtml(visible) + '</a>';
 
         // メディアスロットは post-body から分離して post-media (={{media}} スロット) に集める。
         // 収集 buffer がアクティブな時 (= body 処理中) のみ push。post-name など他の場面では null。
@@ -1539,16 +1572,27 @@
 
     // ---------- リッチスクロールバー ----------
     /** 本文中に「インライン画像化される URL」(直リンク / 同期展開 / 非同期展開 すべて含む) が 1 つでもあるか。 */
-    // URL_OR_ANCHOR_RE と同じ prefix セット (linkify と media 検出を一致させるため、省略形にも追従)。
-    // 省略形は negative lookbehind で「直前が英字でない」を要求する (sssp:// / ftp:// 等の誤検出回避)。
+    // URL_OR_ANCHOR_RE と同じ prefix セット (linkify と media 検出を一致させるため、省略形 / sssp にも追従)。
+    // 省略形は negative lookbehind で「直前が英字でない」を要求する (ftp:// 等の別スキーム名の誤検出回避)。
+    // sssp:// は専用 alt として先頭に置く (= 通常画像貼り付けをサムネ/スクロールバー判定に乗せるため)。
     const BODY_URL_RE =
-        /https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+/gi;
+        /sssp:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+/gi;
+    /** BODY_URL_RE のマッチを「サムネ/動画判定に使う実体 URL」に正規化する。
+     *  sssp アイコン (ディレクトリ配下) は媒体扱いしないので null を返す (= スキップ)。 */
+    function normalizeBodyMediaUrl(u) {
+        if (isSsspUrl(u)) {
+            if (isSsspIcon(u)) return null; // アイコンはサムネ/媒体マーカ対象外
+            return ssspToHttps(u);
+        }
+        return normalizeUrlScheme(u);
+    }
     function bodyContainsImage(body) {
         if (!body) return false;
         BODY_URL_RE.lastIndex = 0;
         let m;
         while ((m = BODY_URL_RE.exec(body)) !== null) {
-            const u = normalizeUrlScheme(m[0]);
+            const u = normalizeBodyMediaUrl(m[0]);
+            if (!u) continue;
             if (getInlineImageSrc(u)) return true;
             if (isExpandableAsync(u)) return true;
         }
@@ -1561,7 +1605,8 @@
         BODY_URL_RE.lastIndex = 0;
         let m;
         while ((m = BODY_URL_RE.exec(body)) !== null) {
-            const u = normalizeUrlScheme(m[0]);
+            const u = normalizeBodyMediaUrl(m[0]);
+            if (!u) continue;
             if (isVideoUrl(u)) return true;
             if (extractYouTubeId(u)) return true;
         }
@@ -3148,7 +3193,11 @@
             if (el) el.scrollIntoView({ block: 'start' });
             return;
         }
-        if (a.dataset.url) postOpenUrl(a.dataset.url);
+        if (a.dataset.url) {
+            // data-viewer-image 指定のリンク (sssp 通常画像など直リンク画像) は内蔵ビューアで開く。
+            if (a.dataset.viewerImage) postOpenInViewer(a.dataset.url);
+            else postOpenUrl(a.dataset.url);
+        }
     });
 
     // ---------- multi-level anchor popup ----------
