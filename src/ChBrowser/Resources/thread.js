@@ -1960,11 +1960,17 @@
         }, { once: true });
         slot.appendChild(img);
 
-        // YouTube サムネイルには再生アイコンを重ねる (クリックで iframe に置換)
+        // YouTube サムネイルには赤い再生アイコン + 右上「↗ ブラウザ」バッジを重ねる。
+        // クリックすると内蔵ビューアではなく既定ブラウザで開くことを視覚的に伝える。
         if (slot.classList.contains('youtube')) {
             const icon = document.createElement('span');
             icon.className = 'media-play-icon';
             slot.appendChild(icon);
+
+            const badge = document.createElement('span');
+            badge.className = 'external-open-badge';
+            badge.textContent = '↗ ブラウザで開く';
+            slot.appendChild(badge);
         }
 
         // 画像ロード完了後、AI 生成メタを取りにいって generator バッジを overlay する。

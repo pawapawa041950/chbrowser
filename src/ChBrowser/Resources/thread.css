@@ -216,9 +216,45 @@ body.slot-resizing * {
     color: #444;
 }
 
-/* YouTube サムネイル: deferred 中はアイコン非表示、loaded で重ねる */
-.image-slot.youtube.deferred .media-play-icon {
+/* YouTube サムネイル: deferred 中はアイコン/バッジ非表示、loaded で重ねる */
+.image-slot.youtube.deferred .media-play-icon,
+.image-slot.youtube.deferred .external-open-badge {
     display: none;
+}
+
+/* YouTube の再生ボタンはブランド赤の角丸長方形にして「これはYouTube」と一目で伝える
+   (= 内蔵再生の .mp4 等が使う黒丸▶と色・形で区別)。クリックでデフォルトブラウザに開く。 */
+.image-slot.youtube .media-play-icon {
+    width: 64px;
+    height: 46px;
+    background: rgba(204, 0, 0, 0.92);
+    border-radius: 13px;
+}
+.image-slot.youtube .media-play-icon::before {
+    left: 54%;
+}
+
+/* 「↗ ブラウザで開く」バッジ — 再生ボタンのど真ん中に重ねて置く。
+   赤い▶マーク自体が「インライン再生できそう」に見えてしまうため、
+   その上に文字を被せて「クリック=ブラウザで開く」だと明示する。 */
+.image-slot.youtube .external-open-badge {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: bold;
+    line-height: 1.3;
+    white-space: nowrap;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.78);
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 21;
 }
 
 /* スロット内の <video> / <iframe> は (materialize 直後 / 再生中 を問わず) スロット全体を埋める */
