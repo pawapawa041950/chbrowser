@@ -54,19 +54,43 @@ public sealed class PostDialog : Window
     private FrameworkElement?   _cookieSettingsPanel;
     private Grid?               _outerGrid;
 
+    // ---- ロールアップ (= 非アクティブ時にタイトルバーだけ残して畳む。Jane Xeno の書き込みウィンドウ風) ----
+    private bool                _isRolledUp;                // 現在畳まれているか
+    private double              _expandedHeight;            // 畳む直前の (展開状態の) 高さ
+    private double              _savedMinHeightForRollUp;   // 畳む際に一時的に下げた MinHeight の退避
+
     private readonly PostFormViewModel _vm;
 
     /// <summary>送信成功で閉じられたかどうか。モードレスで開いている (= DialogResult を使えない) ため
     /// 呼び出し側はこのフラグを Closed イベント内で見て後処理 (RefreshThread 等) するかを判定する。</summary>
     public bool WasSubmitted { get; private set; }
 
-    public PostDialog(PostFormViewModel vm, Window? owner)
+    /// <summary>次回起動時の復元用に保存すべきウィンドウ寸法。
+    /// プレビューペインを開いている間は幅にその分 (<see cref="PreviewPaneWidth"/>) が乗っているので差し引き、
+    /// 純粋なフォーム部分の幅を返す。最大化中は通常表示時の寸法 (RestoreBounds) を使う。</summary>
+    public Size PersistableFormSize
+    {
+        get
+        {
+            var maximized = WindowState == WindowState.Maximized;
+            var w = maximized ? RestoreBounds.Width  : Width;
+            // ロールアップ中は現在の Height がタイトルバー分しかないので、畳む前の展開高さを使う。
+            var h = maximized ? RestoreBounds.Height : (_isRolledUp ? _expandedHeight : Height);
+            if (_isPreviewVisible) w -= PreviewPaneWidth;
+            return new Size(w, h);
+        }
+    }
+
+    public PostDialog(PostFormViewModel vm, Window? owner,
+                      double savedWidth = 0, double savedHeight = 0)
     {
         _vm                   = vm;
         DataContext           = vm;
         Title                 = vm.DialogTitle;
-        Width                 = 520;
-        Height                = vm.IsNewThread ? 460 : 420;
+        // 前回保存した寸法があればそれで開く (= プレビューペインを除いたフォーム部分の幅)。
+        // 未保存 (0) / 異常値ならモード別の既定サイズにフォールバック。
+        Width                 = savedWidth  > 0 ? savedWidth  : 520;
+        Height                = savedHeight > 0 ? savedHeight : (vm.IsNewThread ? 460 : 420);
         MinWidth              = 420;
         MinHeight             = 320;
         Owner                 = owner;
@@ -86,6 +110,50 @@ public sealed class PostDialog : Window
             _previewDebounceTimer?.Stop();
             try { _messageWebView?.Dispose(); } catch { /* 破棄失敗は無視 */ }
         };
+
+        // 非アクティブになったらタイトルバーだけ残して畳み、再アクティブで元に戻す (Jane Xeno 風)。
+        Deactivated += (_, _) => RollUp();
+        Activated   += (_, _) => RollDown();
+    }
+
+    // -----------------------------------------------------------------
+    // ロールアップ (非アクティブ時の畳み込み)
+    // -----------------------------------------------------------------
+
+    /// <summary>非アクティブ化されたとき、クライアント領域 (= 本文・ボタン類) を高さ 0 に潰して
+    /// タイトルバーだけが見える状態にする。最大化 / 最小化中や既に畳んでいる場合は何もしない。</summary>
+    private void RollUp()
+    {
+        if (_isRolledUp) return;
+        if (WindowState != WindowState.Normal) return;
+
+        var chrome = ComputeChromeHeight();
+        if (chrome <= 0 || chrome >= Height) return;   // 妥当な値が取れないときは畳まない
+
+        _expandedHeight          = Height;
+        _savedMinHeightForRollUp = MinHeight;
+        MinHeight = chrome;     // MinHeight が残っていると Height を縮められないので一時的に下げる
+        Height    = chrome;
+        _isRolledUp = true;
+    }
+
+    /// <summary>再アクティブ化されたとき、畳む前の高さに戻す。</summary>
+    private void RollDown()
+    {
+        if (!_isRolledUp) return;
+        MinHeight   = _savedMinHeightForRollUp;
+        Height      = _expandedHeight;
+        _isRolledUp = false;
+    }
+
+    /// <summary>ウィンドウ外枠 (タイトルバー + 枠線) の高さ = ActualHeight からクライアント領域
+    /// (= Content の ActualHeight) を引いた差分。レイアウト前など取得できないときはシステム値で概算する。</summary>
+    private double ComputeChromeHeight()
+    {
+        if (Content is FrameworkElement fe && fe.ActualHeight > 0 && ActualHeight > fe.ActualHeight)
+            return ActualHeight - fe.ActualHeight;
+        return SystemParameters.WindowCaptionHeight
+             + 2 * SystemParameters.ResizeFrameHorizontalBorderHeight;
     }
 
     /// <summary>「書き込み対象スレ」と「現在表示中のスレタブ」が違うときだけ警告ダイアログを出し、

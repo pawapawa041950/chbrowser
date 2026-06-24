@@ -714,9 +714,16 @@ public sealed partial class MainViewModel
         HookPersistAuthMode(vm);
         if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
         _ = ApplyLineLimitFromSettingAsync(vm, tab.Board);
-        var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
+        var cfg = CurrentConfig;
+        var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow,
+                                                 cfg.PostDialogWidth, cfg.PostDialogHeight);
         dlg.Closed += async (_, _) =>
         {
+            // 送信有無に関わらず、閉じた時点のウィンドウサイズを次回起動用に保存する。
+            var size = dlg.PersistableFormSize;
+            if (size.Width > 0 && size.Height > 0)
+                UpdateAndPersistConfig(c => c with { PostDialogWidth = size.Width, PostDialogHeight = size.Height });
+
             if (!dlg.WasSubmitted) return;
             // 投稿前の post 数と submittedMessage を保持しておき、refresh 後に
             // 「increment した新着のうち本文が一番似ているもの」を own としてマークする。

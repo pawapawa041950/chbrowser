@@ -133,6 +133,15 @@ public sealed record AppConfig
     /// ユーザがダイアログで RadioButton を切り替えると即座に保存される。</summary>
     public string LastPostAuthMode { get; init; } = "";
 
+    /// <summary>書き込みダイアログ (PostDialog) のウィンドウ幅 (px・プレビューペインを除いたフォーム部分)。
+    /// 0 = 未保存 → 既定サイズで開く。ダイアログを閉じた時点の寸法を保存し、次回起動を跨いで復元する。
+    /// レス書き込み / スレ立ての両モードで同じ値を共有する。</summary>
+    public double PostDialogWidth { get; init; } = 0;
+
+    /// <summary>書き込みダイアログ (PostDialog) のウィンドウ高さ (px)。0 = 未保存 → 既定サイズ。
+    /// <see cref="PostDialogWidth"/> と対。</summary>
+    public double PostDialogHeight { get; init; } = 0;
+
     // ---- スレッド ----
     /// <summary>人気レス閾値 (= 被アンカー数 ≥ この値で赤マーカー)。即時反映 (setConfig メッセージ)。</summary>
     public int PopularThreshold { get; init; } = 3;
