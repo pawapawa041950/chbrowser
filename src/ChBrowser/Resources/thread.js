@@ -3880,7 +3880,8 @@
         //   2. 新着 0 件なら何もしない (空 batch は appendPosts 冒頭で return / ラベルは C# の mark=null push で消える)。
         //   3. 末尾に新しいライブ section B を作り、その直前に「以降新レス」ラベルが置かれる (updateNewPostsMarkBand)。
         //   4. 新着レスを forest 化: アンカー 1 個でないレスは section B の親 (根)、アンカー 1 個のレスは親とともに、
-        //      親もアンカー 1 個ならさらに遡って描く (buildDedupTree2Forest)。section A の DOM には一切触れない。
+        //      親もアンカー 1 個ならさらに遡って描く (buildDedupTree2Forest)。section A のツリー構造には一切触れない。
+        //      ただし構造に影響しない表示 (返信数バッジ / post-no 色 / ID 件数・色) は section A にも差分適用する。
         dedupTree2: {
             insertOnArrival(p, root) {
                 // usesBulkDeltaRebuild()=true なので delta はここに来ない (= 本メソッドは非 delta 専用)。
@@ -3902,10 +3903,9 @@
             buildPrimaryHtml(p)       { return buildPostHtml(p); },
             expandsPopularChain()     { return false; },
             splitBySectionMark()      { return false; },
-            // 差分は per-post 挿入ではなく section B 一括再構築で扱う (= section A 不可侵)。
+            // 差分は per-post 挿入ではなく section B 一括再構築で扱う (= section A のツリー構造は不可侵。
+            // 返信数バッジ / post-no 色などツリー構成に影響しない差分更新は共通経路で適用する)。
             usesBulkDeltaRebuild()    { return true; },
-            // 差分時に section A の返信バッジ DOM を更新しない (= 「Aセクションに手を付けない」を厳守)。
-            skipsSectionABadgeOnDelta() { return true; },
             // 新リフレッシュ境界 (ケース1): 旧ライブ section B を「凍結」する (= .dt2-live を外すだけ。
             //   中身も位置も保持し、以後作り直さない = 新ラベル以降だけが section B)。
             promoteOnNewRefresh(root) {
@@ -4085,11 +4085,9 @@
                         currentReverseIndex.get(n).push(p.number);
                     }
                 }
-                // dedupTree2 は「Aセクションに手を付けない」仕様のため section A の返信バッジ DOM 更新を
-                // スキップする (currentReverseIndex のデータ更新自体は上で済んでおり section B の件数表示に使う)。
-                if (!(vm().skipsSectionABadgeOnDelta && vm().skipsSectionABadgeOnDelta())) {
-                    for (const n of seen) updateReplyCountBadge(n);
-                }
+                // section A の凍結対象は「ツリー構造」のみ。返信数バッジ / post-no 色は構造に影響しないので、
+                // 参照された既存レス (凍結済み section B 内の id 付きレス含む) を差分更新する。
+                for (const n of seen) updateReplyCountBadge(n);
             } else {
                 replayPostIntoDom(p);
             }
