@@ -195,8 +195,133 @@ public sealed class AiImageMetadataService
             if (meta is { HasAiData: true }) return meta;
         }
 
-        // 何も拾えなかった場合は基本情報のみを返す (詳細ペイン用)。
-        return new AiImageMetadata { Format = "PNG", FileSize = fileSize, Width = w, Height = h };
+        // ---- 戦略 5: AI 由来の署名は残っているが中身を解釈しきれなかった場合、
+        //      ラベル (ComfyUI / SD WebUI / 生成AI) だけ確定させ、わかる範囲の生データを見せる。----
+        var partial = TryBuildPartialFromPngChunks(chunks, fileSize, w, h);
+        if (partial != null) return partial;
+
+        // AI 生成として解釈できなかった場合でも、text チャンクがあれば一般メタデータとして公開する
+        // (撮影・編集ソフトのコメント等。パース不能でも取得できるデータはそのまま見せる)。
+        var otherPng = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (k, v) in chunks)
+            AddGeneralMeta(otherPng, k, UnLatin1ToUtf8(v));
+        return new AiImageMetadata
+        {
+            Format = "PNG", FileSize = fileSize, Width = w, Height = h,
+            OtherMetadata = otherPng,
+        };
+    }
+
+    /// <summary>PNG text チャンクに AI 由来の署名はあるが正規パース (戦略 1〜4) を通らなかった場合の
+    /// 部分結果。ツールを特定できればその名前、断片しか無ければ「生成AI」をラベルにする。
+    /// 該当しなければ null (= 一般メタデータ扱い)。</summary>
+    private static AiImageMetadata? TryBuildPartialFromPngChunks(
+        Dictionary<string, string> chunks, long fileSize, int w, int h)
+    {
+        if (chunks.Count == 0) return null;
+
+        var other = new Dictionary<string, string>(StringComparer.Ordinal);
+        void DumpAllChunks()
+        {
+            foreach (var (k, v) in chunks) AddGeneralMeta(other, k, UnLatin1ToUtf8(v));
+        }
+
+        // ComfyUI 署名: prompt / workflow チャンク (JSON が壊れていて戦略 2 で解釈できなかったケース)。
+        if (chunks.ContainsKey("prompt") || chunks.ContainsKey("workflow"))
+        {
+            DumpAllChunks();
+            return BuildPartialAiResult("ComfyUI", other, "PNG", fileSize, w, h);
+        }
+
+        // SD WebUI 署名: parameters チャンクはあるが infotext 形式として解釈できなかったケース。
+        if (chunks.ContainsKey("parameters"))
+        {
+            DumpAllChunks();
+            return BuildPartialAiResult("SD WebUI", other, "PNG", fileSize, w, h);
+        }
+
+        // NovelAI 形の Comment JSON だけ残っているケース (Software/Source チャンクが剥がされて
+        // 戦略 3 を通らなかった画像)。プロンプトを取り出せたらツール不明のまま「生成AI」を貼る。
+        if (chunks.TryGetValue("Comment", out var commentRaw))
+        {
+            var json = UnLatin1ToUtf8(commentRaw).Trim();
+            if (json.StartsWith("{", StringComparison.Ordinal) && json.Contains("\"prompt\"", StringComparison.Ordinal))
+            {
+                string? positive = null, negative = null;
+                var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+                ParseNovelAiCommentJson(json, ref positive, ref negative, parameters);
+                if (!string.IsNullOrEmpty(positive) || parameters.Count > 0)
+                {
+                    if (w > 0 && h > 0 && !parameters.ContainsKey("Size")) parameters["Size"] = $"{w}x{h}";
+                    parameters["Generator"] = "生成AI";
+                    return new AiImageMetadata
+                    {
+                        Format = "PNG", FileSize = fileSize, Width = w, Height = h,
+                        Positive = positive, Negative = negative,
+                        Generator = "生成AI", Parameters = parameters,
+                    };
+                }
+            }
+        }
+
+        // 任意のチャンク値に既知ツール名 (Software="Made with InvokeAI" 等) か
+        // infotext 断片 ("Negative prompt:" / "Steps:" 等) があればラベルを貼る。
+        foreach (var v in chunks.Values)
+        {
+            var text = UnLatin1ToUtf8(v);
+            var gen = DetectKnownGeneratorName(text)
+                      ?? (LooksLikeAiInfotextFragment(text) ? "生成AI" : null);
+            if (gen == null) continue;
+            DumpAllChunks();
+            return BuildPartialAiResult(gen, other, "PNG", fileSize, w, h);
+        }
+
+        return null;
+    }
+
+    /// <summary>生成 AI 由来なのは確実だが内容を解釈しきれなかった場合の部分結果。
+    /// Generator ラベルと、わかる範囲の生データ (切り詰め済み OtherMetadata) だけを返す。</summary>
+    private static AiImageMetadata BuildPartialAiResult(
+        string generator, Dictionary<string, string> other,
+        string format, long fileSize, int width, int height)
+    {
+        return new AiImageMetadata
+        {
+            Format = format, FileSize = fileSize, Width = width, Height = height,
+            Generator  = generator,
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["Generator"] = generator },
+            OtherMetadata = other,
+        };
+    }
+
+    // "Forge" は "forged" 等の一般語と衝突するため入れない (Forge は Version フィールドで判定済み)。
+    private static readonly string[] KnownGeneratorNames =
+    {
+        "ComfyUI", "NovelAI", "Stable Diffusion", "InvokeAI", "Fooocus", "SwarmUI",
+        "Midjourney", "DALL-E", "DreamStudio", "Draw Things", "AUTOMATIC1111",
+    };
+
+    /// <summary>文字列中に既知の生成ツール名があればその名前を返す (ラベル用)。無ければ null。</summary>
+    private static string? DetectKnownGeneratorName(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        foreach (var name in KnownGeneratorNames)
+            if (text.Contains(name, StringComparison.OrdinalIgnoreCase)) return name;
+        return null;
+    }
+
+    /// <summary>SD infotext の断片らしさ判定。IsSDWebUIInfotext (2 キーワード必須) より弱く、
+    /// カメラ EXIF にはまず現れない語が 1 つでもあれば true。部分結果のラベル貼りにのみ使う
+    /// ("Size:" や "Model:" のような一般語は誤検出しやすいので含めない)。</summary>
+    private static bool LooksLikeAiInfotextFragment(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        if (text.Contains("Negative prompt:", StringComparison.Ordinal)) return true;
+        ReadOnlySpan<string> kws = new[]
+            { "Steps:", "Sampler:", "CFG scale:", "Model hash:", "Denoising strength:" };
+        foreach (var k in kws)
+            if (text.Contains(k, StringComparison.Ordinal)) return true;
+        return false;
     }
 
     private static (int w, int h) GetPngDimensions(byte[] data)
@@ -387,6 +512,14 @@ public sealed class AiImageMetadataService
             var info = TryGetInfotextFromXmp(xmp);
             if (!string.IsNullOrEmpty(info) && IsSDWebUIInfotext(info))
                 return BuildResult(info, "WEBP", fileSize, w, h);
+            // AI として解釈できない XMP も一般メタデータとして見せる (切り詰めあり)。
+            AddGeneralMeta(meta.OtherMetadata, "XMP", xmp);
+            // XMP に既知ツール名 (xmp:CreatorTool 等) や infotext 断片が残っていれば
+            // ラベル付きの部分結果に格上げする。
+            var gen = DetectKnownGeneratorName(xmp)
+                      ?? (LooksLikeAiInfotextFragment(xmp) ? "生成AI" : null);
+            if (gen != null)
+                return BuildPartialAiResult(gen, meta.OtherMetadata, "WEBP", fileSize, w, h);
         }
         return meta;
     }
@@ -526,13 +659,81 @@ public sealed class AiImageMetadataService
             if (comfy is { HasAiData: true }) return comfy;
 
             // 3) 従来経路: EXIF UserComment (ASCII/UNICODE prefix) を byte-scan で拾う。
+            //    SD 形式でない UserComment はここでは返さず、下の一般メタデータへ回す
+            //    (従来は BuildResult に渡していたが、どうせ基本情報しか返らなかった)。
             var uc = FindUserCommentInBuffer(data, tiffStart, tiffEnd);
-            if (!string.IsNullOrEmpty(uc))
+            if (!string.IsNullOrEmpty(uc) && IsSDWebUIInfotext(uc!))
                 return BuildResult(uc, format, fileSize, width, height);
+
+            // 4) AI 生成として解釈できなかったが EXIF 自体はある。
+            //    まず AI 由来の署名 (ComfyUI プレフィックス / 既知ツール名 / infotext 断片) を探し、
+            //    見つかればラベル付きの部分結果、無ければ撮影機材等の一般メタデータとして公開する。
+            var other = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (tag, val) in tags)
+                AddGeneralMeta(other, ExifTagName(tag), val);
+            if (!string.IsNullOrEmpty(uc))
+                AddGeneralMeta(other, "UserComment", uc!);
+
+            string? partialGen = null;
+            foreach (var val in tags.Values)
+            {
+                // ComfyUI 署名: "Prompt: {...}" / "Workflow: {...}" はあるが JSON が解釈できなかったケース。
+                if (val.StartsWith("Prompt:", StringComparison.Ordinal)
+                    || val.StartsWith("Workflow:", StringComparison.Ordinal))
+                {
+                    partialGen = "ComfyUI";
+                    break;
+                }
+            }
+            if (partialGen == null)
+            {
+                foreach (var val in tags.Values)
+                {
+                    partialGen = DetectKnownGeneratorName(val)
+                                 ?? (LooksLikeAiInfotextFragment(val) ? "生成AI" : null);
+                    if (partialGen != null) break;
+                }
+            }
+            if (partialGen == null && !string.IsNullOrEmpty(uc))
+                partialGen = DetectKnownGeneratorName(uc!)
+                             ?? (LooksLikeAiInfotextFragment(uc!) ? "生成AI" : null);
+
+            if (partialGen != null)
+                return BuildPartialAiResult(partialGen, other, format, fileSize, width, height);
+
+            return new AiImageMetadata
+            {
+                Format = format, FileSize = fileSize, Width = width, Height = height,
+                OtherMetadata = other,
+            };
         }
 
         // 何も拾えなければ基本情報のみ。
         return new AiImageMetadata { Format = format, FileSize = fileSize, Width = width, Height = height };
+    }
+
+    /// <summary>一般メタデータの表示名。IFD0 でよく使われる ASCII タグのみ命名し、他は 16 進表記。</summary>
+    private static string ExifTagName(int tag) => tag switch
+    {
+        0x010e => "ImageDescription",
+        0x010f => "Make",
+        0x0110 => "Model",
+        0x0131 => "Software",
+        0x0132 => "DateTime",
+        0x013b => "Artist",
+        0x8298 => "Copyright",
+        _      => $"Tag 0x{tag:X4}",
+    };
+
+    // 巨大な workflow JSON / XMP がそのまま入るケースがあるため、一般メタデータ値は表示用に切り詰める。
+    private const int GeneralMetaValueMax = 1000;
+
+    private static void AddGeneralMeta(Dictionary<string, string> dict, string key, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || dict.ContainsKey(key)) return;
+        var v = value.Trim();
+        if (v.Length > GeneralMetaValueMax) v = v[..GeneralMetaValueMax] + " …(省略)";
+        dict[key] = v;
     }
 
     /// <summary>TIFF IFD0 を走査し、ASCII (type=2) タグを tag → 文字列の辞書で返す。
@@ -623,7 +824,10 @@ public sealed class AiImageMetadataService
     {
         try
         {
-            using var doc  = System.Text.Json.JsonDocument.Parse(json);
+            // ComfyUI の prompt JSON はカスタムノード由来で NaN / Infinity という非標準リテラルを
+            // 含むことがある (DPRandomGenerator の "is_changed": [NaN] 等)。System.Text.Json は
+            // これを不正 JSON として拒否するため、文字列外のものだけ null に置換してから読む。
+            using var doc  = System.Text.Json.JsonDocument.Parse(SanitizeJsonNonStandardLiterals(json));
             var       root = doc.RootElement;
             if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
 
@@ -783,6 +987,48 @@ public sealed class AiImageMetadataService
         }
     }
 
+    /// <summary>JSON 文字列リテラルの外に現れる NaN / Infinity / -Infinity を null へ置換する。
+    /// プロンプト本文 ("NaN" を含む文字列) は inString 追跡で保護される。該当トークンが無ければ元の文字列を返す。</summary>
+    private static string SanitizeJsonNonStandardLiterals(string json)
+    {
+        if (json.IndexOf("NaN", StringComparison.Ordinal) < 0
+            && json.IndexOf("Infinity", StringComparison.Ordinal) < 0) return json;
+
+        var sb = new StringBuilder(json.Length);
+        bool inString = false;
+        for (int i = 0; i < json.Length; i++)
+        {
+            char c = json[i];
+            if (inString)
+            {
+                sb.Append(c);
+                if (c == '\\' && i + 1 < json.Length) { sb.Append(json[++i]); continue; }
+                if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') { inString = true; sb.Append(c); continue; }
+
+            if (c == 'N' && IsBareToken(json, i, "NaN"))      { sb.Append("null"); i += 2; continue; }
+            if (c == 'I' && IsBareToken(json, i, "Infinity")) { sb.Append("null"); i += 7; continue; }
+            if (c == '-' && i + 1 < json.Length && IsBareToken(json, i + 1, "Infinity"))
+            {
+                sb.Append("null");
+                i += 8;
+                continue;
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsBareToken(string s, int i, string token)
+    {
+        if (i + token.Length > s.Length) return false;
+        if (string.CompareOrdinal(s, i, token, 0, token.Length) != 0) return false;
+        int after = i + token.Length;
+        return after >= s.Length || !(char.IsLetterOrDigit(s[after]) || s[after] == '_');
+    }
+
     /// <summary>ComfyUI workflow ノードの input から指定フィールドの値を解決して文字列にする。
     /// リテラル文字列ならそのまま、配列参照 (= [refNodeId, outIdx]) なら参照先ノードの text 系フィールドを再帰的に辿る。</summary>
     private static string? ResolveTextRef(System.Text.Json.JsonElement inputs, string field,
@@ -814,11 +1060,12 @@ public sealed class AiImageMetadataService
         // text が他ノードへの参照になっている場合に備え、文字列を保持/受け渡しする中継ノードのフィールドも辿る:
         //   - PrimitiveString / PrimitiveStringMultiline / String (rgthree 等) は "value"
         //   - RegexReplace / 文字列加工ノードは "string"
+        //   - PreviewAny / Display 系のパススルーノードは "source"
         // これらを終端まで辿らないと、CLIPTextEncode.text が primitive ノード参照のときにプロンプトが空になる。
-        // text 系を優先し value/string は後置 (= 本物の text があればそちらを採用)。
+        // text 系を優先し value/string/source は後置 (= 本物の text があればそちらを採用)。
         // 重複は除き改行で連結する。
         var texts = new List<string>();
-        foreach (var fieldName in new[] { "text", "text_g", "text_l", "clip_l", "t5xxl", "prompt", "value", "string" })
+        foreach (var fieldName in new[] { "text", "text_g", "text_l", "clip_l", "t5xxl", "prompt", "value", "string", "source" })
         {
             if (!inputs.TryGetProperty(fieldName, out var p)) continue;
             if (p.ValueKind == System.Text.Json.JsonValueKind.String)
@@ -1414,6 +1661,11 @@ public sealed record AiImageMetadata
     /// <summary>"Steps", "Sampler", "CFG scale", "Seed", "Size", ... と "Model" 等の全パラメータ。
     /// 値はクオート除去後の生文字列 (unit 補正等はしない)。</summary>
     public Dictionary<string, string> Parameters { get; init; } = new();
+
+    /// <summary>AI 生成として解釈できなかった場合の一般メタデータ (EXIF の Make/Model/Software、
+    /// PNG text チャンク等)。値は表示用に切り詰め済み。<see cref="HasAiData"/> の判定には含めない
+    /// (= カメラ写真の EXIF で AI 扱いにならないようにする)。</summary>
+    public Dictionary<string, string> OtherMetadata { get; init; } = new();
 
     /// <summary>AI 生成画像として認識された (= SD WebUI infotext がパースできた) かどうか。
     /// false の場合は <see cref="Format"/>, <see cref="FileSize"/>, <see cref="Width"/>, <see cref="Height"/>

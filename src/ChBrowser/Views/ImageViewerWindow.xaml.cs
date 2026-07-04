@@ -198,6 +198,7 @@ public partial class ImageViewerWindow : Window
                         positive   = meta.Positive,
                         negative   = meta.Negative,
                         parameters = meta.Parameters,
+                        otherMetadata = meta.OtherMetadata,
                     },
                 };
             }

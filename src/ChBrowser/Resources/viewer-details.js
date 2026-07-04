@@ -4,7 +4,7 @@
 //   { type: 'setDetails', url, details }
 //     - url      : 表示中の画像 URL (= タブの URL)
 //     - details  : null なら「データ無し」表示。値は AiImageMetadata の DTO。
-//                  { format, fileSize, width, height, model, positive, negative, parameters }
+//                  { format, fileSize, width, height, model, positive, negative, parameters, otherMetadata }
 //
 // SD WebUI infotext のパースは C# 側 (AiImageMetadataService) で済んでいる前提。
 // JS 側は表示専用 (= 参考 viewer の file-details.js renderImageDetails 相当を移植したもの)。
@@ -53,10 +53,12 @@
             '<div class="empty-state">この画像の詳細情報を取得できません</div>';
     }
 
-    /** AiImageMetadata.HasAiData == false (= 形式は分かったが SD infotext は無い) の場合は基本情報のみ。 */
+    /** AiImageMetadata.HasAiData == false (= 形式は分かったが SD infotext は無い) の場合は基本情報のみ。
+     *  AI として解釈できなかった一般メタデータ (EXIF 撮影情報 / PNG コメント等) があればそれも見せる。 */
     function renderBasicOnly(url, d) {
         var html = '<div class="filename">' + escapeHtml(nameFromUrl(url)) + '</div>';
         html += renderInfoSection(d);
+        html += renderOtherMetadataSection(d);
         html += '<div class="empty-state">AI 生成情報は含まれていません</div>';
         root.innerHTML = html;
     }
@@ -90,7 +92,23 @@
                     renderParamsGrid(d.parameters) +
                     '</div>';
         }
+        html += renderOtherMetadataSection(d);
         root.innerHTML = html;
+    }
+
+    /** AI として解釈できなかった一般メタデータ (C# 側 OtherMetadata、切り詰め済み) のセクション。
+     *  部分ラベル結果 (Generator のみ確定) では生チャンク/EXIF のダンプがここに入る。空なら何も出さない。 */
+    function renderOtherMetadataSection(d) {
+        var om = d.otherMetadata;
+        if (!om || Object.keys(om).length === 0) return '';
+        var html = '<div class="section"><div class="section-header">メタデータ</div><div class="params-grid">';
+        var keys = Object.keys(om);
+        for (var i = 0; i < keys.length; i++) {
+            html += '<div class="params-key">' + escapeHtml(keys[i]) + '</div>' +
+                    '<div class="params-value">' + escapeHtml(om[keys[i]]) + '</div>';
+        }
+        html += '</div></div>';
+        return html;
     }
 
     function renderInfoSection(d) {
