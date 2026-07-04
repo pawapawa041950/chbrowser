@@ -62,9 +62,28 @@
         } else {
             // 画像 (<img>): 従来通り transform: scale でズーム (= img には controls が無いので問題なし)。
             // 要素自体は natural サイズ、transform で見た目を拡縮 → 高速で滑らか。
+            //
+            // ピクセルスナップ補正: left/top 50% + translate(-50%) の中央配置は、画像サイズと
+            // ステージサイズの偶奇が食い違うと描画位置が 0.5px 境界に乗り、原寸 (scale=1) でも
+            // バイリニア補間で画像全体がぼやける。これを避けるため、画像の可視左上角が
+            // デバイスピクセルの整数境界に乗るよう translate 量を丸め補正する (ずれは最大 0.5px
+            // 未満なので見た目の位置には影響しない)。
+            var tx = panX, ty = panY;
+            var n = naturalSize();
+            if (n.w > 0 && n.h > 0) {
+                var rect  = stage.getBoundingClientRect();
+                var swap  = (rotation % 180) !== 0; // 90/270 度は可視サイズの縦横が入れ替わる
+                var halfW = zoom * (swap ? n.h : n.w) / 2;
+                var halfH = zoom * (swap ? n.w : n.h) / 2;
+                var dpr   = window.devicePixelRatio || 1;
+                var cornerX = rect.width  / 2 + panX - halfW; // 可視左上角の X (stage 座標 = viewport 座標)
+                var cornerY = rect.height / 2 + panY - halfH;
+                tx = panX + (Math.round(cornerX * dpr) / dpr - cornerX);
+                ty = panY + (Math.round(cornerY * dpr) / dpr - cornerY);
+            }
             media.style.width  = '';
             media.style.height = '';
-            media.style.transform = 'translate(-50%, -50%) translate(' + panX + 'px, ' + panY + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
+            media.style.transform = 'translate(-50%, -50%) translate(' + tx + 'px, ' + ty + 'px) scale(' + zoom + ') rotate(' + rotation + 'deg)';
         }
     }
 
