@@ -96,7 +96,7 @@
         root.innerHTML = html;
     }
 
-    /** AI として解釈できなかった一般メタデータ (C# 側 OtherMetadata、切り詰め済み) のセクション。
+    /** AI として解釈できなかった一般メタデータ (C# 側 OtherMetadata) のセクション。
      *  部分ラベル結果 (Generator のみ確定) では生チャンク/EXIF のダンプがここに入る。空なら何も出さない。 */
     function renderOtherMetadataSection(d) {
         var om = d.otherMetadata;

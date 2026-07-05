@@ -725,15 +725,10 @@ public sealed class AiImageMetadataService
         _      => $"Tag 0x{tag:X4}",
     };
 
-    // 巨大な workflow JSON / XMP がそのまま入るケースがあるため、一般メタデータ値は表示用に切り詰める。
-    private const int GeneralMetaValueMax = 1000;
-
     private static void AddGeneralMeta(Dictionary<string, string> dict, string key, string value)
     {
         if (string.IsNullOrWhiteSpace(value) || dict.ContainsKey(key)) return;
-        var v = value.Trim();
-        if (v.Length > GeneralMetaValueMax) v = v[..GeneralMetaValueMax] + " …(省略)";
-        dict[key] = v;
+        dict[key] = value.Trim();
     }
 
     /// <summary>TIFF IFD0 を走査し、ASCII (type=2) タグを tag → 文字列の辞書で返す。
