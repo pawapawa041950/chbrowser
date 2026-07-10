@@ -1194,6 +1194,7 @@ public sealed class AiImageMetadataService
     /// 参考実装 (viewer/public/file-details.js parseSDWebUIInfotext) の判定をそのまま移植:
     /// <list type="bullet">
     /// <item>本文に "Fooocus" を含む → "Fooocus"</item>
+    /// <item>Version が "scom" で始まる → "scom" (姉妹プロジェクト ../scom。"scom 1.0.0" 形式)</item>
     /// <item>Version が "f\d" で始まる → "SD WebUI Forge" (Forge は "f2.0.1v1.10.1-..." のように先頭 f)</item>
     /// <item>Version が "v\d" で始まる → "SD WebUI (A1111)"</item>
     /// <item>その他 → "SD WebUI" (汎用 / 派生不明)</item>
@@ -1204,6 +1205,7 @@ public sealed class AiImageMetadataService
         if (Regex.IsMatch(infotext, "Fooocus", RegexOptions.IgnoreCase)) return "Fooocus";
         if (parameters.TryGetValue("Version", out var ver) && !string.IsNullOrEmpty(ver))
         {
+            if (Regex.IsMatch(ver, @"^scom\b", RegexOptions.IgnoreCase)) return "scom";
             if (Regex.IsMatch(ver, @"^f\d")) return "SD WebUI Forge";
             if (Regex.IsMatch(ver, @"^v\d")) return "SD WebUI (A1111)";
         }
