@@ -6,8 +6,13 @@ using System.Text.RegularExpressions;
 namespace ChBrowser.Services.Api;
 
 /// <summary>
-/// 5ch.io の <c>read.cgi</c> (dat 落ちアーカイブスレ用) HTML を、本アプリの <see cref="DatParser"/> が
+/// 5ch.io / bbspink.com の <c>read.cgi</c> (dat 落ちアーカイブスレ用) HTML を、本アプリの <see cref="DatParser"/> が
 /// パース可能な 5ch dat 形式 (= <c>名前&lt;&gt;メール&lt;&gt;日付 ID:xxx&lt;&gt;本文&lt;&gt;タイトル\n</c>、Shift_JIS) に変換する。
+///
+/// 5ch.io と bbspink.com はレスの内側構造 (postusername / date / uid span, postid 等) は共通だが、
+/// レスを包む外側タグが異なる: 5ch.io は <c>&lt;div class="post"&gt;</c> + <c>&lt;div class="post-content"&gt;</c>、
+/// bbspink.com は <c>&lt;article class="clear post"&gt;</c> + <c>&lt;section class="post-content"&gt;</c>。
+/// PostOpenRe / PostContentOpenRe は両者を受理する。
 ///
 /// 背景:
 ///   5ch.io は dat 落ちスレに対して <c>/&lt;board&gt;/dat/&lt;key&gt;.dat</c> を 404 で返し、
@@ -32,24 +37,28 @@ namespace ChBrowser.Services.Api;
 /// </summary>
 public static class HtmlToDatConverter
 {
-    /// <summary>各レスブロックの開始タグ。<c>id="数字" ... class="...post..."</c> のパターン。</summary>
+    /// <summary>各レスブロックの開始タグ。<c>id="数字" ... class="...post..."</c> のパターン。
+    /// 5ch.io は <c>&lt;div&gt;</c>、bbspink.com は <c>&lt;article&gt;</c> でレスを包む (= 内側構造は共通)。</summary>
     private static readonly Regex PostOpenRe = new(
-        @"<div\s+id=""(?<num>\d+)""[^>]*\sclass=""[^""]*\bpost\b[^""]*""[^>]*>",
+        @"<(?:div|article)\s+id=""(?<num>\d+)""[^>]*\sclass=""[^""]*\bpost\b[^""]*""[^>]*>",
         RegexOptions.Compiled);
 
     /// <summary>postusername / post-content 等を入れ子対応で抽出するときの汎用 open/close マッチャ。
-    /// <c>&lt;span ...&gt;</c> / <c>&lt;/span&gt;</c> または <c>&lt;div ...&gt;</c> / <c>&lt;/div&gt;</c> を toggle。</summary>
-    private static readonly Regex SpanTagRe = new(@"</?span\b[^>]*>", RegexOptions.Compiled);
-    private static readonly Regex DivTagRe  = new(@"</?div\b[^>]*>",  RegexOptions.Compiled);
+    /// <c>&lt;span ...&gt;</c> / <c>&lt;/span&gt;</c>、<c>&lt;div ...&gt;</c> / <c>&lt;/div&gt;</c>、
+    /// <c>&lt;section ...&gt;</c> / <c>&lt;/section&gt;</c> を toggle。</summary>
+    private static readonly Regex SpanTagRe    = new(@"</?span\b[^>]*>",    RegexOptions.Compiled);
+    private static readonly Regex DivTagRe     = new(@"</?div\b[^>]*>",     RegexOptions.Compiled);
+    private static readonly Regex SectionTagRe = new(@"</?section\b[^>]*>", RegexOptions.Compiled);
 
     /// <summary>postusername の開始タグ。balanced-span でこの後の内容を切り出す。</summary>
     private static readonly Regex PostUsernameOpenRe = new(
         @"<span\s+class=""postusername""[^>]*>",
         RegexOptions.Compiled);
 
-    /// <summary>post-content の開始タグ。</summary>
+    /// <summary>post-content の開始タグ。5ch.io は <c>&lt;div&gt;</c>、bbspink.com は <c>&lt;section&gt;</c>。
+    /// 抽出時に対応する閉じタグを balance で取るため、どちらのタグだったかを <c>tag</c> グループで拾う。</summary>
     private static readonly Regex PostContentOpenRe = new(
-        @"<div\s+class=""post-content""[^>]*>",
+        @"<(?<tag>div|section)\s+class=""post-content""[^>]*>",
         RegexOptions.Compiled);
 
     /// <summary>postusername 内の mailto: (= 名前部に sage 等のメール指定があった場合)。
@@ -203,7 +212,15 @@ public static class HtmlToDatConverter
     /// jump5.ch リダイレクタを介している URL は実体側を採用。 </summary>
     private static string ExtractBody(string block)
     {
-        var body = ExtractBalanced(block, PostContentOpenRe, DivTagRe);
+        // post-content の外側タグ (div / section) を判定し、その種類で入れ子 balance する。
+        // section (bbspink) を div の balance で取ると </section> を見つけられず本文全体が壊れるため、
+        // open マッチから tag 種別を拾って対応する tag regex を選ぶ。
+        var open = PostContentOpenRe.Match(block);
+        if (!open.Success) return "";
+        var tagRe = string.Equals(open.Groups["tag"].Value, "section", StringComparison.OrdinalIgnoreCase)
+            ? SectionTagRe
+            : DivTagRe;
+        var body = ExtractBalancedFrom(block, open, tagRe);
         if (body is null) return "";
 
         body = AnchorTagRe.Replace(body, m =>
@@ -226,6 +243,14 @@ public static class HtmlToDatConverter
     {
         var open = openRe.Match(html);
         if (!open.Success) return null;
+        return ExtractBalancedFrom(html, open, anyTagRe);
+    }
+
+    /// <summary>既にマッチ済みの open タグ (<paramref name="open"/>) から balance を開始する版。
+    /// open タグの種類 (div / section 等) と <paramref name="anyTagRe"/> の対象タグを呼び出し側で
+    /// 一致させること (= section の content を div の balance で取ると閉じタグを見失う)。</summary>
+    private static string? ExtractBalancedFrom(string html, Match open, Regex anyTagRe)
+    {
         var contentStart = open.Index + open.Length;
         var depth = 1;
         var pos   = contentStart;
