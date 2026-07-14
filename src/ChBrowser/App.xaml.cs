@@ -829,6 +829,8 @@ public partial class App : Application
             ChBrowser.Services.Fonts.EmojiFontService.SetEnabled(config.UseNotoColorEmoji);
             if (_mainVm is not null && _themeService is not null)
                 _mainVm.ReloadAllPaneCss(_themeService);
+            // タブ見出し (ColorEmojiTextBlock) は WebView 再構築とは別経路なので明示的に再描画させる。
+            ChBrowser.Controls.ColorEmojiTextRenderer.NotifySettingsChanged();
         }
 
         // スレ表示 JS への broadcast (popularThreshold / imageSizeThresholdMb)

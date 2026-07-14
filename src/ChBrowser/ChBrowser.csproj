@@ -36,6 +36,8 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
     <PackageReference Include="Markdig" Version="0.37.0" />
+    <!-- タブ見出しのカラー絵文字描画 (DirectWrite/Direct2D)。COLRv0(Segoe)/COLRv1(Noto) 両対応。 -->
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>

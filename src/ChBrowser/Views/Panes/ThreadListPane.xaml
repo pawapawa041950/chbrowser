@@ -204,10 +204,12 @@
                                 BorderThickness="0"
                                 Cursor="Hand"
                                 ToolTip="閉じる" />
-                        <TextBlock Text="{Binding Header}"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   ToolTip="{Binding Header}" />
+                        <!-- 絵文字カラー表示のため DirectWrite/Direct2D 描画の ColorEmojiTextBlock を使用
+                             (絵文字フォントは設定 Noto/Segoe に追従)。 -->
+                        <ctrl:ColorEmojiTextBlock Text="{Binding Header}"
+                                                  VerticalAlignment="Center"
+                                                  TextTrimming="CharacterEllipsis"
+                                                  ToolTip="{Binding Header}" />
                     </DockPanel>
                 </DataTemplate>
             </TabControl.ItemTemplate>

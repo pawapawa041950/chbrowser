@@ -368,11 +368,13 @@
                                      HorizontalAlignment="Center" VerticalAlignment="Center"
                                      Fill="{Binding State, Converter={StaticResource LogMarkBrush}}" />
                         </Grid>
-                        <!-- Header はタブ表示用に事前短縮されているので、ToolTip は元タイトルを保持する Title を使う。 -->
-                        <TextBlock Text="{Binding Header}"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   ToolTip="{Binding Title}" />
+                        <!-- Header はタブ表示用に事前短縮されているので、ToolTip は元タイトルを保持する Title を使う。
+                             絵文字をカラー表示するため DirectWrite/Direct2D 描画の ColorEmojiTextBlock を使用
+                             (絵文字フォントは設定 Noto/Segoe に追従)。 -->
+                        <ctrl:ColorEmojiTextBlock Text="{Binding Header}"
+                                                  VerticalAlignment="Center"
+                                                  TextTrimming="CharacterEllipsis"
+                                                  ToolTip="{Binding Title}" />
                     </DockPanel>
                 </DataTemplate>
             </TabControl.ItemTemplate>

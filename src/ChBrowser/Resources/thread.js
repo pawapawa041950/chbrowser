@@ -1369,10 +1369,20 @@
     function decorateMeta(scopeRoot) {
         const root = scopeRoot || document.getElementById('posts');
         if (!root) return;
-        const posts = root.querySelectorAll('.post[id^="r"]');
+        // id 付き (正本) と id 無し (ツリー/セクションB の複製・親レス) の両方を装飾対象にする。
+        // 旧実装は id 付きのみを対象にしていたため、section B の親レス (= omitId で id 無し) の
+        // ID/ワッチョイがクリック可能にならなかった。番号は id が無くても post-no の data-number から得る。
+        const posts = root.querySelectorAll('.post');
         posts.forEach(function (postEl) {
             if (postEl.dataset.metaDecorated === '1') return;
-            const num = parseInt(postEl.id.slice(1), 10);
+            let num;
+            if (postEl.id && postEl.id[0] === 'r') {
+                num = parseInt(postEl.id.slice(1), 10);
+            } else {
+                const noEl = postEl.querySelector(':scope > .post-header > .post-no');
+                num = noEl ? parseInt(noEl.dataset.number, 10) : NaN;
+            }
+            if (isNaN(num)) return;
             const p = postsByNumber.get(num);
             if (!p) return;
 
