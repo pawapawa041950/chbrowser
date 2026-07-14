@@ -1987,14 +1987,29 @@
         }
     }
 
-    /** generator バッジを slot 左上に overlay。既に貼ってあるなら何もしない (idempotent)。 */
+    /** generator バッジ (+ 取得できていればモデル名バッジ) を slot 左上に overlay。
+     *  既に貼ってあるなら何もしない (idempotent)。生成元ラベルの右にモデル名を並べる。 */
     function applyGeneratorBadge(slot, meta) {
         if (!meta || !meta.generator) return;
-        if (slot.querySelector(':scope > .image-slot-generator-badge')) return;
-        const badge = document.createElement('span');
-        badge.className   = 'image-slot-generator-badge';
-        badge.textContent = meta.generator;
-        slot.appendChild(badge);
+        if (slot.querySelector(':scope > .image-slot-badge-row')) return;
+        const row = document.createElement('span');
+        row.className = 'image-slot-badge-row';
+
+        const gen = document.createElement('span');
+        gen.className   = 'image-slot-generator-badge';
+        gen.textContent = meta.generator;
+        row.appendChild(gen);
+
+        // モデル名が取れていれば生成元ラベルの右に並べる (長い checkpoint 名は CSS で省略 + tooltip)。
+        if (meta.model) {
+            const model = document.createElement('span');
+            model.className   = 'image-slot-model-badge';
+            model.textContent = meta.model;
+            model.title       = meta.model;
+            row.appendChild(model);
+        }
+
+        slot.appendChild(row);
     }
 
     /** バッジ用に AI メタデータを要求 (まだ pending/取得済みでないなら)。

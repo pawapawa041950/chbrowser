@@ -118,21 +118,46 @@ a.anchor.missing {
     border-color: #888;
 }
 
-/* AI 生成画像 (= comfyUI / SD WebUI Forge / etc.) を識別するバッジ。
-   サムネイル左上に絶対配置で重ねる。pointer-events:none で画像クリックの邪魔をしない。 */
-.image-slot-generator-badge {
+/* AI 生成画像 (= comfyUI / SD WebUI Forge / etc.) を識別するバッジ行。
+   サムネイル左上に絶対配置で重ねる。生成元ラベルの右にモデル名バッジを並べる。
+   pointer-events:none で画像クリックの邪魔をしない。 */
+.image-slot-badge-row {
     position: absolute;
     top: 4px;
     left: 4px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    max-width: calc(100% - 8px);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.image-slot-generator-badge {
+    flex: 0 0 auto;
     background: #2C5F2C;
     color: #FFFFFF;
     font-size: 10px;
     font-weight: bold;
     padding: 1px 6px;
     border-radius: 3px;
-    pointer-events: none;
-    z-index: 5;
     white-space: nowrap;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* モデル名バッジ (生成元ラベルの右)。長い checkpoint 名は省略表示 (title で全体を tooltip)。 */
+.image-slot-model-badge {
+    flex: 0 1 auto;
+    min-width: 0;
+    background: #33456B;
+    color: #FFFFFF;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
