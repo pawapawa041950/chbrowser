@@ -360,6 +360,12 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     private static string TruncateForTab(string title)
     {
         const int max = 24;
-        return title.Length <= max ? title : title[..max] + "…";
+        if (title.Length <= max) return title;
+        // サロゲートペア (絵文字等) の途中で切らない。title[..24] の素の切断だと末尾に孤立上位
+        // サロゲートが残り、不正な UTF-16 になる (= タブ描画側の ConvertToUtf32 が例外 →
+        // カラー絵文字描画がモノクロにフォールバックする実害があった)。
+        var cut = max;
+        if (char.IsHighSurrogate(title[cut - 1])) cut--;
+        return title[..cut] + "…";
     }
 }

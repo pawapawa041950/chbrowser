@@ -34,7 +34,11 @@ internal static class ColorEmojiTextRenderer
     public static event Action? SettingsChanged;
 
     /// <summary>App の設定適用 (ApplyConfigImmediate) から呼ぶ。購読中のタブ見出しを再描画させる。</summary>
-    public static void NotifySettingsChanged() => SettingsChanged?.Invoke();
+    public static void NotifySettingsChanged()
+    {
+        _notoPixelChecked = false; // 設定切替後の状態で診断ピクセル検査をやり直す
+        SettingsChanged?.Invoke();
+    }
 
     private static D2DFactory?          _d2d;
     private static IDWriteFactory?      _dw;
@@ -45,6 +49,17 @@ internal static class ColorEmojiTextRenderer
     private static IDWriteFontCollection1? _notoColl;
     private static string?                 _notoPath;
     private static string                  _notoFamily = "";
+
+    /// <summary>診断ログ (アプリのログペイン)。同一メッセージは 1 回だけ出す (= 毎描画のスパム防止)。
+    /// 別マシンで「Noto 設定時のみ白黒になる」等の環境依存問題を、リリース版でも切り分けられるようにする。</summary>
+    private static readonly HashSet<string> _loggedOnce = new();
+    /// <summary>Noto 適用描画のピクセル検査 (診断) を実施済みか。設定変更でリセットして再検査する。</summary>
+    private static bool _notoPixelChecked;
+    private static void LogOnce(string message)
+    {
+        if (!_loggedOnce.Add(message)) return;
+        ChBrowser.Services.Logging.LogService.Instance.Write(message);
+    }
 
     private static bool EnsureFactories()
     {
@@ -60,7 +75,7 @@ internal static class ColorEmojiTextRenderer
         catch (Exception ex)
         {
             _factoryFailed = true;
-            System.Diagnostics.Debug.WriteLine($"[ColorEmoji] factory init failed: {ex.Message}");
+            LogOnce($"[ColorEmoji] factory init 失敗 (タブ絵文字は WPF モノクロ描画にフォールバック): {ex.GetType().Name}: {ex.Message}");
             return false;
         }
     }
@@ -84,11 +99,14 @@ internal static class ColorEmojiTextRenderer
             _notoColl   = coll;
             _notoPath   = path;
             _notoFamily = coll.GetFontFamily(0).FamilyNames.GetString(0);
+            long size = 0;
+            try { size = new FileInfo(path).Length; } catch { /* 診断ログ用なので失敗は無視 */ }
+            LogOnce($"[ColorEmoji] Noto コレクション構築 OK: family='{_notoFamily}', size={size} bytes, path={path}");
             return (_notoColl, _notoFamily);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[ColorEmoji] Noto collection build failed: {ex.Message}");
+            LogOnce($"[ColorEmoji] Noto コレクション構築 失敗 (タブ絵文字は Segoe にフォールバック): {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
@@ -128,10 +146,12 @@ internal static class ColorEmojiTextRenderer
 
             // 絵文字レンジだけ Noto に差し替え (設定 ON 時)。OFF 時は既定フォールバック = Segoe UI Emoji。
             var noto = GetNotoCollection();
+            var hasEmoji = false;
             if (noto is { } n)
             {
                 foreach (var (start, len) in EmojiRanges(text))
                 {
+                    hasEmoji = true;
                     var range = new TextRange((uint)start, (uint)len);
                     layout.SetFontCollection(n.Coll, range);
                     layout.SetFontFamilyName(n.Family, range);
@@ -175,13 +195,29 @@ internal static class ColorEmojiTextRenderer
             var src = BitmapSource.Create(pw, ph, 96 * scale, 96 * scale, PixelFormats.Pbgra32, null, px, stride);
             src.Freeze();
 
+            // 診断 (初回 1 回だけ): Noto を当てた絵文字入りテキストが「実際にカラー画素で描かれたか」を検査。
+            // 例外なしで白黒になる環境 (= COLR 変換が静かに不発) をログで判別できるようにする。
+            if (hasEmoji && !_notoPixelChecked)
+            {
+                _notoPixelChecked = true;
+                var colored = false;
+                for (int i = 0; i < px.Length; i += 4)
+                {
+                    // BGRA: 不透明画素で RGB が揃っていなければ「カラー」とみなす。
+                    if (px[i + 3] > 0 && (px[i] != px[i + 1] || px[i + 1] != px[i + 2])) { colored = true; break; }
+                }
+                LogOnce($"[ColorEmoji] Noto 描画チェック: カラー画素={(colored ? "あり (正常)" : "なし (白黒描画 → COLRv1 変換不発の疑い)")} text='{text}'");
+            }
+
             bitmap  = src;
             sizeDip = new WpfSize(dipW, dipH);
             return true;
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[ColorEmoji] render failed: {ex.Message}");
+            // HRESULT 付きで記録 (COM 例外なら D2D/DWrite のエラーコードが原因特定の鍵になる)。
+            var hr = ex is System.Runtime.InteropServices.COMException com ? $" hr=0x{com.HResult:X8}" : "";
+            LogOnce($"[ColorEmoji] render 失敗 (このテキストは WPF モノクロ描画にフォールバック){hr}: {ex.GetType().Name}: {ex.Message} (noto={ChBrowser.Services.Fonts.EmojiFontService.Active})");
             return false;
         }
     }
@@ -206,16 +242,14 @@ internal static class ColorEmojiTextRenderer
         int i = 0;
         while (i < s.Length)
         {
-            int cp = char.ConvertToUtf32(s, i);
-            int cl = char.IsSurrogatePair(s, i) ? 2 : 1;
+            int cp = CodePointAt(s, i, out int cl);
             if (IsEmojiBase(cp))
             {
                 int start = i, end = i + cl;
                 i += cl;
                 while (i < s.Length)
                 {
-                    int c2 = char.ConvertToUtf32(s, i);
-                    int l2 = char.IsSurrogatePair(s, i) ? 2 : 1;
+                    int c2 = CodePointAt(s, i, out int l2);
                     if (IsEmojiBase(c2) || IsEmojiCont(c2)) { end = i + l2; i += l2; }
                     else break;
                 }
@@ -224,5 +258,19 @@ internal static class ColorEmojiTextRenderer
             else i += cl;
         }
         return res;
+    }
+
+    /// <summary>char.ConvertToUtf32 の孤立サロゲート安全版。不正 UTF-16 (= 文字数切り詰め等で
+    /// ペアが分断された文字列) でも例外を投げず、孤立サロゲートはそのコード単位値 (= 非絵文字) として返す。</summary>
+    private static int CodePointAt(string s, int i, out int len)
+    {
+        char c = s[i];
+        if (char.IsHighSurrogate(c) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+        {
+            len = 2;
+            return char.ConvertToUtf32(c, s[i + 1]);
+        }
+        len = 1;
+        return c; // 孤立サロゲートを含む単独 code unit
     }
 }

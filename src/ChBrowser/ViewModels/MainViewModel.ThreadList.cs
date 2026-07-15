@@ -479,7 +479,13 @@ public sealed partial class MainViewModel
     }
 
     private static string Truncate(string s, int max)
-        => s.Length <= max ? s : s[..max] + "…";
+    {
+        if (s.Length <= max) return s;
+        // サロゲートペア (絵文字等) の途中で切らない (ThreadTabViewModel.TruncateForTab と同じ理由)。
+        var cut = max;
+        if (char.IsHighSurrogate(s[cut - 1])) cut--;
+        return s[..cut] + "…";
+    }
 
     /// <summary>dat の 1 行目 (= 1 レス目) から title フィールドを抽出する。
     /// dat 形式: <c>name&lt;&gt;mail&lt;&gt;date_id&lt;&gt;body&lt;&gt;title</c>。失敗時 null。</summary>
