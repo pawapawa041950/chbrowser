@@ -22,23 +22,19 @@ namespace ChBrowser.Views;
 /// 既存の <see cref="InputDialog"/> にならって programmatic 構築 (XAML を別ファイルにしない)。
 /// バインディング元は <see cref="PostFormViewModel"/>。
 ///
-/// <para>左側にプレビューペインを持ち、「レビュー表示」ボタンで toggle できる (= post.html / post.css を
-/// そのまま適用したスレ表示シェルを WebView2 で流用、name/mail/body の入力で都度更新)。
-/// プレビューを開くとウィンドウが「左へ」拡大する (= 右端固定)。</para>
+/// <para>「レビュー表示」ボタンで、post.html / post.css をそのまま適用したスレ表示シェル (WebView2) を
+/// 非モーダルの別ウィンドウで開く (name/mail/body の入力で都度更新)。レビューウィンドウは本ウィンドウを
+/// Owner とする owned window なので、本ウィンドウを閉じると WPF が自動で一緒に閉じる。</para>
 /// </summary>
 public sealed class PostDialog : Window
 {
-    // ---- preview ペイン (= 左側) ----
-    /// <summary>ペイン幅 (px)。書き込み欄と同サイズに揃える、というユーザ要件に基づく。</summary>
+    // ---- レビューウィンドウ (= 非モーダル別ウィンドウ) ----
+    /// <summary>レビューウィンドウの既定幅 (px)。書き込み欄と同サイズに揃える、というユーザ要件に基づく。</summary>
     private const double PreviewPaneWidth = 520;
 
     private bool                _isPreviewVisible;
     private bool                _previewShellReady;
-    private double              _savedLeft;
-    private double              _savedWidth;
-    private double              _savedMinWidth;
-    private ColumnDefinition?   _previewCol;
-    private Border?             _previewBorder;
+    private Window?             _previewWindow;
     private WebView2?           _previewWebView;
     private DispatcherTimer?    _previewDebounceTimer;
     private Button?             _previewToggleBtn;
@@ -52,7 +48,6 @@ public sealed class PostDialog : Window
 
     private Button?             _cookieSettingsToggleBtn;
     private FrameworkElement?   _cookieSettingsPanel;
-    private Grid?               _outerGrid;
 
     // ---- ロールアップ (= 非アクティブ時にタイトルバーだけ残して畳む。Jane Xeno の書き込みウィンドウ風) ----
     private bool                _isRolledUp;                // 現在畳まれているか
@@ -66,8 +61,8 @@ public sealed class PostDialog : Window
     public bool WasSubmitted { get; private set; }
 
     /// <summary>次回起動時の復元用に保存すべきウィンドウ寸法。
-    /// プレビューペインを開いている間は幅にその分 (<see cref="PreviewPaneWidth"/>) が乗っているので差し引き、
-    /// 純粋なフォーム部分の幅を返す。最大化中は通常表示時の寸法 (RestoreBounds) を使う。</summary>
+    /// レビューは別ウィンドウ (owned window) になったので、本ウィンドウの寸法をそのまま返せばよい。
+    /// 最大化中は通常表示時の寸法 (RestoreBounds) を使う。</summary>
     public Size PersistableFormSize
     {
         get
@@ -76,7 +71,6 @@ public sealed class PostDialog : Window
             var w = maximized ? RestoreBounds.Width  : Width;
             // ロールアップ中は現在の Height がタイトルバー分しかないので、畳む前の展開高さを使う。
             var h = maximized ? RestoreBounds.Height : (_isRolledUp ? _expandedHeight : Height);
-            if (_isPreviewVisible) w -= PreviewPaneWidth;
             return new Size(w, h);
         }
     }
@@ -112,13 +106,26 @@ public sealed class PostDialog : Window
         };
 
         // 非アクティブになったらタイトルバーだけ残して畳み、再アクティブで元に戻す (Jane Xeno 風)。
-        Deactivated += (_, _) => RollUp();
+        // レビューウィンドウへフォーカスが移っただけのときは畳まない (= TryRollUpDeferred 内で判定)。
+        Deactivated += (_, _) => TryRollUpDeferred();
         Activated   += (_, _) => RollDown();
     }
 
     // -----------------------------------------------------------------
     // ロールアップ (非アクティブ時の畳み込み)
     // -----------------------------------------------------------------
+
+    /// <summary>Deactivated からのロールアップ試行。アクティブ化の遷移が確定した後 (= dispatcher 経由) に、
+    /// フォーカスが「本ウィンドウ ⇔ レビューウィンドウ」間の移動だっただけなら畳まない。
+    /// (レビューウィンドウをクリックしただけで書き込みウィンドウが畳まれるのを防ぐ)</summary>
+    private void TryRollUpDeferred()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (IsActive || _previewWindow is { IsActive: true }) return;
+            RollUp();
+        }), DispatcherPriority.Background);
+    }
 
     /// <summary>非アクティブ化されたとき、クライアント領域 (= 本文・ボタン類) を高さ 0 に潰して
     /// タイトルバーだけが見える状態にする。最大化 / 最小化中や既に畳んでいる場合は何もしない。</summary>
@@ -273,33 +280,9 @@ public sealed class PostDialog : Window
         }
     }
 
-    /// <summary>外側 Grid (col 0=preview / col 1=form) を組み立てて返す。
-    /// preview は初期状態 0 幅、トグルで <see cref="PreviewPaneWidth"/>。</summary>
-    private Grid BuildLayout()
-    {
-        _outerGrid = new Grid();
-        _previewCol = new ColumnDefinition { Width = new GridLength(0) };
-        _outerGrid.ColumnDefinitions.Add(_previewCol);
-        _outerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        // 左ペイン (preview) — 初期は 0 幅。要求があれば lazy で WebView2 を生成。
-        _previewBorder = new Border
-        {
-            BorderBrush     = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB0)),
-            BorderThickness = new Thickness(0, 0, 1, 0),
-            Background      = Brushes.White,
-            Visibility      = Visibility.Collapsed,
-        };
-        Grid.SetColumn(_previewBorder, 0);
-        _outerGrid.Children.Add(_previewBorder);
-
-        // 右ペイン (form) — 既存ロジック
-        var form = BuildFormPanel();
-        Grid.SetColumn(form, 1);
-        _outerGrid.Children.Add(form);
-
-        return _outerGrid;
-    }
+    /// <summary>ウィンドウの Content を組み立てて返す。
+    /// レビューは別ウィンドウ化 (<see cref="TogglePreview"/>) したので、Content はフォームのみ。</summary>
+    private Grid BuildLayout() => BuildFormPanel();
 
     private Grid BuildFormPanel()
     {
@@ -515,31 +498,17 @@ public sealed class PostDialog : Window
     // プレビュー
     // -----------------------------------------------------------------
 
-    /// <summary>レビュー表示 / 非表示を切り替える。表示時は「右端固定で左方向に拡大」する。</summary>
+    /// <summary>レビューウィンドウ (非モーダル) を開閉する。
+    /// 開く: 本ウィンドウの左隣に同じ高さで表示 (フォーカスは奪わない)。
+    /// 閉じる: ウィンドウごと閉じて WebView2 を破棄する (次回開くときに作り直す)。
+    /// 本ウィンドウを Owner にした owned window なので、本ウィンドウを閉じれば WPF が自動で一緒に閉じる。</summary>
     private void TogglePreview()
     {
-        if (_outerGrid is null || _previewCol is null || _previewBorder is null || _previewToggleBtn is null) return;
+        if (_previewToggleBtn is null) return;
 
         if (!_isPreviewVisible)
         {
-            // 現在のジオメトリを保存 (閉じる時に戻す)
-            _savedLeft     = Left;
-            _savedWidth    = Width;
-            _savedMinWidth = MinWidth;
-
-            // 左方向に拡大 (= 右端を固定)。スクリーン左端からはみ出すなら 0 で頭打ち。
-            var newLeft  = Math.Max(0, Left - PreviewPaneWidth);
-            var deltaLeft = Left - newLeft;
-            Left  = newLeft;
-            Width = Width + deltaLeft;
-            MinWidth = _savedMinWidth + PreviewPaneWidth;
-
-            _previewCol.Width    = new GridLength(PreviewPaneWidth);
-            _previewBorder.Visibility = Visibility.Visible;
-
-            // 初回トグルで lazy に WebView2 を生成。シェルが nav 完了したら初期 push される。
-            if (_previewWebView is null) InitializePreviewWebView();
-
+            OpenPreviewWindow();
             _previewToggleBtn.Content = "レビュー閉じる";
             _isPreviewVisible = true;
 
@@ -548,27 +517,59 @@ public sealed class PostDialog : Window
         }
         else
         {
-            _previewCol.Width = new GridLength(0);
-            _previewBorder.Visibility = Visibility.Collapsed;
-
-            // 元のジオメトリに戻す。Width を先に縮めてから Left を戻す (途中で MinWidth 違反が出ないように)。
-            MinWidth = _savedMinWidth;
-            Width    = _savedWidth;
-            Left     = _savedLeft;
-
-            _previewToggleBtn.Content = "レビュー表示";
-            _isPreviewVisible = false;
+            // Close() → Closed ハンドラが後始末 (フィールドの null 戻し / ボタン文言) を行う。
+            _previewWindow?.Close();
         }
     }
 
-    private void InitializePreviewWebView()
+    /// <summary>レビューウィンドウを生成して表示する。位置は本ウィンドウの左隣 (画面左端で頭打ち)、
+    /// 高さは本ウィンドウに合わせる。ShowActivated=false でフォーカスを奪わない (= 入力を中断しない)。</summary>
+    private void OpenPreviewWindow()
     {
         _previewWebView = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.White };
-        _previewBorder!.Child = _previewWebView;
         // プレビュー内の画像サムネクリック等を本アプリのビューアに転送するため、
         // WebMessageReceived を購読する (= スレ表示と同様の挙動を再現)。
         _previewWebView.WebMessageReceived += OnPreviewWebMessageReceived;
+
+        var win = new Window
+        {
+            Title         = "書き込みレビュー",
+            Owner         = this,                      // 本ウィンドウを閉じると自動で一緒に閉じる
+            Width         = PreviewPaneWidth,
+            Height        = _isRolledUp ? _expandedHeight : Height,
+            Left          = Math.Max(0, Left - PreviewPaneWidth),
+            Top           = Top,
+            ShowInTaskbar = false,
+            ShowActivated = false,                     // 開いてもフォーカスは書き込みウィンドウに残す
+            Content       = new Border
+            {
+                BorderBrush     = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB0)),
+                BorderThickness = new Thickness(1, 0, 0, 0),
+                Background      = Brushes.White,
+                Child           = _previewWebView,
+            },
+        };
+        // ユーザが × で直接閉じた場合も含む共通の後始末。
+        win.Closed += (_, _) => OnPreviewWindowClosed();
+        // レビューウィンドウからさらに外へフォーカスが移ったら本ウィンドウのロールアップを試行する
+        // (= ペア内のフォーカス移動では畳まれない。TryRollUpDeferred 側の判定と対)。
+        win.Deactivated += (_, _) => TryRollUpDeferred();
+
+        _previewWindow = win;
+        win.Show();
         _ = NavigatePreviewWebViewAsync();
+    }
+
+    /// <summary>レビューウィンドウが閉じたときの共通後始末 (トグルで閉じた場合・× で閉じた場合・
+    /// 本ウィンドウ Close に連動して閉じた場合のすべてがここを通る)。</summary>
+    private void OnPreviewWindowClosed()
+    {
+        try { _previewWebView?.Dispose(); } catch { /* 破棄失敗は無視 */ }
+        _previewWebView    = null;
+        _previewWindow     = null;
+        _previewShellReady = false;
+        _isPreviewVisible  = false;
+        if (_previewToggleBtn is not null) _previewToggleBtn.Content = "レビュー表示";
     }
 
     /// <summary>プレビュー WebView2 からの JS メッセージを処理する。
