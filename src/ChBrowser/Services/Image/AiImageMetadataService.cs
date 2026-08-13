@@ -1193,16 +1193,18 @@ public sealed class AiImageMetadataService
         }
         if (texts.Count > 0) return string.Join("\n", texts);
 
-        // 既知フィールドで取れない場合の汎用フォールバック: フィールド名に "text" / "prompt" を含む入力を
-        // テキスト候補として扱う (カスタムノードの editable_text_widget / populated_text / wildcard_text 等、
+        // 既知フィールドで取れない場合の汎用フォールバック: フィールド名に "text" / "prompt" / "string" を
+        // 含む入力をテキスト候補として扱う (カスタムノードの editable_text_widget / populated_text /
+        // wildcard_text や、JoinStrings の string1 / string2 のような連番フィールドに対応。
         // 名前が非標準でも意味はフィールド名に現れることが多い)。
         //   - "negative" を名前に含むものは除外 (= positive 追跡経路への negative 汚染防止。負側は専用経路で辿る)
+        //   - "system" を名前に含むものは除外 (= LLM への system_prompt は画像プロンプトそのものではない)
         //   - モデルファイル名っぽい値 (.safetensors 等) は除外
         foreach (var prop in inputs.EnumerateObject())
         {
             var nm = prop.Name.ToLowerInvariant();
-            if (!(nm.Contains("text") || nm.Contains("prompt"))) continue;
-            if (nm.Contains("negative")) continue;
+            if (!(nm.Contains("text") || nm.Contains("prompt") || nm.Contains("string"))) continue;
+            if (nm.Contains("negative") || nm.Contains("system")) continue;
             var p = prop.Value;
             if (p.ValueKind == System.Text.Json.JsonValueKind.String)
             {
