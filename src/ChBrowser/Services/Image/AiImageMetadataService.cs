@@ -1931,6 +1931,10 @@ public sealed class AiImageMetadataService
         // これが取れた場合はシーン別ラベル付きの複合テキストを Positive の正本として使う。
         var (h3Prompts, h3SceneCount) = ExtractH3ChainPrompts(kv);
 
+        // 生成アプリ名 ("software" タグ)。scom-v 等は ComfyUI をバックエンドに使うため、
+        // グラフ判定では "ComfyUI" になってしまう。アプリ名が取れたらそちらをラベルに採用する。
+        var appLabel = DetectVideoAppFromSoftware(kv);
+
         // ---- ComfyUI: key="prompt" (API グラフ JSON) を画像と同じパーサで解釈 ----
         if (kv.TryGetValue("prompt", out var comfyPrompt))
         {
@@ -1950,6 +1954,11 @@ public sealed class AiImageMetadataService
                     meta = meta with { Positive = recordedPositive };
                 if (string.IsNullOrEmpty(meta.Negative) && !string.IsNullOrEmpty(recordedNegative))
                     meta = meta with { Negative = recordedNegative };
+                if (!string.IsNullOrEmpty(appLabel))
+                {
+                    meta = meta with { Generator = appLabel };
+                    if (meta.Parameters is { } pars) pars["Generator"] = appLabel!;
+                }
                 return meta;
             }
         }
@@ -1957,7 +1966,8 @@ public sealed class AiImageMetadataService
         // グラフが無い / 解釈不能でも h3_plan / recorded_texts に実行時プロンプトが残っていれば ComfyUI として返す。
         if (!string.IsNullOrEmpty(h3Prompts) || !string.IsNullOrEmpty(recordedPositive))
         {
-            var parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["Generator"] = "ComfyUI" };
+            var generator  = string.IsNullOrEmpty(appLabel) ? "ComfyUI" : appLabel!;
+            var parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["Generator"] = generator };
             if (w > 0 && h > 0) parameters["Size"] = $"{w}x{h}";
             if (!string.IsNullOrEmpty(h3Prompts)) parameters["Scenes"] = h3SceneCount.ToString();
             return new AiImageMetadata
@@ -1965,7 +1975,7 @@ public sealed class AiImageMetadataService
                 Format = format, FileSize = fileSize, Width = w, Height = h,
                 Positive = !string.IsNullOrEmpty(h3Prompts) ? h3Prompts : recordedPositive,
                 Negative = recordedNegative,
-                Generator = "ComfyUI", Parameters = parameters,
+                Generator = generator, Parameters = parameters,
             };
         }
 
@@ -1974,7 +1984,8 @@ public sealed class AiImageMetadataService
         {
             var other = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (k, v) in kv) AddGeneralMeta(other, k, v);
-            return BuildPartialAiResult("ComfyUI", other, format, fileSize, w, h);
+            return BuildPartialAiResult(string.IsNullOrEmpty(appLabel) ? "ComfyUI" : appLabel!,
+                                        other, format, fileSize, w, h);
         }
 
         // AI 由来でなくても、取れたキー (encoder 等) は一般メタデータとして公開。
@@ -2168,6 +2179,35 @@ public sealed class AiImageMetadataService
             return lines.Count > 0 ? string.Join("\n", lines) : null;
         }
         return null;
+    }
+
+    /// <summary>動画メタの "software" タグ (ComfyUI の extra_pnginfo / ffmpeg タグ) から
+    /// 生成アプリ名のラベルを判定する。scom-v のように ComfyUI をバックエンドに使うアプリは
+    /// グラフ判定だけだと "ComfyUI" になってしまうため、アプリ名が分かる場合はそちらを優先する。
+    ///
+    /// <para>値は JSON 直列化されて <c>"scom-v 0.1.0"</c> のように引用符付きで入ることがあるので剥がし、
+    /// 末尾のバージョンを落として名前部分だけを返す (例: <c>scom-v 0.1.0</c> → <c>scom-v</c>)。
+    /// 再エンコーダ等の無関係なアプリ名を貼らないよう、既知のもの (scom 系 / <see cref="KnownGeneratorNames"/>)
+    /// だけを採用し、それ以外は null (= 従来どおりグラフ由来のラベル) とする。</para></summary>
+    private static string? DetectVideoAppFromSoftware(Dictionary<string, string> kv)
+    {
+        string? raw = null;
+        foreach (var (k, v) in kv)
+        {
+            if (!k.Equals("software", StringComparison.OrdinalIgnoreCase)) continue;
+            raw = v;
+            break;
+        }
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        var value = raw!.Trim().Trim('"').Trim();
+        if (value.Length == 0) return null;
+
+        // "scom-v 0.1.0" / "scom 1.0.0" → ハイフン付きの派生名を先に判定する (前方一致の取り違え防止)。
+        if (Regex.IsMatch(value, @"^scom-v\b", RegexOptions.IgnoreCase)) return "scom-v";
+        if (Regex.IsMatch(value, @"^scom\b",   RegexOptions.IgnoreCase)) return "scom";
+
+        return DetectKnownGeneratorName(value);
     }
 
     /// <summary>"recorded_texts" キー ({"prompt": "...", "negative": "...", ...} 形式) から
