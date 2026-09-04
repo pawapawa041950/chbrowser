@@ -196,12 +196,11 @@ public sealed class PostClient
 
     private static byte[] EncodeAsSjisForm(IReadOnlyList<KeyValuePair<string, string>> fields)
     {
-        var sjis = Encoding.GetEncoding(932);
-        var sb   = new StringBuilder();
+        var sb = new StringBuilder();
         for (var i = 0; i < fields.Count; i++)
         {
             if (i > 0) sb.Append('&');
-            sb.Append(SjisEncode(fields[i].Key, sjis)).Append('=').Append(SjisEncode(fields[i].Value, sjis));
+            sb.Append(SjisEncode(fields[i].Key)).Append('=').Append(SjisEncode(fields[i].Value));
         }
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
@@ -215,10 +214,17 @@ public sealed class PostClient
         return m.Success ? m.Groups["v"].Value : null;
     }
 
-    /// <summary>SJIS バイトに変換した上で URL エンコードする (5ch は SJIS の % エスケープを期待する)。</summary>
-    private static string SjisEncode(string s, Encoding sjis)
+    /// <summary>SJIS バイトに変換した上で URL エンコードする (5ch は SJIS の % エスケープを期待する)。
+    ///
+    /// <para>SJIS で表現できない文字 (絵文字等) は <see cref="HtmlEntityFallbackEncoder"/> で
+    /// <c>&amp;#xNNNN;</c> の数値文字参照に倒す。素の <c>Encoding.GetEncoding(932)</c> は既定の
+    /// 置換フォールバックで '?' に潰してしまい (サロゲートペアなら "??")、投稿内容が壊れるため。
+    /// 数値文字参照は 5ch/Monazilla の慣習で、dat 側は <see cref="DatParser"/> の HtmlDecode により
+    /// 元の文字へ復元される (= 往復して同じ表示になる)。サロゲートペアは 1 コードポイント =
+    /// 1 参照にまとめられる。</para></summary>
+    private static string SjisEncode(string s)
     {
-        var bytes = sjis.GetBytes(s);
+        var bytes = HtmlEntityFallbackEncoder.GetBytes(s);
         var sb    = new StringBuilder(bytes.Length * 3);
         foreach (var b in bytes)
         {

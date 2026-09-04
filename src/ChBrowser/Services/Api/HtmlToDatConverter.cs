@@ -267,8 +267,10 @@ public static class HtmlToDatConverter
 }
 
 /// <summary>
-/// <see cref="HtmlToDatConverter"/> 内で使う Shift_JIS エンコーダ (= SJIS で表現できない Unicode 文字を
+/// dat 互換の Shift_JIS エンコーダ (= SJIS で表現できない Unicode 文字を
 /// HTML 数値文字参照 <c>&amp;#xNNNN;</c> にフォールバック)。
+/// <see cref="HtmlToDatConverter"/> (read.cgi HTML → dat 変換) と
+/// <see cref="PostClient"/> (書き込み時のフォーム エンコード) の両方が使う。
 /// dat の歴史的慣習: SJIS にない文字は数値参照で送られてくる。<see cref="DatParser"/> は <c>WebUtility.HtmlDecode</c>
 /// でこれを復元するので、エンコーダ側がそれを生成すれば往復で問題ない。
 /// </summary>
