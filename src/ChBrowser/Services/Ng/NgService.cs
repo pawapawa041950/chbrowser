@@ -52,8 +52,9 @@ public sealed class NgService
 
     /// <summary>あるスレに対して、NG で hidden になるレス番号集合を計算する (連鎖あぼーん含む)。
     /// 互換 API: 内訳が要らない呼出側用。内部では <see cref="ComputeHiddenWithBreakdown"/> を呼ぶ。</summary>
-    public ISet<int> ComputeHidden(IList<Post> posts, string host, string directoryName)
-        => ComputeHiddenWithBreakdown(posts, host, directoryName).HiddenNumbers;
+    public ISet<int> ComputeHidden(IList<Post> posts, string host, string directoryName,
+                                   IReadOnlySet<int>? previouslyHidden = null)
+        => ComputeHiddenWithBreakdown(posts, host, directoryName, previouslyHidden).HiddenNumbers;
 
     /// <summary>あるスレに対して、NG で hidden になるレス集合を per-rule の内訳付きで計算する。
     ///
@@ -62,14 +63,21 @@ public sealed class NgService
     ///   <item><description><c>ByRuleDirect</c>: 各ルールに「直接」マッチしたレス数 (= MatchSingle が true)。
     ///     1 レスに複数ルールがマッチした場合は最初のルールに 1 件として計上 (= 二重計上を避ける)。</description></item>
     ///   <item><description><c>ChainOnly</c>: 直接マッチはしないが、別 hidden レスにアンカーしているせいで連鎖あぼーんになったレス数。</description></item>
-    ///   <item><description><c>HiddenNumbers</c>: 上記 2 種を合わせた最終 hidden レス番号集合 (= 旧 ComputeHidden と同じ結果)。</description></item>
-    /// </list></summary>
-    public NgHiddenBreakdown ComputeHiddenWithBreakdown(IList<Post> posts, string host, string directoryName)
+    ///   <item><description><c>HiddenNumbers</c>: 上記 2 種を合わせた最終 hidden レス番号集合 (= 旧 ComputeHidden と同じ結果)。
+    ///     <paramref name="previouslyHidden"/> の番号自体は含まない (= 今回の <paramref name="posts"/> 内で新たに hidden になる分だけ)。</description></item>
+    /// </list>
+    ///
+    /// <para><paramref name="previouslyHidden"/>: このスレで既に hidden になっているレス番号 (= 過去バッチの判定結果)。
+    /// 差分取得ではバッチに「新着レスだけ」が来るため、これが無いと「以前あぼーんされたレスへアンカーしている新着」を
+    /// 連鎖あぼーんにできない。連鎖の種としてのみ使い、直接マッチの集計には影響しない。</para></summary>
+    public NgHiddenBreakdown ComputeHiddenWithBreakdown(IList<Post> posts, string host, string directoryName,
+                                                        IReadOnlySet<int>? previouslyHidden = null)
     {
         var byRule = new Dictionary<Guid, int>();
         var hidden = new HashSet<int>();
         var rules  = GetActiveRules(host, directoryName);
-        if (rules.Count == 0)
+        var hasSeeds = previouslyHidden is { Count: > 0 };
+        if (rules.Count == 0 && !hasSeeds)
             return new NgHiddenBreakdown(byRule, ChainOnly: 0, hidden);
 
         // 1. 直接マッチを per-rule に集計 (= 1 レス は最初のマッチルールに加算)
@@ -87,10 +95,11 @@ public sealed class NgService
         }
 
         var directCount = hidden.Count;
-        if (directCount == 0)
+        if (directCount == 0 && !hasSeeds)
             return new NgHiddenBreakdown(byRule, ChainOnly: 0, hidden);
 
-        // 2. 連鎖あぼーん (無限再帰): hidden レスにアンカーしているレスも hidden
+        // 2. 連鎖あぼーん (無限再帰): hidden レスにアンカーしているレスも hidden。
+        //    種は「今回バッチの直接マッチ」+「過去バッチで hidden 済み (previouslyHidden)」の両方。
         var anchorMap = new Dictionary<int, int[]>(posts.Count);
         foreach (var p in posts) anchorMap[p.Number] = ExtractAnchors(p.Body);
 
@@ -104,7 +113,7 @@ public sealed class NgService
                 var anchors = anchorMap[p.Number];
                 foreach (var a in anchors)
                 {
-                    if (hidden.Contains(a))
+                    if (hidden.Contains(a) || (hasSeeds && previouslyHidden!.Contains(a)))
                     {
                         hidden.Add(p.Number);
                         changed = true;

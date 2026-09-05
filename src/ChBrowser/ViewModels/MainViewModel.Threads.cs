@@ -17,7 +17,8 @@ namespace ChBrowser.ViewModels;
 public sealed partial class MainViewModel
 {
     /// <summary>レスのバッチに NG 判定を適用し、可視分だけ tab.AppendPosts する共通ヘルパ。
-    /// バッチ内の連鎖は計算するが、過去バッチに跨る連鎖は対象外 (= タブ再オープン時に正しい連鎖が効く)。
+    /// 連鎖あぼーんはバッチ内だけでなく、<see cref="ThreadTabViewModel.HiddenPostNumbers"/> (= 過去バッチで hidden 済み)
+    /// へのアンカーも対象 (= 差分取得の新着が以前あぼーんされたレスに返信していれば隠す)。
     /// <paramref name="isIncremental"/> = true は「初期表示後の差分追加」を JS に伝える (Phase 20)。</summary>
     private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch, bool isIncremental = false)
     {
@@ -29,7 +30,8 @@ public sealed partial class MainViewModel
         {
             if (p.ThreadTitle is { Length: > 0 } t) { tab.EnsureTitleFromDat(t); break; }
         }
-        var breakdown = _ng.ComputeHiddenWithBreakdown(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName);
+        var breakdown = _ng.ComputeHiddenWithBreakdown(batch.ToList(), tab.Board.Host, tab.Board.DirectoryName,
+                                                       previouslyHidden: tab.HiddenPostNumbers);
         var hidden    = breakdown.HiddenNumbers;
         if (hidden.Count == 0)
         {
@@ -926,8 +928,8 @@ public sealed partial class MainViewModel
 
             // 開いている全スレタブに「新ルールで新たに hidden になるレス番号」を即時反映する。
             // 各タブの現在可視レス (tab.Posts) に対して NgService で再計算 → 差分集合を JS に push。
-            // 連鎖あぼーんは「過去の hidden レス経由」までは追えない (= 過去 hidden は tab.Posts に居ない) が、
-            // 「現状可視レス内の連鎖」までは正しく扱える。完全な反映が要る場合はタブを開き直す運用。
+            // 連鎖あぼーんは「現状可視レス内」に加え、tab.HiddenPostNumbers (= 過去に hidden になった番号) を
+            // 種にして「過去の hidden レス経由」も追える。
             ApplyNewlyHiddenToOpenTabs(rule);
 
             StatusMessage = $"NG ルールを追加しました ({rule.Target}: {rule.Pattern})";
@@ -943,15 +945,16 @@ public sealed partial class MainViewModel
     /// 計算し、JS に <c>setHiddenPosts</c> で push する。あわせてタブの内部状態 (Posts / HiddenCount /
     /// HiddenByRule / HiddenByChain) も整合させる。
     ///
-    /// 制約: tab.Posts は「現時点で可視」のレスのみ保持。過去に既に hidden になっていたレス経由の連鎖は
-    /// この経路では追えない。完全に正しい結果が必要なら従来通りスレを開き直す運用 (= 全レスから再計算)。</summary>
+    /// tab.Posts は「現時点で可視」のレスのみ保持するが、過去に hidden になった番号は
+    /// <see cref="ThreadTabViewModel.HiddenPostNumbers"/> に累積しているので、それ経由の連鎖も種として追える。</summary>
     private void ApplyNewlyHiddenToOpenTabs(ChBrowser.Models.NgRule justAdded)
     {
         foreach (var tab in AllThreadTabs)
         {
             if (tab.Posts.Count == 0) continue;
             var breakdown = _ng.ComputeHiddenWithBreakdown(
-                tab.Posts.ToList(), tab.Board.Host, tab.Board.DirectoryName);
+                tab.Posts.ToList(), tab.Board.Host, tab.Board.DirectoryName,
+                previouslyHidden: tab.HiddenPostNumbers);
             var newlyHidden = breakdown.HiddenNumbers;
             if (newlyHidden.Count == 0) continue;
 

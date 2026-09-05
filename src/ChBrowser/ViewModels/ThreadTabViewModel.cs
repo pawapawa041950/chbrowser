@@ -88,13 +88,19 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private int _hiddenByChain;
 
-    /// <summary>1 batch 分の <see cref="ChBrowser.Services.Ng.NgHiddenBreakdown"/> を内訳カウンタに加算する。
-    /// MainViewModel.AppendPostsWithNg から呼ばれる。</summary>
+    /// <summary>このタブで NG (直接 + 連鎖) により hidden になったレス番号の累積集合。
+    /// 差分取得で新着バッチを判定するとき、連鎖あぼーんの種として <c>NgService.ComputeHiddenWithBreakdown</c> に渡す
+    /// (= 以前あぼーんされたレスへアンカーしている新着も連鎖で隠す)。<see cref="HiddenCount"/> と同じ寿命で累積する。</summary>
+    public HashSet<int> HiddenPostNumbers { get; } = new();
+
+    /// <summary>1 batch 分の <see cref="ChBrowser.Services.Ng.NgHiddenBreakdown"/> を内訳カウンタと
+    /// <see cref="HiddenPostNumbers"/> に加算する。MainViewModel.AppendPostsWithNg / ReplaceVisiblePostsAfterNgAdd から呼ばれる。</summary>
     public void AddHiddenBreakdown(ChBrowser.Services.Ng.NgHiddenBreakdown breakdown)
     {
         foreach (var (ruleId, count) in breakdown.ByRuleDirect)
             HiddenByRule[ruleId] = HiddenByRule.TryGetValue(ruleId, out var c) ? c + count : count;
         HiddenByChain += breakdown.ChainOnly;
+        HiddenPostNumbers.UnionWith(breakdown.HiddenNumbers);
     }
 
     /// <summary>JS に「これらのレス番号を即時 DOM から消して」と push するためのトリガ。
