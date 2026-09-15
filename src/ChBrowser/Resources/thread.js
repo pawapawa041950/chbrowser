@@ -3617,10 +3617,13 @@
      *  クリックメニュー (= 返信 / NG 登録) は post-no の click ハンドラ側で別途処理される。 */
     function openReplyPopup(anchor, dataSource, level) {
         closeFrom(level);
+        // DOM に実在する返信だけを対象にする。data-replies には NG 即時除去等で既に消えたレス番号が
+        // 残り得るため、見せる中身が 1 件も無いなら「見つかりません」だけのポップアップは出さない
+        // (= 出しても情報が無く、post-no のクリック / 右クリックの邪魔になるだけ)。
         const list = (dataSource.dataset.replies || '')
             .split(',')
             .map(function (s) { return parseInt(s, 10); })
-            .filter(function (n) { return !isNaN(n); });
+            .filter(function (n) { return !isNaN(n) && document.getElementById('r' + n); });
         if (list.length === 0) return;
         const el = document.createElement('div');
         el.className = 'anchor-popup';
@@ -3851,38 +3854,40 @@
         }
     }, { passive: true });
 
-    /** 既存レス DOM の返信数バッジ + post-no の色クラスを差分更新する (flat モード appendPosts 用)。
+    /** 既存レス DOM の返信数バッジ + post-no の色クラスを差分更新する (appendPosts / NG 即時除去用)。
      *  テンプレで `<span class="post-reply-count" data-count="" data-replies="">返<span class="reply-num"></span> </span>`
      *  が常に出ている前提で、data-count / data-replies / .reply-num の textContent だけ書き換える。
      *  位置が動かないのでテンプレで指定した位置を保てる。バッジの可視テキスト「返」はテンプレ側 (post.html)
      *  に置かれており、JS 側にはテキスト literal を持たない。
      *  ホバーリスナは初期描画時に attachAnchorHandlers が data-replies 属性ベースで取り付けているので
-     *  この関数では触らない。 */
+     *  この関数では触らない。
+     *
+     *  対象は primary (id="rN") だけでなく、同じレス番号の全コピー (= ツリー系の embedded copy /
+     *  dedupTree 系 section B に再描画される id 無しの祖先コピー)。primary だけ更新すると、コピー側の
+     *  data-replies に NG で消したレス番号が残り、post-no ホバーで「返信元レスが見つかりません」だけの
+     *  ポップアップが出てしまう (= 中身が無いのに post-no の操作を邪魔する)。 */
     function updateReplyCountBadge(num) {
-        const post = document.getElementById('r' + num);
-        if (!post) return;
-        const header = post.querySelector(':scope > .post-header');
-        if (!header) return;
-
         const replies = currentReverseIndex.get(num) || [];
         const count = replies.length;
+        const tier  = replyTierClass(count);
 
-        // 1) post-no の色クラス (しきい値は replyTierClass に集約)
-        const postNo = header.querySelector(':scope > .post-no');
-        if (postNo) {
+        document.querySelectorAll('.post-no[data-number="' + num + '"]').forEach(function (postNo) {
+            const header = postNo.parentElement;
+            if (!header || !header.classList.contains('post-header')) return;
+
+            // 1) post-no の色クラス (しきい値は replyTierClass に集約)
             postNo.classList.remove('has-replies-few', 'has-replies-many');
-            const tier = replyTierClass(count);
             if (tier) postNo.classList.add(tier);
-        }
 
-        // 2) バッジの数値を data-count + .reply-num に書く。CSS の `[data-count="0"]` で 0 件時は非表示。
-        //    テンプレが post-reply-count を出していないテーマでは何もしない (互換)。
-        const badge = header.querySelector(':scope > .post-reply-count');
-        if (!badge) return;
-        badge.dataset.count   = String(count);
-        badge.dataset.replies = replies.join(',');
-        const numEl = badge.querySelector(':scope > .reply-num');
-        if (numEl) numEl.textContent = String(count);
+            // 2) バッジの数値を data-count + .reply-num に書く。CSS の `[data-count="0"]` で 0 件時は非表示。
+            //    テンプレが post-reply-count を出していないテーマでは何もしない (互換)。
+            const badge = header.querySelector(':scope > .post-reply-count');
+            if (!badge) return;
+            badge.dataset.count   = String(count);
+            badge.dataset.replies = replies.join(',');
+            const numEl = badge.querySelector(':scope > .reply-num');
+            if (numEl) numEl.textContent = String(count);
+        });
     }
 
     /** 指定レス番号集合を「即時に DOM から消す + 内部状態を整合させる」(Phase 25)。
@@ -3893,7 +3898,8 @@
      *    (= post-no の data-number で識別) を全て remove。
      *  - 内部状態: allPosts / postsByNumber / currentReverseIndex を更新。
      *  - 残レスの「返信 N 件」バッジは消したレスへの参照分だけ減算が必要なので
-     *    primary レス全件に対して updateReplyCountBadge を再実行 (= O(残全件) で軽い)。
+     *    DOM 上の残レス番号全件に対して updateReplyCountBadge を再実行 (= O(残全件) で軽い。
+     *    embedded copy / section B コピーも同関数内で同時に更新される)。
      *  - リッチスクロールバーのマーカーも再計算 (= 人気/メディア/URL/mark 全部)。
      *
      *  scroll 位置はブラウザの DOM 維持のままなので、消えた分だけ後ろのレスが上に詰まる挙動。
@@ -3920,11 +3926,15 @@
         for (const n of set) postsByNumber.delete(n);
         currentReverseIndex = buildReverseIndex();
 
-        // 3) 残 primary レスの返信バッジを総再計算 (消したレスへの ref が他のバッジから減るため)
-        document.querySelectorAll('#posts > .post[id^="r"]').forEach(function (el) {
-            const n = parseInt(el.id.slice(1), 10);
-            if (!isNaN(n)) updateReplyCountBadge(n);
+        // 3) 残レスの返信バッジを総再計算 (消したレスへの ref が他のバッジから減るため)。
+        //    対象番号は DOM 上の全 post-no から集める (= primary に加え、ツリー系の embedded copy /
+        //    dedupTree 系 section B の id 無しコピーも updateReplyCountBadge 側で一緒に更新される)。
+        const remaining = new Set();
+        document.querySelectorAll('.post-no[data-number]').forEach(function (el) {
+            const n = parseInt(el.dataset.number, 10);
+            if (!isNaN(n)) remaining.add(n);
         });
+        remaining.forEach(function (n) { updateReplyCountBadge(n); });
 
         // 4) スクロールバー / セクションマーク等の再計算
         if (typeof updateRichScrollbar       === 'function') updateRichScrollbar();
