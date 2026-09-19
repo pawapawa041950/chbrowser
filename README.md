@@ -4,21 +4,33 @@ Windows 用の 5ch.io 専用ブラウザ。生成AIで作成した画像や動�
 
 本アプリ全編をClaude Code(コーディングAI)により作成しています。
 
-<!-- スクリーンショット (任意): docs/screenshots/ にファイルを置いて差し替え -->
-<!-- ![スクリーンショット](docs/screenshots/main.png) -->
+<div align="center">
+<a href="img/sample1.png"><img src="img/sample1.png" width="500"></a>
+</div>
 
 ## 主な機能
 
 - **ポータブル構成** 設定ファイルはexeのあるフォルダに保存
-- **4 ペイン構成** かちゅ～しゃやJaneなどの一般的なレイアウトをデフォルトとし、ペインヘッダのドラッグでレイアウトを自由に変更可
+- **4 ペイン構成** かちゅ～しゃやJaneなどの一般的なレイアウトをデフォルトとし、ペインヘッダのドラッグでレイアウトを自由に変更可  
+  <div align="center">
+  <a href="img/sample4.png"><img src="img/sample4.png" width="400"></a>
+  </div>
 - **スレ表示モード** レス順 / ツリー (重複あり) / ツリー (重複なし) を切替可
 - **リッチスクロールバー** 今どきの「スレ内で返信の多いレス」「画像URLが張られてるレス」などがスクロールバー上に表示
 - **どんぐり対応** — 通常どんぐりとメール認証どんぐりを切り替えて書き込み可能
-- **生成AI画像、動画に対応** プロンプトなどの情報を取得できるものはポップアップで表示
-- **ビューワー搭載** JaneXenoライクなビューワー搭載。画像だけでなく動画にも対応。
+- **生成AI画像、動画に対応** プロンプトなどの情報を取得できるものはポップアップで表示  
+  <div align="center">
+  <a href="img/sample2.png"><img src="img/sample2.png" width="400"></a>
+  </div>
+- **ビューワー搭載** JaneXenoライクなビューワー搭載。画像だけでなく動画にも対応。生成AIの詳細な情報が取れれば表示。  
+  <div align="center">
+  <a href="img/sample3.png"><img src="img/sample3.png" width="400"></a>
+  </div>
 - **(実験的)LLM連携** OpenAI互換APIでLLMと連携。板一覧、スレ一覧、スレッド内容についてチャットで聞ける
 - **(実験的)MCPサーバ** 5chの板一覧、スレッド一覧、スレッド内容を取得するツールをMCPで公開 ([ツール一覧](https://github.com/pawapawa041950/chbrowser/releases/tag/v20260530_2))
 - **(実験的)AI NG機能** LLMにレスが攻撃的かどうかをスコア付けさせ、「スコア～以上は非表示」とすることができる
+
+
 
 ## 動作要件
 
