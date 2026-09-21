@@ -15,8 +15,10 @@ namespace ChBrowser.Services.Api;
 public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize);
 
 /// <summary>
-/// dat の取得・保存・パース。
-/// 既存 dat があれば <c>Range: bytes=N-</c> で末尾差分のみ取得する。
+/// スレ本文 (dat 相当) の取得・保存・パース。
+/// 5ch (<see cref="ChBrowser.Services.Bbs.IBbsProvider.UsesNativeDat"/>) は生 dat をそのまま保存し、既存 dat があれば <c>Range: bytes=N-</c> で末尾差分のみ取得する。
+/// それ以外の提供者 (したらば / まちBBS) は <see cref="ChBrowser.Services.Bbs.NumberedThreadFetcher"/> で番号以降の差分を取り、
+/// 番号列付きログ (<see cref="NumberedLogFormat"/>) として同じ <c>&lt;key&gt;.dat</c> パスに保存する。読み出し側は版マーカーで自動判別する。
 /// streaming 版 (<see cref="FetchStreamingAsync"/>) は 50 件単位で <see cref="IProgress{T}"/> に通知しながら逐次パースする。
 /// </summary>
 public sealed class DatClient
@@ -48,8 +50,17 @@ public sealed class DatClient
         IProgress<IReadOnlyList<Post>>     progress,
         CancellationToken                  ct = default)
     {
-        var url  = $"{board.Url.TrimEnd('/')}/dat/{threadKey}.dat";
-        var path = _paths.DatPath(board.Host, board.DirectoryName, threadKey);
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+        var path     = _paths.DatPath(board.Host, board.DirectoryName, threadKey);
+
+        if (!provider.UsesNativeDat)
+        {
+            return await ChBrowser.Services.Bbs.NumberedThreadFetcher
+                .FetchAsync(_client.Http, provider, board, threadKey, path, progress, ct)
+                .ConfigureAwait(false);
+        }
+
+        var url = provider.ThreadFetchUrl(board, threadKey);
 
         long existing = File.Exists(path) ? new FileInfo(path).Length : 0;
 
@@ -150,7 +161,7 @@ public sealed class DatClient
     /// HTML 取得自体が失敗 / パース不能の場合は null を返し、呼出元は通常の 404 として扱う。</summary>
     private async Task<byte[]?> TryHtmlFallbackAsync(Board board, string threadKey, CancellationToken ct)
     {
-        var htmlUrl = $"https://{board.Host}/test/read.cgi/{board.DirectoryName}/{threadKey}/";
+        var htmlUrl = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadPageUrl(board, threadKey);
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[datFetch]   404 fallback: GET {htmlUrl}");
         try
@@ -219,6 +230,7 @@ public sealed class DatClient
     {
         var path = _paths.DatPath(board.Host, board.DirectoryName, threadKey);
         if (!File.Exists(path)) return null;
+        if (NumberedLogFormat.TryReadTitle(path, out var numberedTitle)) return numberedTitle;
         try
         {
             await using var stream = File.OpenRead(path);
@@ -244,7 +256,7 @@ public sealed class DatClient
         Stream                             httpStream,
         Stream                             diskStream,
         List<Post>                         accumulator,
-        int                                startNumber,
+        long                               startNumber,
         IProgress<IReadOnlyList<Post>>     progress,
         CancellationToken                  ct)
     {

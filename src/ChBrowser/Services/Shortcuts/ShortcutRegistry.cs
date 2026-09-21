@@ -28,7 +28,9 @@ public static class ShortcutRegistry
         // 設定 UI 側で編集不可 (= CategoryResolver.IsMouseEditable で false)。
         new ShortcutAction("favorites.patrol",        "全体", "お気に入りを巡回",         "",       "", "↓←"),
         new ShortcutAction("main.focus_address_bar",  "全体", "アドレスバーへフォーカス", "Ctrl+L", "", ""),
-        new ShortcutAction("main.refresh_board_list", "全体", "板一覧を更新",             "",       "", ""),
+        new ShortcutAction("main.refresh_board_list", "全体", "5ch板一覧更新",           "",       "", ""),
+        new ShortcutAction("main.refresh_machi_board_list", "全体", "まちBBS板一覧更新",  "",       "", ""),
+        new ShortcutAction("main.refresh_eddi_board_list",  "全体", "エッヂ板一覧更新",   "",       "", ""),
         new ShortcutAction("main.exit",               "全体", "終了",                     "",       "", ""),
 
         // スレ一覧表示領域 (= 板のスレ一覧テーブル本文)

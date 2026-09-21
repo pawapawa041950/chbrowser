@@ -1,6 +1,6 @@
 # ChBrowser
 
-Windows 用の 5ch.io 専用ブラウザ。生成AIで作成した画像や動画の情報を表示できます。
+Windows 用の掲示板ブラウザ (5ch.io / bbspink.com、したらば、まちBBS、エッヂ掲示板に対応)。生成AIで作成した画像や動画の情報を表示できます。
 
 本アプリ全編をClaude Code(コーディングAI)により作成しています。
 
@@ -59,7 +59,7 @@ dotnet publish src/ChBrowser/ChBrowser.csproj `
 - `app/config.json` — アプリ設定
 - `app/favorites.json` — お気に入り
 - `app/layout.json` — ウィンドウ位置 / ペインレイアウト
-- `5ch.io/<board>/` — subject.txt / *.dat / *.idx.json
+- `5ch.io/<board>/` — subject.txt / *.dat / *.idx.json (bbspink.com、shitaraba.net、machi.to も同じ構造。5ch 以外の *.dat はアプリ固有の番号列付き UTF-8 ログ)
 - `cache/images/` — 画像キャッシュ
 - `donguri/` — どんぐり Cookie / 推定 Lv 状態
 - `ng/rules.json` — NG ルール
@@ -87,8 +87,8 @@ src/ChBrowser/
 
 ## 免責事項
 
-- 本ソフトウェアは 5ch.io / bbspink.com の API・仕様に依存します。サーバ側の変更で動作しなくなる可能性があります。
-- 本ソフトウェアは非公式クライアントであり、5ch.net / 5ch.io 運営とは関係ありません。
+- 本ソフトウェアは 5ch.io / bbspink.com、したらば (jbbs.shitaraba.net)、まちBBS (machi.to)、エッヂ掲示板 (bbs.eddibb.cc) の API・仕様に依存します。サーバ側の変更で動作しなくなる可能性があります。
+- 本ソフトウェアは非公式クライアントであり、各掲示板の運営とは関係ありません。
 - ご利用は自己責任でお願いします。
 
 ## ライセンス

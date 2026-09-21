@@ -61,6 +61,15 @@ public sealed class DataPaths
     public string RootBbspink     => EnsureDir(Path.Combine(Root, "bbspink.com"));
 
     public string BbsmenuJsonPath   => Path.Combine(Root5chIo, "bbsmenu.json");
+
+    /// <summary>提供者ごとの板一覧キャッシュ。5ch は従来の <see cref="BbsmenuJsonPath"/> (= 互換)、
+    /// それ以外は <c>data/&lt;最初の保存ルート&gt;/boardlist.&lt;拡張子&gt;</c>。</summary>
+    public string BoardListCachePath(ChBrowser.Services.Bbs.IBbsProvider provider, string extension)
+    {
+        if (provider.Id == "5ch") return BbsmenuJsonPath;
+        var root = provider.StorageRoots.Count > 0 ? provider.StorageRoots[0] : provider.Id;
+        return Path.Combine(EnsureDir(Path.Combine(Root, root)), "boardlist." + extension.TrimStart('.'));
+    }
     public string LayoutJsonPath    => Path.Combine(AppDir, "layout.json");
     public string FavoritesJsonPath => Path.Combine(AppDir, "favorites.json");
 
@@ -84,6 +93,14 @@ public sealed class DataPaths
 
     /// <summary>どんぐりの推定 Lv・最終取得時刻などのメタを置く JSON。Phase 8。</summary>
     public string DonguriStateJsonPath => Path.Combine(DonguriDir, "state.json");
+
+    /// <summary>提供者ごとの Cookie (エッヂの edge-token 等) の永続化先 (Netscape 形式)。
+    /// <c>data/&lt;最初の保存ルート&gt;/cookies.txt</c>。5ch のどんぐりは <see cref="DonguriCookiesPath"/> で別管理。</summary>
+    public string ProviderCookiesPath(ChBrowser.Services.Bbs.IBbsProvider provider)
+    {
+        var root = provider.StorageRoots.Count > 0 ? provider.StorageRoots[0] : provider.Id;
+        return Path.Combine(EnsureDir(Path.Combine(Root, root)), "cookies.txt");
+    }
 
     /// <summary>書き込み記録 (kakikomi.txt)。Jane Xeno フォーマット互換、UTF-8 (BOM なし) + CRLF、append-only。
     /// ユーザがメモ帳等で同時編集できるよう、書込時のみ open → 即 close する運用。</summary>

@@ -44,6 +44,8 @@ public partial class App : Application
     private ConfigStorage?     _configStorage;
     private MainViewModel?     _mainVm;
     private DonguriService?    _donguriService;
+    /// <summary>提供者ごとの Cookie 保管 (エッヂの edge-token 等)。</summary>
+    private ChBrowser.Services.Bbs.ProviderCookieJars? _providerCookieJars;
     private KakikomiLog?       _kakikomiLog;
     private DataPaths?         _paths;
     private ThemeService?      _themeService;
@@ -214,7 +216,10 @@ public partial class App : Application
         // ON/OFF は AppConfig.EnableKakikomiLog で切替可 (即時反映)。
         var kakikomiLog    = new KakikomiLog(paths) { IsEnabled = _currentConfig.EnableKakikomiLog };
         _kakikomiLog       = kakikomiLog;
-        var postClient     = new PostClient(_monazilla, donguriService, kakikomiLog);
+        // 提供者ごとの Cookie 保管 (エッヂの edge-token / tinker-token 等)。どんぐりとは別ファイル。
+        var providerCookieJars = new ChBrowser.Services.Bbs.ProviderCookieJars(paths);
+        _providerCookieJars    = providerCookieJars;
+        var postClient     = new PostClient(_monazilla, donguriService, kakikomiLog, providerCookieJars);
 
         // NG (Phase 13)
         var ngStorage = new NgStorage(paths);
@@ -378,6 +383,8 @@ public partial class App : Application
         {
             ["main.focus_address_bar"]   = _ => window.FocusAddressBar(),
             ["main.refresh_board_list"]  = _ => { if (vm.RefreshBoardListCommand.CanExecute(null)) vm.RefreshBoardListCommand.Execute(null); },
+            ["main.refresh_machi_board_list"] = _ => { if (vm.RefreshMachiBoardListCommand.CanExecute(null)) vm.RefreshMachiBoardListCommand.Execute(null); },
+            ["main.refresh_eddi_board_list"]  = _ => { if (vm.RefreshEddiBoardListCommand.CanExecute(null))  vm.RefreshEddiBoardListCommand.Execute(null); },
             ["main.exit"]                = _ => Current.Shutdown(),
 
             // ----- 全体 (画面のどこから入力しても発火するカテゴリ) -----
@@ -601,6 +608,7 @@ public partial class App : Application
             reloadAllCssAction:       () => _mainVm!.ReloadAllPaneCss(_themeService),
             extractDefaultCssAction:  ExtractDefaultThemeFiles,
             clearCookiesAction:       () => ClearDonguriCookiesNow(),
+            clearEddiCookiesAction:   () => ClearProviderCookiesNow("eddi"),
             loginNowAction:           LoginDonguriNow,
             openAiBoardGuideAction:   OpenAiBoardGuideFile,
             // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
@@ -652,6 +660,31 @@ public partial class App : Application
         catch (Exception ex)
         {
             Debug.WriteLine($"[App] ClearDonguriCookiesNow failed: {ex.Message}");
+            MessageBox.Show(modalOwner,
+                $"削除に失敗しました: {ex.Message}", "Cookie 削除",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>提供者ごとの Cookie 保管 (エッヂ等) を空にして保存する。設定 → 認証 → 「エッヂの Cookie を削除」。</summary>
+    private void ClearProviderCookiesNow(string providerId, Window? owner = null)
+    {
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.FindById(providerId);
+        if (provider is null || _providerCookieJars is null) return;
+        var modalOwner = owner ?? MainWindow ?? Current.MainWindow;
+        var confirm = MessageBox.Show(
+            modalOwner,
+            $"{provider.DisplayName} の Cookie (認証トークン等) を削除します。\n" +
+            "削除後の最初の書き込みでは、再び認証コードによる認証が必要になります。\n\n削除しますか?",
+            "Cookie 削除", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
+        if (confirm != MessageBoxResult.OK) return;
+        try
+        {
+            _providerCookieJars.ClearAsync(provider).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] ClearProviderCookiesNow failed: {ex.Message}");
             MessageBox.Show(modalOwner,
                 $"削除に失敗しました: {ex.Message}", "Cookie 削除",
                 MessageBoxButton.OK, MessageBoxImage.Warning);

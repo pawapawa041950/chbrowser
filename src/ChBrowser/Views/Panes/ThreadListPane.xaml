@@ -51,6 +51,16 @@
             <MenuItem Header="次スレ候補検索" Click="ThreadListRowFindNext_Click" />
             <MenuItem Header="ログ削除"       Click="ThreadListRowDeleteLog_Click" />
         </ContextMenu>
+
+        <!-- 板行 (= data-kind="board"、「板一覧以外の取得済み板」集約タブ) を右クリックしたときのメニュー。
+             スレ行のメニューとは項目が全く違う (板単位の操作) ので別リソースにしている。
+             DataContext には JS から飛んできた {host, directoryName, title} を ThreadListBoardRowContext として詰める。 -->
+        <ContextMenu x:Key="ThreadListBoardRowContextMenu" x:Shared="False">
+            <MenuItem Header="板をお気に入りに追加" Click="ThreadListBoardRowFav_Click" />
+            <MenuItem Header="板の URL をコピー"    Click="ThreadListBoardRowCopyUrl_Click" />
+            <Separator />
+            <MenuItem Header="板を削除 (取得済みログをすべて削除)" Click="ThreadListBoardRowDelete_Click" />
+        </ContextMenu>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource PaneBorderBrush}" BorderThickness="1" Background="White">

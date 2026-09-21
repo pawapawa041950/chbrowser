@@ -681,7 +681,7 @@ public partial class ThreadDisplayPane : UserControl
         var key  = keyProp.GetString();
         if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(key)) return;
         var postNo = payload.TryGetProperty("postNumber", out var nProp) && nProp.ValueKind == JsonValueKind.Number
-                   ? nProp.GetInt32() : 0;
+                   ? nProp.GetInt64() : 0;
         var requestId = payload.TryGetProperty("requestId", out var rProp) ? rProp.GetString() ?? "" : "";
 
         _ = ReplyThreadPreviewAsync(main, wv, host, dir, key, postNo, requestId);
@@ -689,7 +689,7 @@ public partial class ThreadDisplayPane : UserControl
 
     private static async Task ReplyThreadPreviewAsync(
         MainViewModel main, WebView2 wv,
-        string host, string dir, string key, int postNo, string requestId)
+        string host, string dir, string key, long postNo, string requestId)
     {
         try
         {
@@ -790,14 +790,14 @@ public partial class ThreadDisplayPane : UserControl
     /// JS の postNoContextMenu ペイロードから組み立て、ContextMenu.DataContext に積んで
     /// 各 MenuItem の Click ハンドラから読み取る (= ネスト MenuItem でも DataContext 継承で届く)。</summary>
     private sealed record PostNoMenuContext(
-        WebView2 Wv, int Number, string Name, string Id, string Watchoi, bool IsOwn);
+        WebView2 Wv, long Number, string Name, string Id, string Watchoi, bool IsOwn);
 
     /// <summary>JS から「post-no がクリック / 右クリックされた」通知を受け、PostNoContextMenu を開く。
     /// PlacementMode.MousePoint でカーソル位置に出す (= 既存タブ右クリックメニューと同じ流儀)。</summary>
     private void HandlePostNoContextMenu(object sender, JsonElement payload)
     {
         if (sender is not WebView2 wv) return;
-        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
         var name    = payload.TryGetProperty("name",    out var npp) ? (npp.GetString() ?? "") : "";
         var id      = payload.TryGetProperty("id",      out var ipp) ? (ipp.GetString() ?? "") : "";
         var watchoi = payload.TryGetProperty("watchoi", out var wpp) ? (wpp.GetString() ?? "") : "";
@@ -899,7 +899,7 @@ public partial class ThreadDisplayPane : UserControl
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
         if (Vm is not { } main) return;
-        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
         if (!payload.TryGetProperty("isOwn",  out var oProp) || oProp.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
         var isOwn = oProp.GetBoolean();
         main.ToggleOwnPost(tab, num, isOwn);
@@ -912,7 +912,7 @@ public partial class ThreadDisplayPane : UserControl
         if (sender is not WebView2 wv) return;
         if (wv.DataContext is not ThreadTabViewModel tab) return;
         if (Vm is not { } main) return;
-        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt32(out var num)) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
         main.OpenReplyDialog(tab, num);
     }
 
@@ -1050,7 +1050,7 @@ public partial class ThreadDisplayPane : UserControl
         if (Vm is not { } main) return;
         if (!payload.TryGetProperty("postNumber", out var numProp)) return;
         if (numProp.ValueKind != JsonValueKind.Number) return;
-        if (!numProp.TryGetInt32(out var num)) return;
+        if (!numProp.TryGetInt64(out var num)) return;
         // 受信値を in-memory に保持するだけ (= idx.json への書き出しはタブクローズ / アプリ終了時に
         // MainViewModel.FlushScrollPositionToDisk で一括して行う設計)。
         main.UpdateScrollPosition(tab.Board, tab.ThreadKey, num);

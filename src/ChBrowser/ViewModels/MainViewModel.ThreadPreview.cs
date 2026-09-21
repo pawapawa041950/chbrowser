@@ -10,7 +10,7 @@ namespace ChBrowser.ViewModels;
 /// 既存タブ → ディスクキャッシュ → ネットワークの順で dat を取り、対象レス本文とタイトルを返す。</summary>
 public sealed partial class MainViewModel
 {
-    public async Task<ThreadPreviewResult> LoadThreadPreviewAsync(string host, string dir, string key, int requestedPostNo)
+    public async Task<ThreadPreviewResult> LoadThreadPreviewAsync(string host, string dir, string key, long requestedPostNo)
     {
         try
         {
@@ -44,14 +44,14 @@ public sealed partial class MainViewModel
         }
     }
 
-    private static ThreadPreviewResult ExtractPreview(IReadOnlyList<Post> posts, int requestedPostNo)
+    private static ThreadPreviewResult ExtractPreview(IReadOnlyList<Post> posts, long requestedPostNo)
     {
         if (posts.Count == 0) return ThreadPreviewResult.Failure("レスなし");
         var title = posts[0].ThreadTitle ?? "";
         var effectiveNo = requestedPostNo > 0 ? requestedPostNo : 1;
         if (effectiveNo < 1 || effectiveNo > posts.Count)
             return new ThreadPreviewResult(false, title, "", "", "", effectiveNo, $">>{effectiveNo} は存在しません");
-        var p = posts[effectiveNo - 1];
+        var p = posts[(int)(effectiveNo - 1)];
         return new ThreadPreviewResult(true, title, p.Body, p.Name, p.DateText, p.Number, null);
     }
 }
@@ -63,7 +63,7 @@ public sealed record ThreadPreviewResult(
     string  Body,
     string  Name,
     string  DateText,
-    int     PostNumber,
+    long    PostNumber,
     string? Error)
 {
     public static ThreadPreviewResult Failure(string msg)

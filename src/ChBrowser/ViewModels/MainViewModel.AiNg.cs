@@ -154,7 +154,7 @@ public sealed partial class MainViewModel
             // 直列化されるが、念のため lock で保護する。完了時にまとめて 1 回だけ保存する (途中保存しない)。
             using var gate = new SemaphoreSlim(AiNgConcurrency);
             var judgedCount = 0;
-            var maxJudgedNo = 0;
+            long maxJudgedNo = 0;
             var sync = new object();
 
             var tasks = unjudged.Select(async post =>
@@ -213,11 +213,11 @@ public sealed partial class MainViewModel
 
     /// <summary>選択中タブで現在 AI-NG により非表示になっているレス (= スコアが現しきい値以上) を
     /// レス番号昇順で返す。ステータスバーの「AING判定…」クリックで一覧表示するために使う。</summary>
-    public IReadOnlyList<(int Number, int Score)> GetSelectedTabAiNgHidden()
+    public IReadOnlyList<(long Number, int Score)> GetSelectedTabAiNgHidden()
     {
         var tab = SelectedThreadTab;
-        if (tab is null || AiNgThreshold > 5) return Array.Empty<(int, int)>();
-        var list = new List<(int Number, int Score)>();
+        if (tab is null || AiNgThreshold > 5) return Array.Empty<(long, int)>();
+        var list = new List<(long Number, int Score)>();
         foreach (var kv in tab.AiScores)
             if (kv.Value >= AiNgThreshold) list.Add((kv.Key, kv.Value));
         list.Sort((a, b) => a.Number.CompareTo(b.Number));

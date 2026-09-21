@@ -10,8 +10,9 @@ using ChBrowser.Services.Storage;
 namespace ChBrowser.Services.Api;
 
 /// <summary>
-/// 板の SETTING.TXT を取得・パースする。
-/// SETTING.TXT は SJIS の plain text で、 1 行 1 つの <c>KEY=VALUE</c>。
+/// 板の SETTING.TXT (したらばは setting.cgi) を取得・パースする。
+/// plain text で 1 行 1 つの <c>KEY=VALUE</c>。文字コードは提供者の <see cref="ChBrowser.Services.Bbs.IBbsProvider.TextEncoding"/>
+/// (5ch/まちBBS: Shift_JIS、したらば: EUC-JP)。
 /// 例: <c>BBS_LINE_NUMBER=32</c> (= 1 投稿の最大行数)。
 ///
 /// fetch ポリシは「明示要求時のみ取得」: 書き込みダイアログ起動経路では <see cref="GetOrFetchAsync"/>
@@ -29,12 +30,13 @@ public sealed class SettingTxtClient
         _paths  = paths;
     }
 
-    /// <summary>サーバから SETTING.TXT を取得し、SJIS バイトのまま保存する。
+    /// <summary>サーバから SETTING.TXT を取得し、生バイトのまま保存する。
     /// 取得失敗時はファイルを上書きせず例外を呼び元に伝える。</summary>
     public async Task<IReadOnlyDictionary<string, string>> FetchAndSaveAsync(Board board, CancellationToken ct = default)
     {
-        // board.Url は末尾 '/' 付き想定 (例: "https://hayabusa9.5ch.io/news/")
-        var url = board.Url.TrimEnd('/') + "/SETTING.TXT";
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+        var url      = provider.BoardInfoUrl(board)
+                       ?? throw new InvalidOperationException("この掲示板は板設定 (SETTING.TXT 相当) を提供していません。");
 
         using var resp = await _client.Http.GetAsync(url, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
@@ -43,7 +45,7 @@ public sealed class SettingTxtClient
         var path = _paths.SettingTxtPath(board.Host, board.DirectoryName);
         await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
 
-        return Parse(bytes);
+        return Parse(bytes, provider.TextEncoding);
     }
 
     /// <summary>ローカル保存済みの SETTING.TXT があれば読み込んでパースする。なければ null。</summary>
@@ -52,7 +54,7 @@ public sealed class SettingTxtClient
         var path = _paths.SettingTxtPath(board.Host, board.DirectoryName);
         if (!File.Exists(path)) return null;
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        return Parse(bytes);
+        return Parse(bytes, ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).TextEncoding);
     }
 
     /// <summary>ローカルに無ければ取得して保存、有ればそのまま読む。
@@ -83,10 +85,9 @@ public sealed class SettingTxtClient
         return int.TryParse(v.Trim(), out var n) ? n * 2 : null;
     }
 
-    private static IReadOnlyDictionary<string, string> Parse(byte[] sjisBytes)
+    private static IReadOnlyDictionary<string, string> Parse(byte[] bytes, Encoding encoding)
     {
-        var sjis  = Encoding.GetEncoding(932);
-        var text  = sjis.GetString(sjisBytes);
+        var text  = encoding.GetString(bytes);
         var lines = text.Split('\n');
         // 同一キーが複数行に出てきた場合は後勝ち (= 5ch SETTING.TXT には実例がほぼ無いが念のため)。
         // 大文字小文字を区別する: BBS_LINE_NUMBER のように規約上 UPPER_SNAKE_CASE で固定されているため。

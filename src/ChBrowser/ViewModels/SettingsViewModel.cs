@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -72,10 +74,114 @@ public sealed partial class SettingsViewModel : ObservableObject
     // 認証カテゴリ (どんぐりメール認証)
     [ObservableProperty] private string _donguriEmail          = "";
     [ObservableProperty] private string _donguriPassword       = "";
+    /// <summary>エッヂ掲示板の認証トークン (任意)。<see cref="AppConfig.PostAuthTokens"/>["eddi"]。</summary>
+    [ObservableProperty] private string _eddiAuthToken         = "";
     /// <summary>認証パネルに表示するログイン状態のテキスト ("ログイン済" / "失敗: ..." / "試行中..." / "未設定")。
     /// 設定画面オープン時に App から最新値を流し込む + ログイン試行のたびに更新する。</summary>
     [ObservableProperty] private string _donguriLoginStatus    = "未試行";
     [ObservableProperty] private int    _popularThreshold      = 3;
+
+    // ---- アンカー判定規則 (掲示板ごと)。doc/multi-bbs-design.md §6 ----
+    /// <summary>規則を編集できる掲示板提供者の一覧 (= 登録簿の全提供者)。</summary>
+    public IReadOnlyList<AnchorRuleProviderItem> AnchorRuleProviders { get; } =
+        ChBrowser.Services.Bbs.BbsRegistry.All.Select(pv => new AnchorRuleProviderItem(pv.Id, pv.DisplayName)).ToList();
+    [ObservableProperty] private AnchorRuleProviderItem? _selectedAnchorRuleProvider;
+    /// <summary>選択中の掲示板の規則 (編集行)。</summary>
+    public ObservableCollection<AnchorRuleRow> AnchorRuleRows { get; } = new();
+    [ObservableProperty] private AnchorRuleRow? _selectedAnchorRuleRow;
+    /// <summary>行の編集を「設定が変わった」として保存に乗せるためのカウンタ (= OnAnyPropertyChanged が拾う)。</summary>
+    [ObservableProperty] private int _anchorRulesVersion;
+    /// <summary>提供者 Id → 上書き規則。初期値は AppConfig.AnchorRules。初期値に戻すと該当キーを削除する。</summary>
+    private readonly Dictionary<string, AnchorRule[]> _anchorRulesByProvider = new(StringComparer.Ordinal);
+    private bool _loadingAnchorRules;
+
+    private void LoadAnchorRules(AppConfig initial)
+    {
+        _anchorRulesByProvider.Clear();
+        if (initial.AnchorRules is not null)
+            foreach (var (k, v) in initial.AnchorRules)
+                if (v is { Length: > 0 }) _anchorRulesByProvider[k] = v;
+        SelectedAnchorRuleProvider = AnchorRuleProviders.Count > 0 ? AnchorRuleProviders[0] : null;
+        ReloadAnchorRuleRows();
+    }
+
+    partial void OnSelectedAnchorRuleProviderChanged(AnchorRuleProviderItem? value) => ReloadAnchorRuleRows();
+
+    private void ReloadAnchorRuleRows()
+    {
+        _loadingAnchorRules = true;
+        try
+        {
+            foreach (var r in AnchorRuleRows) r.PropertyChanged -= OnAnchorRuleRowChanged;
+            AnchorRuleRows.Clear();
+            var provider = SelectedAnchorRuleProvider is { } sel ? ChBrowser.Services.Bbs.BbsRegistry.FindById(sel.Id) : null;
+            if (provider is null) return;
+            var rules = _anchorRulesByProvider.TryGetValue(provider.Id, out var ov) ? ov : provider.DefaultAnchorRules.ToArray();
+            foreach (var rule in rules)
+            {
+                var row = new AnchorRuleRow(rule);
+                row.PropertyChanged += OnAnchorRuleRowChanged;
+                AnchorRuleRows.Add(row);
+            }
+        }
+        finally { _loadingAnchorRules = false; }
+    }
+
+    private void OnAnchorRuleRowChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AnchorRuleRow.Error)) return;
+        CommitAnchorRuleRows();
+    }
+
+    /// <summary>編集行を上書き辞書へ反映して保存を発火する。</summary>
+    private void CommitAnchorRuleRows()
+    {
+        if (_loadingAnchorRules || SelectedAnchorRuleProvider is not { } sel) return;
+        _anchorRulesByProvider[sel.Id] = AnchorRuleRows.Select(r => r.ToRule()).ToArray();
+        AnchorRulesVersion++;
+    }
+
+    [RelayCommand]
+    private void AddAnchorRule()
+    {
+        var row = new AnchorRuleRow { Name = "新しい規則", Pattern = @">>\s*(?<spec>\d+)" };
+        row.Validate();
+        row.PropertyChanged += OnAnchorRuleRowChanged;
+        AnchorRuleRows.Add(row);
+        SelectedAnchorRuleRow = row;
+        CommitAnchorRuleRows();
+    }
+
+    [RelayCommand]
+    private void RemoveAnchorRule()
+    {
+        if (SelectedAnchorRuleRow is not { } row) return;
+        row.PropertyChanged -= OnAnchorRuleRowChanged;
+        AnchorRuleRows.Remove(row);
+        CommitAnchorRuleRows();
+    }
+
+    [RelayCommand] private void MoveAnchorRuleUp()   => MoveAnchorRule(-1);
+    [RelayCommand] private void MoveAnchorRuleDown() => MoveAnchorRule(+1);
+    private void MoveAnchorRule(int delta)
+    {
+        if (SelectedAnchorRuleRow is not { } row) return;
+        var i = AnchorRuleRows.IndexOf(row);
+        var j = i + delta;
+        if (i < 0 || j < 0 || j >= AnchorRuleRows.Count) return;
+        AnchorRuleRows.Move(i, j);
+        CommitAnchorRuleRows();
+    }
+
+    /// <summary>選択中の掲示板の上書きを捨てて提供者の既定に戻す。</summary>
+    [RelayCommand]
+    private void ResetAnchorRules()
+    {
+        if (SelectedAnchorRuleProvider is not { } sel) return;
+        _anchorRulesByProvider.Remove(sel.Id);
+        ReloadAnchorRuleRows();
+        AnchorRulesVersion++;
+    }
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree2";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
     [ObservableProperty] private int    _idHighlightThreshold  = 5;
@@ -195,6 +301,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>通信カテゴリの「Cookie をすべて削除」ボタン用。
     /// CookieJar 全削除 + DonguriState リセット + cookies.txt / state.json 永続化 + ステータスバー更新を呼ぶ。</summary>
     public IRelayCommand ClearCookiesCommand   { get; }
+    /// <summary>エッヂ掲示板の Cookie (edge-token / tinker-token) を削除する。</summary>
+    public IRelayCommand ClearEddiCookiesCommand { get; }
 
     /// <summary>認証カテゴリの「今すぐログイン」ボタン用。
     /// 入力中の値を <see cref="FlushPendingSave"/> で即時保存 → ConfigStorage に反映 → App 側でログイン試行。</summary>
@@ -224,6 +332,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action                _openCacheFolderAction;
     private readonly Action                _restartNowAction;
     private readonly Action?               _clearCookiesAction;
+    private readonly Action?               _clearEddiCookiesAction;
     private readonly Action?               _loginNowAction;
     /// <summary>AI カテゴリ「板/スレ説明テキストを開く」用。null ならボタン無効化。</summary>
     private readonly Action?               _openAiBoardGuideAction;
@@ -258,6 +367,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action?           extractDefaultCssAction  = null,
         Action?           clearCookiesAction       = null,
         Action?           loginNowAction           = null,
+        Action?           clearEddiCookiesAction   = null,
         Action?           openAiBoardGuideAction   = null,
         Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null)
     {
@@ -274,19 +384,21 @@ public sealed partial class SettingsViewModel : ObservableObject
         _reloadAllCssAction      = reloadAllCssAction;
         _extractDefaultCssAction = extractDefaultCssAction;
         _clearCookiesAction      = clearCookiesAction;
+        _clearEddiCookiesAction  = clearEddiCookiesAction;
         _loginNowAction          = loginNowAction;
         _testLlmConnectionAction = testLlmConnectionAction;
 
         // カテゴリ枠。NG / ショートカット / マウスジェスチャー は別ウィンドウ管理。
         Categories.Add(new("全般",         "HiDPI モード"));
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
-        Categories.Add(new("認証",         "どんぐり (5ch) のメール認証"));
+        Categories.Add(new("認証",         "どんぐり (5ch) のメール認証、エッヂの認証"));
         Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
         Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作"));
         Categories.Add(new("スレッド",     "人気レス閾値、標準表示モード、画像 HEAD しきい値"));
+        Categories.Add(new("アンカー判定", "掲示板ごとのレス参照 (アンカー) の判定規則"));
         Categories.Add(new("タブ",         "タブ幅 (スレ一覧タブ / スレッドタブ)"));
         Categories.Add(new("画像",         "キャッシュ上限、キャッシュフォルダを開く、キャッシュクリア"));
         Categories.Add(new("ビューア",     "タブのサムネイルサイズ"));
@@ -307,6 +419,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         UseNotoColorEmoji            = initial.UseNotoColorEmoji;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
+        EddiAuthToken                = initial.PostAuthTokens is { } authTokens && authTokens.TryGetValue("eddi", out var eddiToken) ? eddiToken : "";
         LlmApiUrl                    = initial.LlmApiUrl;
         LlmApiKey                    = initial.LlmApiKey;
         LlmModel                     = initial.LlmModel;
@@ -328,6 +441,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DonguriEmail                 = initial.DonguriEmail;
         DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
+        LoadAnchorRules(initial);
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
         IdHighlightThreshold         = initial.IdHighlightThreshold;
@@ -379,6 +493,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                                                     () => _openAiBoardGuideAction is not null);
         ClearCookiesCommand      = new RelayCommand(() => _clearCookiesAction?.Invoke(),
                                                     () => _clearCookiesAction is not null);
+        ClearEddiCookiesCommand  = new RelayCommand(() => _clearEddiCookiesAction?.Invoke(),
+                                                    () => _clearEddiCookiesAction is not null);
         // 「今すぐログイン」: まず未保存の入力を確定 (= debounce 待ちをスキップして即 SaveAndApply) してから login。
         // これがないと「メアド入れて即ボタン押す」で古い (= 空) 値で試行されてしまう。
         LoginNowCommand          = new RelayCommand(() =>
@@ -478,6 +594,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(NgAiConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
             case nameof(EmojiFontDownloaded):   // 絵文字フォントの DL 状態は表示専用 (ConfigStorage に書かない)
             case nameof(EmojiFontStatus):       // 絵文字フォントの DL 状況テキストも表示専用
+            case nameof(SelectedAnchorRuleRow):      // グリッドの選択行は表示専用
+            case nameof(SelectedAnchorRuleProvider): // 編集対象の掲示板切替も表示専用 (規則自体は AnchorRulesVersion で保存)
                 return;
         }
         // HiDPI / TimeoutSec の変更で再起動バナーを立てる
@@ -495,6 +613,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         RestartRequired =
             HiDpiMode  != _initialConfig.HiDpiMode  ||
             TimeoutSec != _initialConfig.TimeoutSec;
+    }
+
+    /// <summary>提供者 Id をキーにした認証トークン辞書のうち 1 件だけ差し替える (空なら削除)。他の提供者の分は保持する。</summary>
+    private static System.Collections.Generic.Dictionary<string, string>? MergeAuthToken(
+        System.Collections.Generic.Dictionary<string, string>? current, string providerId, string token)
+    {
+        var d = current is null
+            ? new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal)
+            : new System.Collections.Generic.Dictionary<string, string>(current, StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(token)) d.Remove(providerId);
+        else                                  d[providerId] = token.Trim();
+        return d.Count == 0 ? null : d;
     }
 
     private void SaveAndApply()
@@ -515,6 +645,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         UseNotoColorEmoji           = UseNotoColorEmoji,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
+        PostAuthTokens              = MergeAuthToken(_initialConfig.PostAuthTokens, "eddi", EddiAuthToken),
         LlmApiUrl                   = LlmApiUrl,
         LlmApiKey                   = LlmApiKey,
         LlmModel                    = LlmModel,
@@ -536,6 +667,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         DonguriEmail                = DonguriEmail,
         DonguriPassword             = DonguriPassword,
         PopularThreshold            = PopularThreshold,
+        AnchorRules                 = _anchorRulesByProvider.Count == 0
+                                        ? null
+                                        : new System.Collections.Generic.Dictionary<string, AnchorRule[]>(_anchorRulesByProvider, StringComparer.Ordinal),
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
         IdHighlightThreshold        = IdHighlightThreshold,
@@ -584,3 +718,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 }
+
+/// <summary>設定ウィンドウ「アンカー判定」の掲示板選択肢。</summary>
+public sealed record AnchorRuleProviderItem(string Id, string DisplayName);

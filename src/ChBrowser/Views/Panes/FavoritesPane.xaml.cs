@@ -60,6 +60,11 @@ public partial class FavoritesPane : UserControl
                 await main.OpenNonFavLogsAsync();
                 break;
             }
+            case "openUnlistedBoards":
+            {
+                await main.OpenUnlistedBoardsAsync();
+                break;
+            }
             case "setFolderExpanded":
             {
                 var idStr = payload.TryGetProperty("id", out var p) ? p.GetString() : null;

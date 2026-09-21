@@ -24,7 +24,9 @@
                    Background="{x:Static SystemColors.ControlBrush}">
             <Menu DockPanel.Dock="Left">
                 <MenuItem Header="ファイル(_F)">
-                    <MenuItem Header="板一覧を更新(_U)" Command="{Binding RefreshBoardListCommand}" />
+                    <MenuItem Header="5ch板一覧更新(_U)" Command="{Binding RefreshBoardListCommand}" />
+                    <MenuItem Header="まちBBS板一覧更新(_M)" Command="{Binding RefreshMachiBoardListCommand}" />
+                    <MenuItem Header="エッヂ板一覧更新(_E)" Command="{Binding RefreshEddiBoardListCommand}" />
                     <MenuItem Header="お気に入りチェック(_C)" Click="MenuFavCheckUpdates_Click" />
                     <Separator />
                     <MenuItem Header="終了(_X)" Click="ExitMenu_Click" />

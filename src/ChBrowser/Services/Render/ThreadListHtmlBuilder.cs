@@ -59,6 +59,11 @@ public static class ThreadListHtmlBuilder
     {
         foreach (var item in items)
         {
+            if (item.Kind == ThreadListItemKind.Board)
+            {
+                AppendBoardRow(sb, item);
+                continue;
+            }
             var t        = item.Info;
             var momentum = CalcMomentum(t.Key, now, t.PostCount);
             var state    = item.State;
@@ -99,6 +104,38 @@ public static class ThreadListHtmlBuilder
             sb.Append(@"<td class=""col-momentum"" title=""").Append(momentumStr).Append(@""">").Append(momentumStr).Append("</td>");
             sb.Append("</tr>");
         }
+    }
+
+    /// <summary>板そのものを表す行 (「板一覧以外の取得済み板」集約タブ)。
+    /// スレ行と同じ列構成 / data-* を持たせつつ、<c>data-kind="board"</c> と <c>row-board</c> クラスで JS 側が区別する
+    /// (= クリックで openBoard、右クリックで板用メニュー)。No / 勢い は空、数 = ローカル dat 件数。
+    /// 数値列の data-* は列ソートが <c>parseFloat</c> で安全に扱えるよう 0 を入れる。</summary>
+    private static void AppendBoardRow(StringBuilder sb, ThreadListItem item)
+    {
+        var name      = item.Info.Title;
+        var nameAttr  = HtmlEscape.Attr(name);
+        var boardAttr = HtmlEscape.Attr(item.BoardName);
+        var count     = item.Info.PostCount;
+
+        sb.Append(@"<tr class=""row-board""");
+        sb.Append(@" data-kind=""board""");
+        sb.Append(@" data-key=""""");
+        sb.Append(@" data-host=""").Append(HtmlEscape.Attr(item.Host)).Append('"');
+        sb.Append(@" data-dir=""").Append(HtmlEscape.Attr(item.DirectoryName)).Append('"');
+        sb.Append(@" data-no=""0""");
+        sb.Append(@" data-title=""").Append(nameAttr).Append('"');
+        sb.Append(@" data-board=""").Append(boardAttr).Append('"');
+        sb.Append(@" data-count=""").Append(count).Append('"');
+        sb.Append(@" data-momentum=""0""");
+        sb.Append(@" data-log=""0""");
+        sb.Append('>');
+        sb.Append(@"<td class=""col-log""><span class=""log-mark""></span></td>");
+        sb.Append(@"<td class=""col-no""></td>");
+        sb.Append(@"<td class=""col-title"" title=""").Append(nameAttr).Append(@""">").Append(HtmlEscape.Text(name)).Append("</td>");
+        sb.Append(@"<td class=""col-board"" title=""").Append(boardAttr).Append(@""">").Append(HtmlEscape.Text(item.BoardName)).Append("</td>");
+        sb.Append(@"<td class=""col-count"" title=""").Append(count).Append(@""">").Append(count).Append("</td>");
+        sb.Append(@"<td class=""col-momentum""></td>");
+        sb.Append("</tr>");
     }
 
     /// <summary>シェル HTML キャッシュをクリア (Phase 11d「すべての CSS を再読み込み」用)。</summary>

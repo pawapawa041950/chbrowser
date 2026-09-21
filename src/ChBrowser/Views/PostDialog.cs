@@ -350,21 +350,25 @@ public sealed class PostDialog : Window
         bodyHeader.Children.Add(bodyLabel);
 
         // どんぐり認証モードのテキスト表示 — AuthMode が変わるたびに動的に更新。
-        var authModeLabel = new TextBlock
+        // どんぐりを使わない提供者 (したらば / まちBBS) ではラベル自体を出さない。
+        if (_vm.PostForm.UsesDonguriAuth)
         {
-            VerticalAlignment = VerticalAlignment.Center,
-            Foreground        = Brushes.Gray,
-            FontSize          = 11,
-            Margin            = new Thickness(0, 0, 12, 0),
-            Text              = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode),
-        };
-        _vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(PostFormViewModel.AuthMode))
-                authModeLabel.Text = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode);
-        };
-        Grid.SetColumn(authModeLabel, 2);
-        bodyHeader.Children.Add(authModeLabel);
+            var authModeLabel = new TextBlock
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground        = Brushes.Gray,
+                FontSize          = 11,
+                Margin            = new Thickness(0, 0, 12, 0),
+                Text              = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode),
+            };
+            _vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(PostFormViewModel.AuthMode))
+                    authModeLabel.Text = "どんぐり: " + AuthModeDisplayName(_vm.AuthMode);
+            };
+            Grid.SetColumn(authModeLabel, 2);
+            bodyHeader.Children.Add(authModeLabel);
+        }
 
         var lineCountLabel = new TextBlock
         {
@@ -403,9 +407,13 @@ public sealed class PostDialog : Window
         // (4) Cookie 設定パネル — フッターの「Cookie 設定」ボタンで開閉する折り畳み領域。
         // 中身は認証モード切替 (どんぐり: なし / 通常 / メール認証) と Cookie 削除ボタン。
         // 初期状態 Collapsed (= 高さ 0) なので、開かない限り本文 (row 3 / Star) の表示領域を奪わない。
-        _cookieSettingsPanel = BuildCookieSettingsPanel();
-        Grid.SetRow(_cookieSettingsPanel, 4);
-        root.Children.Add(_cookieSettingsPanel);
+        // どんぐりを使わない提供者では Cookie 設定パネル (認証モード切替 / Cookie 削除) 自体を作らない。
+        if (_vm.PostForm.UsesDonguriAuth)
+        {
+            _cookieSettingsPanel = BuildCookieSettingsPanel();
+            Grid.SetRow(_cookieSettingsPanel, 4);
+            root.Children.Add(_cookieSettingsPanel);
+        }
 
         // (5) エラーバナー (ErrorMessage が空でないとき表示)
         var errorBanner = new Border
@@ -423,7 +431,23 @@ public sealed class PostDialog : Window
             Foreground   = new SolidColorBrush(Color.FromRgb(0x80, 0x20, 0x20)),
         };
         errorText.SetBinding(TextBlock.TextProperty, new Binding(nameof(PostFormViewModel.ErrorMessage)));
-        errorBanner.Child = errorText;
+        // 掲示板側の認証 (エッヂの認証コード等) が要るときだけ出るボタン。押すとコードをコピーしてブラウザで認証ページを開く。
+        var authButton = new Button
+        {
+            Content             = "認証ページを開く (コードをコピー)",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding             = new Thickness(10, 3, 10, 3),
+            Margin              = new Thickness(0, 6, 0, 2),
+        };
+        authButton.SetBinding(Button.CommandProperty, new Binding(nameof(PostFormViewModel.OpenAuthPageCommand)));
+        authButton.SetBinding(VisibilityProperty, new Binding(nameof(PostFormViewModel.AuthUrl))
+        {
+            Converter = new EmptyStringToVisibilityConverter(),
+        });
+        var errorStack = new StackPanel();
+        errorStack.Children.Add(errorText);
+        errorStack.Children.Add(authButton);
+        errorBanner.Child = errorStack;
         // ErrorMessage が空文字のとき Collapsed にしたいので DataTrigger 相当を Style で組む
         errorBanner.SetBinding(VisibilityProperty, new Binding(nameof(PostFormViewModel.ErrorMessage))
         {
@@ -444,9 +468,12 @@ public sealed class PostDialog : Window
 
         var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
 
-        _cookieSettingsToggleBtn = new Button { Content = "Cookie 設定", Width = 100, Margin = new Thickness(0, 0, 8, 0) };
-        _cookieSettingsToggleBtn.Click += (_, _) => ToggleCookieSettings();
-        btnPanel.Children.Add(_cookieSettingsToggleBtn);
+        if (_vm.PostForm.UsesDonguriAuth)
+        {
+            _cookieSettingsToggleBtn = new Button { Content = "Cookie 設定", Width = 100, Margin = new Thickness(0, 0, 8, 0) };
+            _cookieSettingsToggleBtn.Click += (_, _) => ToggleCookieSettings();
+            btnPanel.Children.Add(_cookieSettingsToggleBtn);
+        }
 
         _previewToggleBtn = new Button { Content = "レビュー表示", Width = 100, Margin = new Thickness(0, 0, 8, 0) };
         _previewToggleBtn.Click += (_, _) => TogglePreview();

@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -11,80 +9,97 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
+using ChBrowser.Services.Bbs;
 using ChBrowser.Services.Donguri;
 using ChBrowser.Services.Storage;
-// ChBrowser.Models.PostAuthMode を SendAsync シグネチャで使うが、namespace 既に上で using 済
 
 namespace ChBrowser.Services.Api;
 
 /// <summary>
-/// bbs.cgi への書き込み (レス + スレ立て) クライアント。
+/// 書き込み (レス + スレ立て) クライアント。プロトコルの差 (エンドポイント / フィールド名 / 文字コード / 結果判定) は
+/// 提供者 (<see cref="IBbsProvider.BuildPostSubmission"/> / <see cref="IBbsProvider.ClassifyPostResponse"/>) が持ち、
+/// ここは「フォームを符号化して送り、結果を判定し、必要なら 2 段目を送る」だけを行う。
 ///
-/// 設計書 §3.4 に従って 2 段階 POST を実装する:
-///   1) フォームを SJIS URL エンコードして POST → サーバが確認画面 (Cookie 要求 + hidden トークン) を返す
+/// 設計書 §3.4 の 2 段階 POST:
+///   1) フォームを提供者の文字コードで URL エンコードして POST → サーバが確認画面 (Cookie 要求 + hidden トークン) を返す
 ///   2) 1 段目レスポンス HTML の &lt;form&gt; から &lt;input&gt; (hidden 含む) を全部抜き出して body を作り直し、
 ///      Set-Cookie で受け取った Cookie を付けて再 POST → 完了 or エラー画面
 ///
 /// 「同 body + Cookie」だけでは現行 5ch.io は通らないことがあるため (yuki/hana/mona 等の
 /// hidden トークンをサーバが新発行して提示してくる)、2 段目は HTML から再構成した body を使う。
 ///
-/// 認証 (B11) は HTTP ヘッダではなく Cookie で行う:
+/// 認証 (B11) は HTTP ヘッダではなく Cookie で行う (5ch のみ = <see cref="PostFormSpec.UsesDonguriAuth"/>):
 ///   - MonaTicket / acorn は <see cref="DonguriService"/> 経由で <see cref="CookieJar"/> に格納
 ///   - 各リクエストで ApplyToRequest → MergeFromResponse の対で更新
+///   どんぐりを使わない提供者 (したらば / まちBBS / エッヂ) では <see cref="DonguriService"/> に一切触れない。
+///   <see cref="PostFormSpec.PersistsCookies"/> の提供者 (エッヂ) は代わりに <see cref="ProviderCookieJars"/> の保管を
+///   同じ ApplyToRequest → MergeFromResponse の対で更新し、終了時に保存する。
 ///
-/// レスポンス HTML から成否/エラー種別を判定する。判定ルールは 5ch サーバの定文言ベースで、
-/// 5ch 側の文言変更で誤分類が起きうるため <see cref="PostResult.RawHtmlSnippet"/> も併記する。
+/// 結果判定は文言マッチで、サーバ側の文言変更で誤分類が起きうるため <see cref="PostResult.RawHtmlSnippet"/> も併記する。
 /// </summary>
 public sealed class PostClient
 {
-    /// <summary>確認画面検出の手がかり: bbs.cgi が 2 段目を要求するときに必ず含まれる文言。</summary>
-    private static readonly string[] ConfirmTokens = { "書き込み確認", "通常書き込み", "name=\"yuki\"", "name=\"hana\"", "name=\"mona\"" };
-
-    /// <summary>成功画面の文言 (旧来 "書きこみました" を含むのが通例)。</summary>
-    private static readonly string[] SuccessTokens = { "書きこみました", "書き込みました", "書き込み完了" };
-
-    private static readonly Regex BodyTextRegex = new(@"<body[^>]*>(?<body>[\s\S]*?)</body>", RegexOptions.IgnoreCase);
-    private static readonly Regex TagRegex      = new(@"<[^>]+>", RegexOptions.None);
-    private static readonly Regex WsRegex       = new(@"\s+",     RegexOptions.None);
-
     private readonly MonazillaClient _http;
     private readonly DonguriService  _donguri;
     /// <summary>書き込み成功時に kakikomi.txt へ append する (任意 — 注入されていなければ no-op)。</summary>
     private readonly KakikomiLog?    _kakikomi;
+    /// <summary>提供者ごとの Cookie 保管 (エッヂ等)。注入されていなければ Cookie を持ち回らない。</summary>
+    private readonly ProviderCookieJars? _cookieJars;
 
-    public PostClient(MonazillaClient http, DonguriService donguri, KakikomiLog? kakikomi = null)
+    public PostClient(MonazillaClient http, DonguriService donguri, KakikomiLog? kakikomi = null,
+                      ProviderCookieJars? cookieJars = null)
     {
-        _http     = http;
-        _donguri  = donguri;
-        _kakikomi = kakikomi;
+        _http       = http;
+        _donguri    = donguri;
+        _kakikomi   = kakikomi;
+        _cookieJars = cookieJars;
     }
 
-    /// <summary>1 件の投稿を実行して結果を返す。CookieJar/state.json は終了時に必ず保存。</summary>
+    /// <summary>1 件の投稿を実行して結果を返す。どんぐりを使う提供者では CookieJar/state.json を終了時に必ず保存。</summary>
     public async Task<PostResult> PostAsync(PostRequest request, CancellationToken ct = default)
     {
-        // Board.Url は "https://hayabusa9.5ch.io/news/" なので bbs.cgi はホストルート直下の test/bbs.cgi
-        var uri      = new Uri(new Uri(request.Board.Url), "/test/bbs.cgi");
-        var origBody = BuildSjisFormBodyFromRequest(request);
+        var provider = BbsRegistry.ResolveOrDefault(request.Board.Host);
+        if ((provider.Capabilities & BbsCapabilities.Posting) == 0)
+            throw new InvalidOperationException("この掲示板は書き込みに対応していません。");
+
+        // 提供者ごとの Cookie 保管 (エッヂ等)。認証 Cookie を既に持っていれば手入力の認証トークンは送らない
+        // (サーバは Cookie を優先するので、メール欄に余計な "#…" を付けないため)。
+        var jar = provider.PostForm.PersistsCookies && _cookieJars is not null ? _cookieJars.Get(provider) : null;
+        if (jar is not null && !string.IsNullOrWhiteSpace(request.AuthToken) &&
+            provider.PostForm.AuthCookieName is { Length: > 0 } authCookie &&
+            provider.PostEndpointUrl(request.Board) is { } endpointForCookie &&
+            jar.Find(new Uri(endpointForCookie).Host, authCookie) is not null)
+        {
+            request = request with { AuthToken = null };
+        }
+
+        var sub         = provider.BuildPostSubmission(request);
+        var uri         = sub.Endpoint;
+        var useDonguri  = provider.PostForm.UsesDonguriAuth;
+        var authMode    = useDonguri ? request.AuthMode : PostAuthMode.None;
+        var origBody    = EncodeForm(sub.Fields, sub.Encoding);
 
         try
         {
             // ---- 1 段目 ----
-            Debug.WriteLine($"[PostClient] STAGE 1 → {uri} (auth={request.AuthMode})");
-            var first  = await SendAsync(uri, origBody, request.Board.Url, request.AuthMode, ct).ConfigureAwait(false);
-            var html1  = await DecodeSjisHtmlAsync(first, ct).ConfigureAwait(false);
-            DumpResponseDiagnostics("STAGE 1", first, html1);
-            var class1 = Classify(html1);
+            Debug.WriteLine($"[PostClient] STAGE 1 → {uri} (provider={provider.Id}, auth={authMode})");
+            var first  = await SendAsync(uri, origBody, sub, authMode, useDonguri, jar, ct).ConfigureAwait(false);
+            var html1  = await DecodeHtmlAsync(first, sub.Encoding, ct).ConfigureAwait(false);
+            DumpResponseDiagnostics("STAGE 1", first, html1, useDonguri);
+            var ctx1   = ContextOf(first, uri);
+            var class1 = provider.ClassifyPostResponse(html1, ctx1);
+            LogPostResult(provider, "STAGE 1", ctx1, class1, html1);
 
             if (class1.Outcome == PostOutcome.Success)
             {
-                _donguri.NoteWriteSucceeded();
+                if (useDonguri) _donguri.NoteWriteSucceeded();
                 AppendKakikomi(request);
                 return class1;
             }
             if (class1.Outcome != PostOutcome.NeedsConfirm)
             {
                 // 規制 / Lv不足 / brokenAcorn 等は 1 段目で確定する場合がある
-                if (class1.Outcome == PostOutcome.BrokenAcorn) _donguri.HandleBrokenAcorn(request.AuthMode);
+                if (useDonguri && class1.Outcome == PostOutcome.BrokenAcorn) _donguri.HandleBrokenAcorn(authMode);
                 return class1;
             }
 
@@ -94,30 +109,44 @@ public sealed class PostClient
             // 1 段目の元入力 (FROM/mail/MESSAGE/...) はサーバ側で hidden に値ごとリレーされてくるので、
             // form 内の <input> がそのまま 2 段目 body として通用する。万一 hidden が空っぽだったら
             // 元 body にフォールバック (動かないより試す価値はある)。
-            var hiddenBody = BuildSjisFormBodyFromHtmlForm(html1, request);
+            var hiddenBody = BuildFormBodyFromHtmlForm(html1, sub.Encoding);
             var body2      = hiddenBody ?? origBody;
             Debug.WriteLine($"[PostClient] STAGE 2 → {uri} (body source: {(hiddenBody is null ? "fallback original" : "extracted from form")})");
 
-            var second = await SendAsync(uri, body2, request.Board.Url, request.AuthMode, ct).ConfigureAwait(false);
-            var html2  = await DecodeSjisHtmlAsync(second, ct).ConfigureAwait(false);
-            DumpResponseDiagnostics("STAGE 2", second, html2);
-            var class2 = Classify(html2);
+            var second = await SendAsync(uri, body2, sub, authMode, useDonguri, jar, ct).ConfigureAwait(false);
+            var html2  = await DecodeHtmlAsync(second, sub.Encoding, ct).ConfigureAwait(false);
+            DumpResponseDiagnostics("STAGE 2", second, html2, useDonguri);
+            var ctx2   = ContextOf(second, uri);
+            var class2 = provider.ClassifyPostResponse(html2, ctx2);
+            LogPostResult(provider, "STAGE 2", ctx2, class2, html2);
 
-            if (class2.Outcome == PostOutcome.Success)        { _donguri.NoteWriteSucceeded(); AppendKakikomi(request); }
-            if (class2.Outcome == PostOutcome.BrokenAcorn)    _donguri.HandleBrokenAcorn(request.AuthMode);
+            if (class2.Outcome == PostOutcome.Success)
+            {
+                if (useDonguri) _donguri.NoteWriteSucceeded();
+                AppendKakikomi(request);
+            }
+            if (useDonguri && class2.Outcome == PostOutcome.BrokenAcorn) _donguri.HandleBrokenAcorn(authMode);
             return class2;
         }
         finally
         {
-            try { await _donguri.SaveAsync(ct).ConfigureAwait(false); }
-            catch (Exception ex) { Debug.WriteLine($"[PostClient] donguri save failed: {ex.Message}"); }
+            if (useDonguri)
+            {
+                try { await _donguri.SaveAsync(ct).ConfigureAwait(false); }
+                catch (Exception ex) { Debug.WriteLine($"[PostClient] donguri save failed: {ex.Message}"); }
+            }
+            if (jar is not null)
+            {
+                try { await jar.SaveAsync(ct).ConfigureAwait(false); }
+                catch (Exception ex) { Debug.WriteLine($"[PostClient] cookie save failed ({provider.Id}): {ex.Message}"); }
+            }
         }
     }
 
     /// <summary>HTTP レスポンスの Set-Cookie / 現在の CookieJar / HTML 抜粋を Debug 出力に流す。
     /// 投稿が通らない時の調査用。リリース版でもアプリ性能には影響しない (Debug.WriteLine は
     /// Release ビルドで no-op)。</summary>
-    private void DumpResponseDiagnostics(string label, HttpResponseMessage resp, string html)
+    private void DumpResponseDiagnostics(string label, HttpResponseMessage resp, string html, bool useDonguri)
     {
         Debug.WriteLine($"[PostClient] {label} status={(int)resp.StatusCode} {resp.StatusCode}");
         if (resp.Headers.TryGetValues("Set-Cookie", out var setCookies))
@@ -128,30 +157,15 @@ public sealed class PostClient
         {
             Debug.WriteLine("[PostClient]   Set-Cookie: (none)");
         }
-        var jarMona  = _donguri.MonaTicketValue;
-        var jarAcorn = _donguri.AcornValue;
-        var anonAcorn = _donguri.AnonAcornValue;
-        Debug.WriteLine($"[PostClient]   jar.MonaTicket={(jarMona  is null ? "(null)" : "(present)")}, jar.acorn={(jarAcorn is null ? "(null)" : "(present)")}, anon.acorn={(anonAcorn is null ? "(null)" : "(present)")}");
+        if (useDonguri)
+        {
+            var jarMona   = _donguri.MonaTicketValue;
+            var jarAcorn  = _donguri.AcornValue;
+            var anonAcorn = _donguri.AnonAcornValue;
+            Debug.WriteLine($"[PostClient]   jar.MonaTicket={(jarMona  is null ? "(null)" : "(present)")}, jar.acorn={(jarAcorn is null ? "(null)" : "(present)")}, anon.acorn={(anonAcorn is null ? "(null)" : "(present)")}");
+        }
         var snippet = html.Length > 1200 ? html[..1200] + " …(truncated)" : html;
         Debug.WriteLine($"[PostClient]   HTML: {snippet.Replace('\n', ' ').Replace('\r', ' ')}");
-    }
-
-    /// <summary>1 段目 POST の body をユーザ入力 (PostRequest) から SJIS 形式で組み立てる。</summary>
-    private static byte[] BuildSjisFormBodyFromRequest(PostRequest req)
-    {
-        var unix = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
-        var fields = new List<KeyValuePair<string, string>>
-        {
-            new("FROM",    req.Name),
-            new("mail",    req.Mail),
-            new("MESSAGE", req.Message),
-            new("bbs",     req.Board.DirectoryName),
-            new("time",    unix),
-        };
-        if (req.IsReply)     fields.Add(new("key",     req.ThreadKey!));
-        if (req.IsNewThread) fields.Add(new("subject", req.Subject!));
-        fields.Add(new("submit", req.IsNewThread ? "新規スレッド作成" : "書き込む"));
-        return EncodeAsSjisForm(fields);
     }
 
     /// <summary>確認画面 HTML から &lt;form&gt; 配下の &lt;input&gt; を全部拾って 2 段目 body にする。
@@ -159,17 +173,18 @@ public sealed class PostClient
     /// submit ボタン行は name 属性付きのものだけ採用 (押されたボタン相当を再送するため)。
     /// HTML に form / input が見当たらない場合は <c>null</c>。
     ///
-    /// 値はすでに SJIS テキストとしてパースされているので、書き出し時に SJIS バイトへ再エンコードする。
+    /// 対象 form は action に <c>.cgi</c> を含むもの (5ch bbs.cgi / したらば・まちBBS write.cgi)、無ければ最初の form。
+    /// 値はすでにテキストとしてパースされているので、書き出し時に提供者の文字コードのバイトへ再エンコードする。
     /// HTML 上の name="" / value="" はサーバが HTML エンティティ化している前提で <c>WebUtility.HtmlDecode</c>
     /// する。</summary>
-    private static byte[]? BuildSjisFormBodyFromHtmlForm(string html, PostRequest req)
+    private static byte[]? BuildFormBodyFromHtmlForm(string html, Encoding encoding)
     {
         var formMatch = Regex.Match(html,
-            @"<form\b[^>]*?action\s*=\s*[""'][^""']*bbs\.cgi[^""']*[""'][\s\S]*?</form>",
+            @"<form\b[^>]*?action\s*=\s*[""'][^""']*\.cgi[^""']*[""'][\s\S]*?</form>",
             RegexOptions.IgnoreCase);
         var formHtml = formMatch.Success
             ? formMatch.Value
-            // bbs.cgi action が見つからない場合でも、最初の <form>...</form> を試す
+            // .cgi action が見つからない場合でも、最初の <form>...</form> を試す
             : Regex.Match(html, @"<form\b[\s\S]*?</form>", RegexOptions.IgnoreCase).Value;
         if (string.IsNullOrEmpty(formHtml)) return null;
 
@@ -191,16 +206,18 @@ public sealed class PostClient
             fields.Add(new(WebUtility.HtmlDecode(name), WebUtility.HtmlDecode(value)));
         }
         if (fields.Count == 0) return null;
-        return EncodeAsSjisForm(fields);
+        return EncodeForm(fields, encoding);
     }
 
-    private static byte[] EncodeAsSjisForm(IReadOnlyList<KeyValuePair<string, string>> fields)
+    /// <summary>フィールド列を <c>application/x-www-form-urlencoded</c> のバイト列にする
+    /// (各名前 / 値を <see cref="FormEncode"/> で % エスケープし <c>&amp;</c> で連結)。</summary>
+    private static byte[] EncodeForm(IReadOnlyList<KeyValuePair<string, string>> fields, Encoding encoding)
     {
         var sb = new StringBuilder();
         for (var i = 0; i < fields.Count; i++)
         {
             if (i > 0) sb.Append('&');
-            sb.Append(SjisEncode(fields[i].Key)).Append('=').Append(SjisEncode(fields[i].Value));
+            sb.Append(FormEncode(fields[i].Key, encoding)).Append('=').Append(FormEncode(fields[i].Value, encoding));
         }
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
@@ -214,17 +231,17 @@ public sealed class PostClient
         return m.Success ? m.Groups["v"].Value : null;
     }
 
-    /// <summary>SJIS バイトに変換した上で URL エンコードする (5ch は SJIS の % エスケープを期待する)。
+    /// <summary>提供者の文字コードのバイトに変換した上で URL エンコードする (5ch / まちBBS は SJIS、したらばは EUC-JP の % エスケープを期待する)。
     ///
-    /// <para>SJIS で表現できない文字 (絵文字等) は <see cref="HtmlEntityFallbackEncoder"/> で
+    /// <para>その文字コードで表現できない文字 (絵文字等) は <see cref="HtmlEntityFallbackEncoder"/> で
     /// <c>&amp;#xNNNN;</c> の数値文字参照に倒す。素の <c>Encoding.GetEncoding(932)</c> は既定の
     /// 置換フォールバックで '?' に潰してしまい (サロゲートペアなら "??")、投稿内容が壊れるため。
     /// 数値文字参照は 5ch/Monazilla の慣習で、dat 側は <see cref="DatParser"/> の HtmlDecode により
     /// 元の文字へ復元される (= 往復して同じ表示になる)。サロゲートペアは 1 コードポイント =
     /// 1 参照にまとめられる。</para></summary>
-    private static string SjisEncode(string s)
+    private static string FormEncode(string s, Encoding encoding)
     {
-        var bytes = HtmlEntityFallbackEncoder.GetBytes(s);
+        var bytes = HtmlEntityFallbackEncoder.GetBytes(s, encoding);
         var sb    = new StringBuilder(bytes.Length * 3);
         foreach (var b in bytes)
         {
@@ -237,7 +254,8 @@ public sealed class PostClient
         return sb.ToString();
     }
 
-    private async Task<HttpResponseMessage> SendAsync(Uri uri, byte[] body, string referer, PostAuthMode authMode, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendAsync(Uri uri, byte[] body, PostSubmission sub, PostAuthMode authMode,
+                                                      bool useDonguri, CookieJar? jar, CancellationToken ct)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -245,73 +263,49 @@ public sealed class PostClient
         };
         req.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-www-form-urlencoded")
         {
-            CharSet = "Shift_JIS",
+            CharSet = sub.CharsetName,
         };
-        req.Headers.TryAddWithoutValidation("Referer", referer);
+        req.Headers.TryAddWithoutValidation("Referer", sub.Referer);
         req.Headers.TryAddWithoutValidation("Origin",  $"{uri.Scheme}://{uri.Host}");
-        _donguri.ApplyToRequest(req, authMode);
+        if (useDonguri) _donguri.ApplyToRequest(req, authMode);
+        jar?.ApplyToRequest(req);
 
         var resp = await _http.Http.SendAsync(req, ct).ConfigureAwait(false);
+        // 提供者ごとの保管: サーバが発行 / 更新した Cookie (エッヂの edge-token / tinker-token) を取り込む
+        jar?.MergeFromResponse(resp);
         // モードを伝えて Set-Cookie の振り分けを行う:
         //   MailAuth → jar (= 通常 acorn / メール認証 acorn = 同じスロット = jar 側) を更新
         //   Cookie / None → state.json の anon acorn / anon MonaTicket を更新 (= jar は触らない)
-        _donguri.MergeFromResponse(resp, authMode);
+        if (useDonguri) _donguri.MergeFromResponse(resp, authMode);
         return resp;
     }
 
-    private static async Task<string> DecodeSjisHtmlAsync(HttpResponseMessage resp, CancellationToken ct)
+    /// <summary>応答から <see cref="PostResponseContext"/> を組む。HttpClient はリダイレクトを自動追従するため、
+    /// 最終 URI がエンドポイントと違えば「リダイレクトされた」とみなす (3xx が素で返った場合も同様)。</summary>
+    private static PostResponseContext ContextOf(HttpResponseMessage resp, Uri endpoint)
+    {
+        var status   = (int)resp.StatusCode;
+        var finalUri = resp.RequestMessage?.RequestUri;
+        var redirected = (status >= 300 && status < 400)
+                      || (finalUri is not null && !string.Equals(finalUri.AbsoluteUri, endpoint.AbsoluteUri, StringComparison.Ordinal));
+        return new PostResponseContext(status, redirected, finalUri, endpoint);
+    }
+
+    /// <summary>投稿の判定根拠をアプリのログに残す (提供者 / ステータス / 最終 URI / 判定 / 本文冒頭)。
+    /// 5ch 以外の掲示板は応答文言の実例が少なく誤判定が起き得るため、後から突き合わせられるようにしておく。</summary>
+    private static void LogPostResult(IBbsProvider provider, string stage, PostResponseContext ctx, PostResult result, string html)
+    {
+        var head = PostResponseHtml.ExtractBodyText(html);
+        if (head.Length > 200) head = head[..200] + "…";
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[post] {provider.Id} {stage}: status={ctx.StatusCode} redirected={ctx.Redirected} final={ctx.FinalUri?.AbsoluteUri ?? "-"} → {result.Outcome} | {head}");
+    }
+
+    private static async Task<string> DecodeHtmlAsync(HttpResponseMessage resp, Encoding encoding, CancellationToken ct)
     {
         var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-        return Encoding.GetEncoding(932).GetString(bytes);
+        return encoding.GetString(bytes);
     }
-
-    /// <summary>HTML 全文から PostOutcome を推定する。判定は文言マッチで、誤判定の可能性ありなので
-    /// 抜粋を <see cref="PostResult.RawHtmlSnippet"/> に同梱して呼び出し側で目視できるようにしておく。</summary>
-    private static PostResult Classify(string html)
-    {
-        var bodyText = ExtractBodyText(html);
-        var snippet  = bodyText.Length > 400 ? bodyText[..400] : bodyText;
-
-        if (Contains(html, SuccessTokens))
-            return new PostResult(PostOutcome.Success, "", snippet);
-
-        // broken_acorn は HTML の id/class 名で出ることが多い
-        if (html.Contains("broken_acorn", StringComparison.OrdinalIgnoreCase) ||
-            bodyText.Contains("どんぐりが壊れています"))
-            return new PostResult(PostOutcome.BrokenAcorn, "どんぐりが壊れています。再取得します。", snippet);
-
-        if (bodyText.Contains("レベル") && (bodyText.Contains("不足") || bodyText.Contains("足りません")))
-            return new PostResult(PostOutcome.LevelInsufficient, "どんぐりレベルが不足しています。", snippet);
-
-        if (bodyText.Contains("規制") || bodyText.Contains("ERROR") || bodyText.Contains("Forbidden") ||
-            bodyText.Contains("書き込めません"))
-            return new PostResult(PostOutcome.BlockedByRule, ShortenForUser(bodyText), snippet);
-
-        if (Contains(html, ConfirmTokens))
-            return new PostResult(PostOutcome.NeedsConfirm, "", snippet);
-
-        // 何も該当しなければ未分類エラー扱い (後続で Outcome 増やす余地あり)
-        return new PostResult(PostOutcome.UnknownError, ShortenForUser(bodyText), snippet);
-    }
-
-    private static string ExtractBodyText(string html)
-    {
-        var m   = BodyTextRegex.Match(html);
-        var src = m.Success ? m.Groups["body"].Value : html;
-        var stripped = TagRegex.Replace(src, " ");
-        var collapsed = WsRegex.Replace(stripped, " ").Trim();
-        return WebUtility.HtmlDecode(collapsed);
-    }
-
-    private static bool Contains(string s, string[] tokens)
-    {
-        foreach (var t in tokens)
-            if (s.Contains(t, StringComparison.Ordinal)) return true;
-        return false;
-    }
-
-    private static string ShortenForUser(string s)
-        => s.Length <= 200 ? s : s[..200] + "…";
 
     /// <summary>kakikomi.txt にエントリを追記 (KakikomiLog 注入時のみ)。
     /// PostRequest から JaneXeno 形式に必要な値を集約する。失敗は KakikomiLog 内で吸収。</summary>

@@ -60,6 +60,11 @@
             post({ type: 'openNonFavLogs' });
             return;
         }
+        if (t === 'unlisted-boards') {
+            // クリック設定に関わらず単一クリックで開く (機能項目)
+            post({ type: 'openUnlistedBoards' });
+            return;
+        }
         if (openOnSingleClick) {
             post({ type: 'openFavorite', id: li.dataset.id });
         }
@@ -75,7 +80,7 @@
             e.preventDefault();
             return;
         }
-        if (t === 'all-logs' || t === 'non-fav-logs') {
+        if (t === 'all-logs' || t === 'non-fav-logs' || t === 'unlisted-boards') {
             e.preventDefault();
             return; // single-click 経路で処理済
         }
@@ -233,7 +238,7 @@
         }
         var t = li.dataset.type;
         // 機能フォルダ / 全ログ には現状コンテキストメニューを出さない
-        if (t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs') return;
+        if (t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs' || t === 'unlisted-boards') return;
         setSelected(li);
         post({
             type:   'contextMenu',
@@ -260,7 +265,7 @@
         // 仮想ルート / 機能フォルダ / 全ログ は drag 不可 (= 永続化対象でないので動かしようがない)
         if (!li) { e.preventDefault(); return; }
         var t = li.dataset.type;
-        if (t === 'virtual-root' || t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs') {
+        if (t === 'virtual-root' || t === 'function-folder' || t === 'all-logs' || t === 'non-fav-logs' || t === 'unlisted-boards') {
             e.preventDefault();
             return;
         }
@@ -307,7 +312,7 @@
             return;
         }
         // 機能フォルダ / 全ログ は drop 受け付け不可
-        if (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs') {
+        if (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs' || li.dataset.type === 'unlisted-boards') {
             clearDropIndicators();
             e.dataTransfer.dropEffect = 'none';
             return;
@@ -342,7 +347,7 @@
         if (!draggingId) return;
         var li = findItem(e.target);
         // 機能フォルダ / 全ログへの drop は無視
-        if (li && (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs')) {
+        if (li && (li.dataset.type === 'function-folder' || li.dataset.type === 'all-logs' || li.dataset.type === 'non-fav-logs' || li.dataset.type === 'unlisted-boards')) {
             clearDropIndicators();
             draggingId = null;
             return;

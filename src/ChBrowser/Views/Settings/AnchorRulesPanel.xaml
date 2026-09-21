@@ -1,0 +1,69 @@
+<UserControl x:Class="ChBrowser.Views.Settings.AnchorRulesPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:ChBrowser.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
+    <StackPanel>
+        <TextBlock Text="アンカー判定規則" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,8"
+                   Text="本文中の「レス参照 (アンカー)」をどう判定するかを掲示板ごとに決めます。表示は元の文字列のまま、返信ツリー・ポップアップ・連鎖 NG の判定だけがこの規則に従います。上の規則ほど優先 (長い記法を上に)。" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="掲示板:" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox ItemsSource="{Binding AnchorRuleProviders}"
+                      SelectedItem="{Binding SelectedAnchorRuleProvider, Mode=TwoWay}"
+                      DisplayMemberPath="DisplayName"
+                      Width="160" />
+            <Button Content="初期値に戻す" Command="{Binding ResetAnchorRulesCommand}" Margin="16,0,0,0" Padding="8,2" />
+        </StackPanel>
+
+        <DataGrid ItemsSource="{Binding AnchorRuleRows}"
+                  SelectedItem="{Binding SelectedAnchorRuleRow, Mode=TwoWay}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  CanUserReorderColumns="False"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal"
+                  MinHeight="120"
+                  MaxHeight="320"
+                  Margin="0,0,0,6">
+            <DataGrid.Columns>
+                <DataGridCheckBoxColumn Header="有効" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="44" />
+                <DataGridTextColumn     Header="名前" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="120" />
+                <DataGridComboBoxColumn Header="種別" SelectedValueBinding="{Binding Kind, UpdateSourceTrigger=PropertyChanged}" Width="100">
+                    <DataGridComboBoxColumn.ItemsSource>
+                        <x:Array Type="{x:Type sys:String}" xmlns:sys="clr-namespace:System;assembly=mscorlib">
+                            <sys:String>number</sys:String>
+                            <sys:String>attachment</sys:String>
+                        </x:Array>
+                    </DataGridComboBoxColumn.ItemsSource>
+                </DataGridComboBoxColumn>
+                <DataGridCheckBoxColumn Header="範囲" Binding="{Binding Ranges, UpdateSourceTrigger=PropertyChanged}" Width="44" />
+                <DataGridTextColumn     Header="パターン (正規表現、(?&lt;spec&gt;...) 必須)" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*" />
+                <DataGridTextColumn     Header="検証" Binding="{Binding Error}" IsReadOnly="True" Width="160">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#C00" />
+                            <Setter Property="TextWrapping" Value="Wrap" />
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+            <Button Content="追加"  Command="{Binding AddAnchorRuleCommand}"      Padding="8,2" Margin="0,0,6,0" />
+            <Button Content="削除"  Command="{Binding RemoveAnchorRuleCommand}"   Padding="8,2" Margin="0,0,6,0" />
+            <Button Content="上へ"  Command="{Binding MoveAnchorRuleUpCommand}"   Padding="8,2" Margin="0,0,6,0" />
+            <Button Content="下へ"  Command="{Binding MoveAnchorRuleDownCommand}" Padding="8,2" />
+        </StackPanel>
+
+        <TextBlock Text="書き方" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Foreground="#666" TextWrapping="Wrap" FontFamily="Consolas"
+                   Text="種別 number: (?&lt;spec&gt;) がレス番号。「範囲」を ON にすると 3-5,7 のような範囲・カンマ指定も受け付けます。&#x0a;種別 attachment: (?&lt;spec&gt;) は添付ファイル名。そのファイルを添付したレスへの参照になります (ふたば)。&#x0a;例 (ふたば): &gt;No\.(?&lt;spec&gt;\d+) / (?:^|\n)&gt;(?&lt;spec&gt;\d{7,}) / &gt;(?&lt;spec&gt;\d{10,}\.(?:png|jpg|gif|webm|mp4))&#x0a;C# と JS の両方で同じ式を使うため、後読み (?&lt;= (?&lt;! は使えません。" />
+    </StackPanel>
+</UserControl>

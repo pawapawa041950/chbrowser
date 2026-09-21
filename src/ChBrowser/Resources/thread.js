@@ -35,6 +35,33 @@
 
     let allPosts = [];
     let postsByNumber = new Map();
+    // postsByNumber のキーを昇順に保持する索引。実番号が疎な掲示板 (板全体で一意な番号を使う 4chan / ふたば等) でも
+    // 範囲アンカー (>>N-M) を「その範囲に実在するレス」だけで辿れるようにする (= 数値を 1 ずつ回さない)。
+    // 5ch のような密な番号でも結果は同じ。postsByNumber の set / delete と必ず対で更新する。
+    let sortedPostNumbers = [];
+    function lowerBoundNumber(n) {
+        let lo = 0, hi = sortedPostNumbers.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (sortedPostNumbers[mid] < n) lo = mid + 1; else hi = mid; }
+        return lo;
+    }
+    function registerPostNumber(n) {
+        const i = lowerBoundNumber(n);
+        if (sortedPostNumbers[i] === n) return;
+        sortedPostNumbers.splice(i, 0, n);
+    }
+    function unregisterPostNumber(n) {
+        const i = lowerBoundNumber(n);
+        if (sortedPostNumbers[i] === n) sortedPostNumbers.splice(i, 1);
+    }
+    /** [from, to] に実在するレス番号を昇順で返す。limit 件で打ち切る (0 = 無制限)。 */
+    function existingNumbersInRange(from, to, limit) {
+        const out = [];
+        for (let i = lowerBoundNumber(from); i < sortedPostNumbers.length && sortedPostNumbers[i] <= to; i++) {
+            out.push(sortedPostNumbers[i]);
+            if (limit && out.length >= limit) break;
+        }
+        return out;
+    }
     /** 「自分の書き込み」としてマークされているレス番号集合。
      *  appendPosts のペイロード ownPostNumbers で初期化 / 上書き、
      *  updateOwnPosts メッセージで増分更新される。renderPost のレンダ判定に使う。 */
@@ -376,7 +403,6 @@
     const HREF_RE          = /href\s*=\s*["']([^"']+)["']/i;
     // 単独 / 範囲(N-M) / それらをカンマ(半角"," 全角"，" 読点"、")で連ねたリスト (例: 3 / 3-5 / 3,5 / 3-5,7、9)。
     // group 1 = ">>" を除いた番号指定全体 (= parseAnchorRanges に渡す)。
-    const INNER_ANCHOR_RE  = /^\s*>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*)\s*$/;
     const HREF_ANCHOR_RE   = /read\.cgi\/[^/]+\/[^/]+\/(\d+)(?:-(\d+))?\/?$/i;
     const STRIP_TAGS_RE    = /<[^>]+>/g;
     // URL 部分は RFC 3986 の ASCII URL-safe 文字に限定 (非 ASCII = 日本語等、および () のような
@@ -403,8 +429,74 @@
     // host を限定せず sssp:// 全般を拾う (= o.5ch.io 等のアップローダ host も対象にするため)。
     // URL_OR_ANCHOR_RE の他の alt より先に置いて優先マッチさせる (= truncated の "s"/"ps" 等への巻き込みを避ける)。
     // 末尾の anchor 部 group 2 = ">>..." 表示テキスト全体、group 3 = 番号指定 (例 "3-5,7")。
-    const URL_OR_ANCHOR_RE =
-        /(sssp:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|https?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\/\/[A-Za-z0-9\-._~:/?#@!$&*+,;=%]+)|(>>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*))/g;
+    // URL 部分の正規表現ソース。anchor 部分は掲示板ごとの規則から組み立てるため、両者を結合した走査用
+    // 正規表現 (旧 URL_OR_ANCHOR_RE) は compileAnchorRules が生成する (= anchorRules.tokenRe)。
+    //   group 1 = URL 全体、group 2 = アンカー表示テキスト全体、番号指定は名前付きグループ s<規則番号> で取り出す。
+    const URL_ALT_SRC =
+        'sssp:\\/\\/[A-Za-z0-9\\-._~:/?#@!$&*+,;=%]+|https?:\\/\\/[A-Za-z0-9\\-._~:/?#@!$&*+,;=%]+|(?<![A-Za-z])(?:ttps?|tps?|ps?|s)?:\\/\\/[A-Za-z0-9\\-._~:/?#@!$&*+,;=%]+';
+
+    // ---- アンカー規則 (掲示板ごとに C# が setConfig.anchorRules で送る。doc/multi-bbs-design.md §6) ----
+    //   規則: { name, pattern (正規表現ソース。名前付きグループ spec 必須), kind: 'number' | 'attachment', ranges: bool, enabled: bool }
+    //   - number     : spec がそのままレス番号 (ranges=true なら "3-5,7" のような範囲・カンマ指定も可)
+    //   - attachment : spec は添付ファイル名。そのファイルを添付したレスの番号に解決する (ふたばの >1789890966670.png)
+    //   表示は元の文字列のまま (= 本文は書き換えない)。既定は 5ch と同じ >>N (範囲・カンマ可)。
+    const DEFAULT_ANCHOR_RULES = [{
+        name: '>>N', kind: 'number', ranges: true, enabled: true,
+        pattern: '>>\\s*(?<spec>\\d+(?:\\s*-\\s*\\d+)?(?:\\s*[,，、]\\s*\\d+(?:\\s*-\\s*\\d+)?)*)'
+    }];
+    function compileAnchorRules(list) {
+        const rules = [];
+        const alts  = [];
+        for (const r of (Array.isArray(list) ? list : [])) {
+            if (!r || r.enabled === false || !r.pattern) continue;
+            const idx = rules.length;
+            const src = String(r.pattern).replace('(?<spec>', '(?<s' + idx + '>');
+            if (src === r.pattern) { console.error('[chbrowser] anchorRules: pattern lacks (?<spec>) group', r.name); continue; }
+            try { new RegExp(src); } catch (e) { console.error('[chbrowser] anchorRules: invalid pattern', r.name, e); continue; }
+            rules.push({ name: r.name || ('rule' + idx), kind: r.kind === 'attachment' ? 'attachment' : 'number', ranges: r.ranges !== false, idx: idx });
+            alts.push('(?:' + src + ')');
+        }
+        const alt = alts.length > 0 ? alts.join('|') : '(?!)';
+        return {
+            rules:   rules,
+            scanRe:  new RegExp(alt, 'g'),                                   // 本文からの参照抽出 (extractAnchorRefs)
+            wholeRe: new RegExp('^\\s*(?:' + alt + ')\\s*$'),                 // <a> の中身全体がアンカーか (renderAnchorElement)
+            tokenRe: new RegExp('(' + URL_ALT_SRC + ')|(' + alt + ')', 'g'),   // 行の走査 (processLine)
+        };
+    }
+    var anchorRules = compileAnchorRules(DEFAULT_ANCHOR_RULES);
+
+    // 添付ファイル名 → レス番号 (attachment 規則の解決用)。レスの attachments[].filename から組む。
+    let attachmentIndex = new Map();
+    function normalizeAttachmentName(name) { return String(name || '').trim().toLowerCase(); }
+    function registerAttachments(p) {
+        if (!p || !Array.isArray(p.attachments)) return;
+        for (const a of p.attachments) {
+            const key = normalizeAttachmentName(a && a.filename);
+            if (key && !attachmentIndex.has(key)) attachmentIndex.set(key, p.number);
+        }
+    }
+    /** 規則の正規表現マッチ結果から {spec, rule} を取り出す。attachment 規則は番号へ解決する (解決不能なら null)。 */
+    function resolveAnchorMatch(m) {
+        if (!m || !m.groups) return null;
+        for (const rule of anchorRules.rules) {
+            const v = m.groups['s' + rule.idx];
+            if (v == null) continue;
+            if (rule.kind === 'attachment') {
+                const n = attachmentIndex.get(normalizeAttachmentName(v));
+                return n ? { spec: String(n), rule: rule } : null;
+            }
+            return { spec: v, rule: rule };
+        }
+        return null;
+    }
+    /** 規則に従って spec を {from,to} 範囲配列にする (ranges 不可の規則は単一番号)。 */
+    function anchorRangesOf(res) {
+        if (!res) return [];
+        if (res.rule.ranges) return parseAnchorRanges(res.spec);
+        const n = parseInt(res.spec, 10);
+        return n > 0 ? [{ from: n, to: n }] : [];
+    }
 
     /** ">>" 後の番号指定文字列 (例 "3-5,7、9") を {from,to} 範囲オブジェクト配列に分解する。
      *  カンマは半角"," / 全角"，" / 読点"、" を許容。各範囲は from<=to に正規化。数字が取れない部分は無視。 */
@@ -469,24 +561,44 @@
         return 'http' + rest;
     }
 
-    // 5ch.io / 5ch.net / bbspink.com の <c>/test/read.cgi/&lt;dir&gt;/&lt;key&gt;(/&lt;postSpec&gt;)?</c> URL を検出。
+    // 本文中の「スレ URL」判定 (= ホバーでスレタイトル + 対象レスをプレビューし、クリックで本アプリ内に開くリンク)。
+    // 判定規則は掲示板提供者ごとに C# が setConfig.threadLinkRules で送る:
+    //   [{ hostSuffixes: ['5ch.io', ...], pattern: '<URL 全体に当てる正規表現。名前付きグループ host / dir / key / post>' }]
+    // 既定 (= C# から届く前) は 5ch.io / 5ch.net / bbspink.com の /test/read.cgi/<dir>/<key>(/<postSpec>)? 形式。
     // postSpec は \d+ または \d+-\d+ (範囲)。指定が無いときは postNo=0 を返す (= 「1 レス目を見せる」の合図)。
-    const FIVECH_THREAD_RE = /^https?:\/\/([A-Za-z0-9.-]+)\/test\/read\.cgi\/([A-Za-z0-9]+)\/(\d+)(?:\/([^/?#]*))?/i;
-    function parseFiveChThreadUrl(href) {
-        if (!href) return null;
-        const m = FIVECH_THREAD_RE.exec(href);
-        if (!m) return null;
-        const host = m[1].toLowerCase();
-        const ok = host === '5ch.io'      || host.endsWith('.5ch.io')
-                || host === '5ch.net'     || host.endsWith('.5ch.net')
-                || host === 'bbspink.com' || host.endsWith('.bbspink.com');
-        if (!ok) return null;
-        let postNo = 0;
-        if (m[4]) {
-            const pm = /^(\d+)/.exec(m[4]);
-            if (pm) postNo = parseInt(pm[1], 10);
+    const DEFAULT_THREAD_LINK_RULES = [{
+        hostSuffixes: ['5ch.io', '5ch.net', 'bbspink.com'],
+        pattern: '^https?:\\/\\/(?<host>[A-Za-z0-9.-]+)\\/test\\/read\\.cgi\\/(?<dir>[A-Za-z0-9]+)\\/(?<key>\\d+)(?:\\/(?<post>[^/?#]*))?'
+    }];
+    function compileThreadLinkRules(list) {
+        const out = [];
+        for (const r of (Array.isArray(list) ? list : [])) {
+            if (!r || !r.pattern) continue;
+            try { out.push({ re: new RegExp(r.pattern, 'i'), suffixes: (r.hostSuffixes || []).map(function (h) { return String(h).toLowerCase(); }) }); }
+            catch (e) { console.error('[chbrowser] threadLinkRules: invalid pattern', r.pattern, e); }
         }
-        return { host: host, dir: m[2], key: m[3], postNo: postNo };
+        return out;
+    }
+    var THREAD_LINK_RULES = compileThreadLinkRules(DEFAULT_THREAD_LINK_RULES);
+    function hostMatchesSuffixes(host, suffixes) {
+        for (const s of suffixes) if (host === s || host.endsWith('.' + s)) return true;
+        return false;
+    }
+    function parseThreadLinkUrl(href) {
+        if (!href) return null;
+        for (const rule of THREAD_LINK_RULES) {
+            const m = rule.re.exec(href);
+            if (!m || !m.groups) continue;
+            const host = String(m.groups.host || '').toLowerCase();
+            if (!hostMatchesSuffixes(host, rule.suffixes)) continue;
+            let postNo = 0;
+            if (m.groups.post) {
+                const pm = /^(\d+)/.exec(m.groups.post);
+                if (pm) postNo = parseInt(pm[1], 10);
+            }
+            return { host: host, dir: m.groups.dir || '', key: m.groups.key || '', postNo: postNo };
+        }
+        return null;
     }
 
     function buildBodyHtml(rawText) {
@@ -536,8 +648,9 @@
         let html = '';
         let pos = 0;
         let m;
-        URL_OR_ANCHOR_RE.lastIndex = 0;
-        while ((m = URL_OR_ANCHOR_RE.exec(line)) !== null) {
+        const tokenRe = anchorRules.tokenRe;
+        tokenRe.lastIndex = 0;
+        while ((m = tokenRe.exec(line)) !== null) {
             if (m.index > pos) html += escapeHtml(line.slice(pos, m.index));
             if (m[1]) {
                 if (isSsspUrl(m[1])) {
@@ -558,8 +671,9 @@
                     html += renderExternalLink(normalized, m[1]);
                 }
             } else {
-                // m[2] = ">>..." 表示テキスト, m[3] = 番号指定 (例 "3-5,7")
-                html += renderPostAnchor(m[3], m[2]);
+                // m[2] = アンカー表示テキスト全体 (元の文字列のまま見せる)、番号指定は規則の名前付きグループから解決
+                const res = resolveAnchorMatch(m);
+                html += res ? renderPostAnchor(res.spec, m[2], res) : escapeHtml(m[2]);
             }
             pos = m.index + m[0].length;
         }
@@ -569,18 +683,18 @@
 
     function renderAnchorElement(attrs, innerRaw) {
         const inner = stripTags(innerRaw);
-        const innerM = INNER_ANCHOR_RE.exec(inner);
-        if (innerM) {
-            return renderPostAnchor(innerM[1], inner);
+        const innerRes = resolveAnchorMatch(anchorRules.wholeRe.exec(inner));
+        if (innerRes) {
+            return renderPostAnchor(innerRes.spec, inner, innerRes);
         }
         const hrefM = HREF_RE.exec(attrs);
         const href = hrefM ? hrefM[1] : '';
         // 5ch.io / bbspink.com スレ URL は同スレ内アンカー (= 旧 HREF_ANCHOR_RE 経路) ではなく、
         // ホバーでスレタイトル + 対象レス本文を出す thread-link として扱う。
         // (URL に board / key が含まれており、現スレと違う可能性がある以上、postNo だけ取って同スレ扱いするのは不正確)
-        const fiveCh = parseFiveChThreadUrl(href);
-        if (fiveCh) {
-            return renderThreadLink(href, inner, fiveCh);
+        const threadLink = parseThreadLinkUrl(href);
+        if (threadLink) {
+            return renderThreadLink(href, inner, threadLink);
         }
         const hrefA = HREF_ANCHOR_RE.exec(href);
         if (hrefA) {
@@ -594,8 +708,8 @@
      *  data-spec  : 指定全体 (= ポップアップ展開の正規ソース。範囲・カンマリスト対応)。
      *  data-from  : 先頭レス番号 (= missing 判定・クリックスクロールの後方互換用)。
      *  data-to    : 末尾レス番号 (= data-spec 不在環境向けの後方互換フォールバック)。 */
-    function renderPostAnchor(spec, visible) {
-        const ranges = parseAnchorRanges(spec);
+    function renderPostAnchor(spec, visible, res) {
+        const ranges = res ? anchorRangesOf(res) : parseAnchorRanges(spec);
         if (ranges.length === 0) return escapeHtml(visible); // 数字が取れない異常系はただのテキスト
         const from = ranges[0].from;
         const to   = ranges[ranges.length - 1].to;
@@ -762,10 +876,10 @@
         }
         // 5ch.io / bbspink.com のスレ URL はホバーでタイトル + レス本文をポップアップする専用リンクにする。
         // クリック動作 (= 本アプリ新タブで開く) は openUrl で従来通り処理されるので click 側は変更不要。
-        const fiveCh = parseFiveChThreadUrl(href);
-        if (fiveCh) {
+        const threadLink = parseThreadLinkUrl(href);
+        if (threadLink) {
             // スレ URL はサムネ枠 (= media slot) を作らない (= 画像 URL ではないため)。
-            return renderThreadLink(href, visible, fiveCh);
+            return renderThreadLink(href, visible, threadLink);
         }
         // opts.viewerImage: リンク自体のクリックを外部ブラウザではなく内蔵ビューアで開く指定
         // (sssp 通常画像など)。href が実画像 URL に解決できるときだけ有効 (= 画像でない URL は従来通り)。
@@ -971,17 +1085,19 @@
 
     // ---------- ツリー表示 (重複あり / 重複なし) 用の補助 ----------
 
-    /** 本文中の >>N / >>N-M / >>N,M(カンマリスト) 参照をすべて抽出 (タグは事前ストリップ)。
-     *  カンマリストは各要素を個別の範囲 {from,to} に展開する (= 範囲ごとの INLINE_EXPAND_RANGE_LIMIT 判定を維持)。 */
-    const ANCHOR_REF_RE = />>\s*(\d+(?:\s*-\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*-\s*\d+)?)*)/g;
+    /** 本文中のレス参照 (アンカー規則に一致するもの) をすべて抽出 (タグは事前ストリップ)。
+     *  カンマリストは各要素を個別の範囲 {from,to} に展開する (= 範囲ごとの INLINE_EXPAND_RANGE_LIMIT 判定を維持)。
+     *  C# 側 (連鎖 NG / 自分への返信検知) も同じ規則から組み立てた正規表現で抽出するため結果は一致する。 */
     function extractAnchorRefs(body) {
         if (!body) return [];
         const stripped = body.replace(/<[^>]+>/g, ' ');
         const refs = [];
-        ANCHOR_REF_RE.lastIndex = 0;
+        const scanRe = anchorRules.scanRe;
+        scanRe.lastIndex = 0;
         let m;
-        while ((m = ANCHOR_REF_RE.exec(stripped)) !== null) {
-            for (const r of parseAnchorRanges(m[1])) refs.push(r);
+        while ((m = scanRe.exec(stripped)) !== null) {
+            if (m[0].length === 0) { scanRe.lastIndex++; continue; } // 空マッチ保険
+            for (const r of anchorRangesOf(resolveAnchorMatch(m))) refs.push(r);
         }
         return refs;
     }
@@ -994,8 +1110,9 @@
         for (const post of posts) {
             const seen = new Set();
             for (const r of extractAnchorRefs(post.body || '')) {
-                if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-                for (let n = r.from; n <= r.to; n++) {
+                const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+                if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+                for (const n of inRange) {
                     if (n >= post.number) continue;       // 後方参照のみ親候補
                     if (!postsByNumber.has(n)) continue;
                     if (seen.has(n)) continue;
@@ -1016,8 +1133,9 @@
         const seen = new Set();
         const result = [];
         for (const r of extractAnchorRefs(p.body || '')) {
-            if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-            for (let n = r.from; n <= r.to; n++) {
+            const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+            if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+            for (const n of inRange) {
                 if (n >= p.number) continue;
                 if (!postsByNumber.has(n)) continue;
                 if (seen.has(n)) continue;
@@ -1042,8 +1160,9 @@
             if (!post) break;
             let next = null;
             for (const r of extractAnchorRefs(post.body || '')) {
-                if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-                for (let n = r.from; n <= r.to; n++) {
+                const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+                if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+                for (const n of inRange) {
                     if (n >= cur) continue;
                     if (!postsByNumber.has(n)) continue;
                     if (seen.has(n)) continue;
@@ -1214,8 +1333,9 @@
         if (!isEmbedded) {
             const emitted = new Set();
             for (const r of extractAnchorRefs(p.body || '')) {
-                if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-                for (let n = r.from; n <= r.to; n++) {
+                const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+                if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+                for (const n of inRange) {
                     if (n >= p.number) continue;
                     if (emitted.has(n)) continue;
                     emitted.add(n);
@@ -1293,8 +1413,9 @@
     function replayPostIntoDom(p) {
         const seen = new Set();
         for (const r of extractAnchorRefs(p.body || '')) {
-            if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-            for (let n = r.from; n <= r.to; n++) {
+            const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+            if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+            for (const n of inRange) {
                 if (n >= p.number) continue;
                 if (!postsByNumber.has(n)) continue;
                 if (seen.has(n)) continue;
@@ -3140,6 +3261,8 @@
     var numJumpHideTimer = 0;
     var numJumpEl      = null;
     var NUM_JUMP_COMMIT_MS = 700;
+    // 受け付ける最大桁数。5ch はスレ内連番なので 4、板全体で一意な番号を使う掲示板は 10 (= C# setConfig.postNumberDigits で上書き)。
+    var NUM_JUMP_MAX_DIGITS = 4;
 
     function numJumpShow(text) {
         if (!numJumpEl) {
@@ -3185,11 +3308,11 @@
 
         if (e.key >= '0' && e.key <= '9') {
             e.preventDefault();
-            if (numJumpBuf.length >= 4) numJumpBuf = ''; // 保険 (通常は 4 桁で即確定済み)
+            if (numJumpBuf.length >= NUM_JUMP_MAX_DIGITS) numJumpBuf = ''; // 保険 (通常は最大桁で即確定済み)
             numJumpBuf += e.key;
             numJumpShow('>>' + numJumpBuf);
             clearTimeout(numJumpTimer);
-            if (numJumpBuf.length >= 4) { numJumpCommit(); return; } // 最大桁 → 即確定
+            if (numJumpBuf.length >= NUM_JUMP_MAX_DIGITS) { numJumpCommit(); return; } // 最大桁 → 即確定
             numJumpTimer = setTimeout(numJumpCommit, NUM_JUMP_COMMIT_MS);
             return;
         }
@@ -3390,12 +3513,13 @@
     const MAX_RANGE = 50;
     const CLOSE_DELAY_MS = 250;
 
-    /** ">>" 番号指定 (例 "3-5,7") を distinct なレス番号配列に展開する。出現順を保ち MAX_RANGE で打ち切る。 */
+    /** ">>" 番号指定 (例 "3-5,7") を「実在するレス」の distinct な番号配列に展開する。出現順を保ち MAX_RANGE で打ち切る。
+     *  実番号が疎な掲示板では範囲の幅が大きくても実在分だけになる。1 件も実在しなければ空配列 (= 「見つかりません」表示)。 */
     function expandAnchorSpec(spec) {
         const nums = [];
         const seen = new Set();
         for (const r of parseAnchorRanges(spec)) {
-            for (let n = r.from; n <= r.to; n++) {
+            for (const n of existingNumbersInRange(r.from, r.to, MAX_RANGE)) {
                 if (seen.has(n)) continue;
                 seen.add(n);
                 nums.push(n);
@@ -3592,8 +3716,7 @@
         } else {
             const from = parseInt(anchor.dataset.from, 10);
             const to   = parseInt(anchor.dataset.to, 10) || from;
-            numbers = [];
-            for (let n = from; n <= to && numbers.length < MAX_RANGE; n++) numbers.push(n);
+            numbers = existingNumbersInRange(from, to, MAX_RANGE);
             label = from + (to !== from ? ('-' + to) : '');
         }
         const el = document.createElement('div');
@@ -3923,7 +4046,7 @@
 
         // 2) 内部状態を整合
         allPosts      = allPosts.filter(function (p) { return !set.has(p.number); });
-        for (const n of set) postsByNumber.delete(n);
+        for (const n of set) { postsByNumber.delete(n); unregisterPostNumber(n); }
         currentReverseIndex = buildReverseIndex();
 
         // 3) 残レスの返信バッジを総再計算 (消したレスへの ref が他のバッジから減るため)。
@@ -4259,6 +4382,8 @@
             }
             allPosts.push(p);
             postsByNumber.set(p.number, p);
+            registerPostNumber(p.number);
+            registerAttachments(p);
             if (isDelta) sessionNewPostNumbers.add(p.number);
 
             if (useDedupBulkRebuild) {
@@ -4266,8 +4391,9 @@
                 // reverseIndex は section A 既存 primary の返信バッジを最新化するためここで更新する。
                 const seen = new Set();
                 for (const r of extractAnchorRefs(p.body || '')) {
-                    if (r.to - r.from + 1 > INLINE_EXPAND_RANGE_LIMIT) continue;
-                    for (let n = r.from; n <= r.to; n++) {
+                    const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
+                    if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
+                    for (const n of inRange) {
                         if (n >= p.number) continue;
                         if (!postsByNumber.has(n)) continue;
                         if (seen.has(n)) continue;
@@ -4494,6 +4620,15 @@
                         closeFrom(0);
                     }
                     if (typeof msg.debug === 'boolean') DEBUG_DIAG = msg.debug;
+                    // ---- 掲示板提供者ごとの設定 (doc/multi-bbs-design.md) ----
+                    if (typeof msg.postNumberDigits === 'number' && msg.postNumberDigits >= 1) NUM_JUMP_MAX_DIGITS = Math.min(12, msg.postNumberDigits);
+                    if (Array.isArray(msg.threadLinkRules)) THREAD_LINK_RULES = compileThreadLinkRules(msg.threadLinkRules);
+                    if (Array.isArray(msg.anchorRules)) {
+                        // 規則が変わるとアンカー抽出結果 (= 返信ツリー / 逆引き) が変わる。通常はレス到着前に届くので
+                        // 再描画はしないが、既にレスがある場合は逆引きだけ最新化しておく (表示はタブ再オープンで揃う)。
+                        anchorRules = compileAnchorRules(msg.anchorRules);
+                        if (allPosts.length > 0) currentReverseIndex = buildReverseIndex();
+                    }
                     // 既存スレ表示のスクロールバーは閾値が変わると赤マーカーの集合も変わるので再計算
                     if (typeof updateRichScrollbar === 'function') updateRichScrollbar();
                     break;

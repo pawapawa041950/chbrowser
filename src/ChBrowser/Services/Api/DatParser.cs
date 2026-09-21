@@ -16,9 +16,11 @@ public static class DatParser
 {
     private static readonly string[] FieldSep = { "<>" };
 
-    /// <summary>SJIS バイト列をパースして <see cref="Post"/> 列を返す。</summary>
+    /// <summary>ログのバイト列をパースして <see cref="Post"/> 列を返す。
+    /// 先頭が版マーカーなら番号列付きログ (UTF-8、<see cref="NumberedLogFormat"/>)、それ以外は 5ch の生 dat (SJIS)。</summary>
     public static IReadOnlyList<Post> Parse(byte[] sjisBytes)
     {
+        if (NumberedLogFormat.IsNumberedLog(sjisBytes)) return NumberedLogFormat.Parse(sjisBytes);
         var sjis = Encoding.GetEncoding(932);
         var text = sjis.GetString(sjisBytes);
         return ParseText(text);
@@ -60,7 +62,7 @@ public static class DatParser
     }
 
     /// <summary>1 行分の dat テキスト (CR/LF を除去済み) を <see cref="Post"/> に変換。空行や壊れた行は null。</summary>
-    public static Post? ParseLine(string line, int number)
+    public static Post? ParseLine(string line, long number)
     {
         line = line.TrimEnd('\r');
         if (line.Length == 0) return null;
@@ -79,7 +81,7 @@ public static class DatParser
     }
 
     /// <summary>"2026/04/25(土) 12:34:56.78 ID:abc1234" を日付と ID に分離する。</summary>
-    private static (string DateText, string Id) SplitDateAndId(string field)
+    internal static (string DateText, string Id) SplitDateAndId(string field)
     {
         var s = field.Trim();
         var idx = s.IndexOf("ID:", StringComparison.Ordinal);

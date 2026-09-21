@@ -591,7 +591,7 @@ public sealed partial class MainViewModel
         var tab = CreateThreadTab(board, info);
 
         var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
-        if (savedIndex?.LastReadPostNumber is int savedPos)
+        if (savedIndex?.LastReadPostNumber is long savedPos)
             tab.ScrollTargetPostNumber = savedPos;
         if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
         {

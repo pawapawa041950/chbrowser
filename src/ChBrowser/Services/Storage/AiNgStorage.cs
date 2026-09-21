@@ -13,10 +13,10 @@ public sealed class AiNgStorage
     private readonly DataPaths _paths;
     public AiNgStorage(DataPaths paths) => _paths = paths;
 
-    private sealed record FileModel(int Version, Dictionary<int, int> Scores);
+    private sealed record FileModel(int Version, Dictionary<long, int> Scores);
 
     /// <summary>保存済みスコア (レス番号 → 1..5) を読む。無ければ空辞書。</summary>
-    public Dictionary<int, int> Load(string host, string dir, string threadKey)
+    public Dictionary<long, int> Load(string host, string dir, string threadKey)
     {
         try
         {
@@ -46,12 +46,12 @@ public sealed class AiNgStorage
     }
 
     /// <summary>スコア辞書を保存する (原子的に tmp→rename)。</summary>
-    public void Save(string host, string dir, string threadKey, IReadOnlyDictionary<int, int> scores)
+    public void Save(string host, string dir, string threadKey, IReadOnlyDictionary<long, int> scores)
     {
         try
         {
             var path = _paths.AiNgScoresPath(host, dir, threadKey);
-            var json = JsonSerializer.Serialize(new FileModel(1, new Dictionary<int, int>(scores)),
+            var json = JsonSerializer.Serialize(new FileModel(1, new Dictionary<long, int>(scores)),
                 new JsonSerializerOptions { WriteIndented = false });
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);

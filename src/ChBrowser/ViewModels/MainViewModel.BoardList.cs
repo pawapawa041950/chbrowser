@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using ChBrowser.Models;
 using CommunityToolkit.Mvvm.Input;
@@ -8,21 +9,43 @@ namespace ChBrowser.ViewModels;
 /// <summary>板一覧 (bbsmenu) の取得・WebView 用 HTML 生成・選択処理。</summary>
 public sealed partial class MainViewModel
 {
+    /// <summary>「5ch板一覧更新」。</summary>
     [RelayCommand]
-    private async Task RefreshBoardListAsync()
+    private Task RefreshBoardListAsync() => RefreshProviderBoardListAsync(ChBrowser.Services.Bbs.BbsRegistry.FiveCh);
+
+    /// <summary>「まちBBS板一覧更新」。</summary>
+    [RelayCommand]
+    private Task RefreshMachiBoardListAsync()
+    {
+        var p = ChBrowser.Services.Bbs.BbsRegistry.FindById("machi");
+        if (p is null) { StatusMessage = "まちBBS の提供者が登録されていません"; return Task.CompletedTask; }
+        return RefreshProviderBoardListAsync(p);
+    }
+
+    /// <summary>「エッヂ板一覧更新」。</summary>
+    [RelayCommand]
+    private Task RefreshEddiBoardListAsync()
+    {
+        var p = ChBrowser.Services.Bbs.BbsRegistry.FindById("eddi");
+        if (p is null) { StatusMessage = "エッヂの提供者が登録されていません"; return Task.CompletedTask; }
+        return RefreshProviderBoardListAsync(p);
+    }
+
+    /// <summary>提供者 1 つ分の板一覧を取得して差し替える。他の提供者の分は保持する。</summary>
+    private async Task RefreshProviderBoardListAsync(ChBrowser.Services.Bbs.IBbsProvider provider)
     {
         if (IsBusy) return;
         try
         {
             IsBusy = true;
-            StatusMessage = "板一覧を取得中...";
-            var cats = await _bbsmenuClient.FetchAndSaveAsync().ConfigureAwait(true);
-            ApplyCategories(cats);
-            StatusMessage = $"板一覧を更新しました: {TotalBoards(cats)} 板";
+            StatusMessage = $"{provider.DisplayName} の板一覧を取得中...";
+            var cats = await _bbsmenuClient.FetchAndSaveAsync(provider).ConfigureAwait(true);
+            ApplyCategories(provider.Id, cats);
+            StatusMessage = $"{provider.DisplayName} の板一覧を更新しました: {TotalBoards(cats)} 板";
         }
         catch (System.Exception ex)
         {
-            StatusMessage = $"板一覧の取得に失敗: {ex.Message}";
+            StatusMessage = $"{provider.DisplayName} の板一覧の取得に失敗: {ex.Message}";
         }
         finally
         {
@@ -30,24 +53,52 @@ public sealed partial class MainViewModel
         }
     }
 
-    private void ApplyCategories(IReadOnlyList<BoardCategory> cats)
+    /// <summary>提供者 Id → その板一覧。板一覧ペインは提供者ごとのトップノード配下にカテゴリを並べる。</summary>
+    private readonly Dictionary<string, IReadOnlyList<BoardCategory>> _categoriesByProvider = new(System.StringComparer.Ordinal);
+
+    /// <summary>提供者ノードの開閉状態 (既定: 開)。</summary>
+    private readonly Dictionary<string, bool> _providerExpanded = new(System.StringComparer.Ordinal);
+
+    /// <summary>5ch の板一覧を差し替える (互換 API)。</summary>
+    private void ApplyCategories(IReadOnlyList<BoardCategory> cats) => ApplyCategories("5ch", cats);
+
+    /// <summary>提供者 1 つ分の板一覧を差し替え、<see cref="BoardCategories"/> を提供者の登録順に組み直す。</summary>
+    private void ApplyCategories(string providerId, IReadOnlyList<BoardCategory> cats)
     {
+        // 提供者 Id が入っていない (旧経路 / 5ch JSON) 場合は付け直す
+        _categoriesByProvider[providerId] = cats.Select(c => c.ProviderId == providerId ? c : c with { ProviderId = providerId }).ToList();
         BoardCategories.Clear();
-        foreach (var c in cats) BoardCategories.Add(new BoardCategoryViewModel(c));
+        foreach (var provider in ChBrowser.Services.Bbs.BbsRegistry.All)
+        {
+            if (!_categoriesByProvider.TryGetValue(provider.Id, out var list)) continue;
+            foreach (var c in list) BoardCategories.Add(new BoardCategoryViewModel(c));
+        }
         RefreshBoardListHtml();
     }
 
-    /// <summary>板一覧 WebView2 用の HTML を <see cref="BoardCategories"/> から再生成する。</summary>
+    /// <summary>板一覧 WebView2 用の HTML を <see cref="BoardCategories"/> から再生成する。
+    /// 板一覧を持つ提供者はカテゴリが無くてもトップノードを出す (= 「未取得」を見せる)。</summary>
     public void RefreshBoardListHtml()
-        => BoardListHtml = ChBrowser.Services.Render.BoardListHtmlBuilder.Build(BoardCategories);
+    {
+        var providers = ChBrowser.Services.Bbs.BbsRegistry.All
+            .Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0)
+            .Select(p => new ChBrowser.Services.Render.BoardListProviderNode(
+                p.Id, p.DisplayName, !_providerExpanded.TryGetValue(p.Id, out var ex) || ex))
+            .ToList();
+        BoardListHtml = ChBrowser.Services.Render.BoardListHtmlBuilder.Build(providers, BoardCategories);
+    }
+
+    /// <summary>JS 側 setProviderExpanded メッセージから呼ばれる (HTML は再生成しない)。</summary>
+    public void SetProviderExpanded(string providerId, bool expanded) => _providerExpanded[providerId] = expanded;
 
     /// <summary>JS 側 setCategoryExpanded メッセージから呼ばれる。
-    /// ViewModel の IsExpanded を更新 (HTML は再生成しない — トグルは DOM 上で既に反映されているため)。</summary>
-    public void SetCategoryExpanded(string categoryName, bool expanded)
+    /// ViewModel の IsExpanded を更新 (HTML は再生成しない — トグルは DOM 上で既に反映されているため)。
+    /// 同名カテゴリが別提供者にあり得るので providerId でも絞る (空なら名前だけで探す = 旧経路)。</summary>
+    public void SetCategoryExpanded(string categoryName, bool expanded, string? providerId = null)
     {
         foreach (var c in BoardCategories)
         {
-            if (c.CategoryName == categoryName)
+            if (c.CategoryName == categoryName && (string.IsNullOrEmpty(providerId) || c.ProviderId == providerId))
             {
                 c.IsExpanded = expanded;
                 return;
@@ -119,7 +170,7 @@ public sealed partial class MainViewModel
             }
 
         // Fallback: bbsmenu に未登録。最低限の Board を URL から組み立て。
-        var fallbackUrl = $"https://{host}/{directoryName}/";
+        var fallbackUrl = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(host).BoardUrl(host, directoryName);
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[resolveBoard] FALLBACK (bbsmenu に未登録): host='{host}', dir='{directoryName}', categories={BoardCategories.Count} → Url='{fallbackUrl}'");
         return new Board(

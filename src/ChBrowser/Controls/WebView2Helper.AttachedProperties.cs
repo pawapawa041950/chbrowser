@@ -166,7 +166,7 @@ public static partial class WebView2Helper
         var markPostNumber = binding?.MarkPostNumber;
         // 「自分の書き込み」のレス番号集合も併送 (= JS 側で「自分」バッジ表示)。
         // 集合は通常極小 (数件) なので毎バッチに同梱しても無害。
-        var ownPosts     = binding?.OwnPostNumbers ?? System.Array.Empty<int>();
+        var ownPosts     = binding?.OwnPostNumbers ?? System.Array.Empty<long>();
 
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[appendBatch] serialize: posts={data.Posts.Count}"
@@ -209,8 +209,8 @@ public static partial class WebView2Helper
             type           = "resyncThreadState",
             viewMode       = tab.ViewMode,
             posts          = tab.Posts,
-            scrollTarget   = (int?)tab.ScrollTargetPostNumber,
-            markPostNumber = (int?)tab.MarkPostNumber,
+            scrollTarget   = (long?)tab.ScrollTargetPostNumber,
+            markPostNumber = (long?)tab.MarkPostNumber,
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
             filter = new
             {
@@ -319,7 +319,7 @@ public static partial class WebView2Helper
     //
     // NG ルールが追加された直後に「現状開いているスレで新たに hidden になる番号」を
     // C# 側で計算し、JS に setHiddenPosts メッセージで push する。
-    // 値の型は IReadOnlyList<int> (or any IEnumerable<int>)。null と空配列は早期 return。
+    // 値の型は IReadOnlyList<long> (or any IEnumerable<long>)。null と空配列は早期 return。
     // 同じ集合を 2 回流しても DOM 操作は冪等 (= 既に消えているレスは何もしないので再 push は安全)。
     // ------------------------------------------------------------
 
@@ -336,7 +336,7 @@ public static partial class WebView2Helper
     private static void OnHidePostsPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv) return;
-        if (e.NewValue is not System.Collections.Generic.IEnumerable<int> nums) return;
+        if (e.NewValue is not System.Collections.Generic.IEnumerable<long> nums) return;
         var arr = System.Linq.Enumerable.ToArray(nums);
         if (arr.Length == 0) return;
         var json = JsonSerializer.Serialize(new { type = "setHiddenPosts", numbers = arr }, PostJsonOptions);
@@ -365,7 +365,7 @@ public static partial class WebView2Helper
     private static void OnAiHiddenPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv) return;
-        if (e.NewValue is not System.Collections.Generic.IEnumerable<int> nums) return; // null は無視 (= 未設定)
+        if (e.NewValue is not System.Collections.Generic.IEnumerable<long> nums) return; // null は無視 (= 未設定)
         var arr = System.Linq.Enumerable.ToArray(nums); // 空配列もそのまま送る (= 全解除)
         var json = JsonSerializer.Serialize(new { type = "setAiHidden", numbers = arr }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);

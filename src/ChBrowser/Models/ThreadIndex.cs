@@ -19,7 +19,11 @@ namespace ChBrowser.Models;
 /// 注 2: 「自分のレスへの返信検知」(旧 <c>HasReplyToOwn</c>) も **永続化しない** 設計に変更。
 /// 「直前の差分取得が自分への返信を含むか」のフラグであり、cache load では立てず、ToggleOwnPost でも発火しない。
 /// 次の取得 / 一覧更新が来たら自由に他マークで上書きされる (= 短期 alert 用途)。
+/// <param name="LastFetchedPostNumber">前回取得完了時の最大レス番号 (= 掲示板の実番号)。番号が疎な掲示板 (欠番あり /
+/// 板全体で一意な番号) では件数と一致しないため、「番号以降」で差分取得する提供者はこれを境界に使う。
+/// 5ch は件数 == 最大番号なので <see cref="LastFetchedPostCount"/> と同じ値になる。無ければ null (旧 idx.json)。</param>
 public sealed record ThreadIndex(
-    int?   LastReadPostNumber,
+    long?  LastReadPostNumber,
     int?   LastFetchedPostCount,
-    int[]? OwnPostNumbers = null);
+    long[]? OwnPostNumbers = null,
+    long?  LastFetchedPostNumber = null);

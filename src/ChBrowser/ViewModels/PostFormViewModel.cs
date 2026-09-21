@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
 using ChBrowser.Services.Api;
+using ChBrowser.Services.Bbs;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -22,6 +23,8 @@ public sealed partial class PostFormViewModel : ObservableObject
     private readonly string?    _threadKey;
     /// <summary>レス書き込み時の元スレタイトル (kakikomi.txt 用)。新スレ立て時は空文字。</summary>
     private readonly string     _threadTitle;
+    /// <summary>掲示板側の認証トークン (設定 <see cref="AppConfig.PostAuthTokens"/>、エッヂ等)。無ければ null。</summary>
+    private readonly string?    _authToken;
 
     public string DialogTitle { get; }
 
@@ -44,9 +47,14 @@ public sealed partial class PostFormViewModel : ObservableObject
     /// <summary>送信時の認証モード (= どの Cookie 集合をリクエストに添付するか)。
     /// 既定はコンストラクタ呼び出し側 (MainViewModel) が現在の どんぐり 状態を見て決める:
     /// メール認証ログイン中なら MailAuth、acorn だけなら Cookie、なにもないなら None。
-    /// ユーザーは書き込みダイアログで RadioButton で切替可能。</summary>
+    /// ユーザーは書き込みダイアログで RadioButton で切替可能。
+    /// どんぐりを使わない提供者 (<see cref="PostForm"/>.UsesDonguriAuth == false) では常に <see cref="PostAuthMode.None"/> に固定される。</summary>
     [ObservableProperty]
     private PostAuthMode _authMode = PostAuthMode.MailAuth;
+
+    /// <summary>書き込み先の提供者が宣言する投稿フォーム仕様 (名前 / メール / スレ立て / どんぐり認証の有無)。
+    /// PostDialog はこれを見て UI を出し分ける。</summary>
+    public PostFormSpec PostForm { get; }
 
     [ObservableProperty]
     private bool _isBusy;
@@ -58,6 +66,18 @@ public sealed partial class PostFormViewModel : ObservableObject
     /// <summary>ステータス領域に出す簡易情報 (送信中・成功)。</summary>
     [ObservableProperty]
     private string _statusMessage = "";
+
+    /// <summary>掲示板側の認証が必要なとき (<see cref="PostOutcome.AuthRequired"/>) にブラウザで開く認証ページ URL。
+    /// 空ならエラーバナーの「認証ページを開く」ボタンは非表示。</summary>
+    [ObservableProperty]
+    private string _authUrl = "";
+
+    /// <summary>認証ページに入力する認証コード (エッヂは 6 桁)。「認証ページを開く」でクリップボードへコピーする。</summary>
+    [ObservableProperty]
+    private string _authCode = "";
+
+    /// <summary>認証コードをクリップボードへコピーし、<see cref="AuthUrl"/> を既定ブラウザで開く。</summary>
+    public IRelayCommand OpenAuthPageCommand { get; }
 
     /// <summary>板の SETTING.TXT で指定された 1 投稿あたりの行数上限 (= <c>BBS_LINE_NUMBER</c>)。
     /// 取得失敗 / SETTING.TXT に該当キーが無い場合は null。表示時は「上限不明」扱いになる。</summary>
@@ -105,29 +125,60 @@ public sealed partial class PostFormViewModel : ObservableObject
 
     /// <summary>レス書き込み用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
     public PostFormViewModel(PostClient postClient, Board board, string threadKey, string threadTitle,
-                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth)
+                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth, string? authToken = null)
     {
         _postClient  = postClient;
         _board       = board;
         _threadKey   = threadKey;
         _threadTitle = threadTitle ?? "";
+        _authToken   = authToken;
         DialogTitle  = $"レスを書き込む: {threadTitle}";
-        AuthMode     = defaultAuthMode;
+        PostForm     = BbsRegistry.ResolveOrDefault(board.Host).PostForm;
+        AuthMode     = PostForm.UsesDonguriAuth ? defaultAuthMode : PostAuthMode.None;
         SubmitCommand = new AsyncRelayCommand(SubmitAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(Message));
+        OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
     }
 
     /// <summary>スレ立て用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
     public PostFormViewModel(PostClient postClient, Board board,
-                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth)
+                             PostAuthMode defaultAuthMode = PostAuthMode.MailAuth, string? authToken = null)
     {
         _postClient  = postClient;
         _board       = board;
         _threadKey   = null;
         _threadTitle = "";
+        _authToken   = authToken;
         DialogTitle  = $"新規スレッド作成: {board.BoardName}";
-        AuthMode     = defaultAuthMode;
+        PostForm     = BbsRegistry.ResolveOrDefault(board.Host).PostForm;
+        AuthMode     = PostForm.UsesDonguriAuth ? defaultAuthMode : PostAuthMode.None;
         SubmitCommand = new AsyncRelayCommand(SubmitAsync,
             () => !IsBusy && !string.IsNullOrWhiteSpace(Message) && !string.IsNullOrWhiteSpace(Subject));
+        OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
+    }
+
+    partial void OnAuthUrlChanged(string value) => OpenAuthPageCommand.NotifyCanExecuteChanged();
+
+    /// <summary>「認証ページを開く (コードをコピー)」。コードをクリップボードへ入れてから既定ブラウザで認証ページを開く。
+    /// エッヂの認証ページは Cloudflare の確認を通るためアプリ内では完結できず、通常のブラウザに任せる。</summary>
+    private void OpenAuthPage()
+    {
+        if (string.IsNullOrEmpty(AuthUrl)) return;
+        try
+        {
+            if (!string.IsNullOrEmpty(AuthCode)) System.Windows.Clipboard.SetText(AuthCode);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PostFormViewModel] clipboard failed: {ex.Message}");
+        }
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = AuthUrl, UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"ブラウザで認証ページを開けませんでした: {ex.Message}\n{AuthUrl}";
+        }
     }
 
     partial void OnIsSageChanged(bool value)
@@ -152,6 +203,11 @@ public sealed partial class PostFormViewModel : ObservableObject
         OnPropertyChanged(nameof(IsOverLineLimit));
     }
     partial void OnSubjectChanged(string value)  => SubmitCommand.NotifyCanExecuteChanged();
+    /// <summary>どんぐりを使わない提供者では None 以外に切り替えられても None に戻す (UI 側は RadioButton を出さないが念のため)。</summary>
+    partial void OnAuthModeChanged(PostAuthMode value)
+    {
+        if (!PostForm.UsesDonguriAuth && value != PostAuthMode.None) AuthMode = PostAuthMode.None;
+    }
     partial void OnIsBusyChanged(bool value)     => SubmitCommand.NotifyCanExecuteChanged();
     partial void OnLineLimitChanged(int? value)
     {
@@ -181,6 +237,8 @@ public sealed partial class PostFormViewModel : ObservableObject
             if (!ok) return;
         }
         ErrorMessage  = "";
+        AuthUrl       = "";
+        AuthCode      = "";
         StatusMessage = "送信中…";
         IsBusy        = true;
         try
@@ -193,7 +251,8 @@ public sealed partial class PostFormViewModel : ObservableObject
                 Mail:        Mail,
                 Message:     Message,
                 AuthMode:    AuthMode,
-                ThreadTitle: IsNewThread ? null : _threadTitle);
+                ThreadTitle: IsNewThread ? null : _threadTitle,
+                AuthToken:   _authToken);
 
             var result = await _postClient.PostAsync(req, ct).ConfigureAwait(true);
             LastResult = result;
@@ -220,6 +279,16 @@ public sealed partial class PostFormViewModel : ObservableObject
                     break;
                 case PostOutcome.BrokenAcorn:
                     ErrorMessage  = "どんぐり Cookie が破損しています。再取得しました — もう一度送信してみてください。";
+                    StatusMessage = "";
+                    break;
+                case PostOutcome.AuthRequired:
+                    AuthUrl  = result.AuthUrl  ?? "";
+                    AuthCode = result.AuthCode ?? "";
+                    ErrorMessage = string.IsNullOrEmpty(AuthCode)
+                        ? "掲示板側の認証が必要です。「認証ページを開く」でブラウザから認証してから、もう一度送信してください。"
+                          + (string.IsNullOrEmpty(result.Message) ? "" : $" ({result.Message})")
+                        : $"掲示板側の認証が必要です。認証コード {AuthCode} を、「認証ページを開く」で開いたブラウザの認証ページに入力してください "
+                          + "(コードはクリップボードにコピーされます)。認証が済んだら、このままもう一度送信してください。";
                     StatusMessage = "";
                     break;
                 default:

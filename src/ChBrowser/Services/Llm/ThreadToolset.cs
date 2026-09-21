@@ -103,9 +103,9 @@ public sealed class ThreadToolset : IAgentToolset
         string?                       attachedThreadKey       = null,
         string?                       attachedTitle           = null,
         IReadOnlyList<Post>?          attachedPosts           = null,
-        int?                          attachedLastRead        = null,
-        int?                          attachedMarkPostNumber  = null,
-        IEnumerable<int>?             attachedOwnPostNumbers  = null,
+        long?                         attachedLastRead        = null,
+        long?                         attachedMarkPostNumber  = null,
+        IEnumerable<long>?            attachedOwnPostNumbers  = null,
         bool                          attachedHasReplyToOwn   = false)
     {
         _dataLoader               = dataLoader;
@@ -125,7 +125,7 @@ public sealed class ThreadToolset : IAgentToolset
                 InboundAnchors:     BuildInboundAnchorIndex(posts),
                 LastReadPostNumber: attachedLastRead,
                 MarkPostNumber:     attachedMarkPostNumber,
-                OwnPostNumbers:     attachedOwnPostNumbers is null ? new HashSet<int>() : new HashSet<int>(attachedOwnPostNumbers),
+                OwnPostNumbers:     attachedOwnPostNumbers is null ? new HashSet<long>() : new HashSet<long>(attachedOwnPostNumbers),
                 HasReplyToOwn:      attachedHasReplyToOwn);
         }
     }
@@ -138,17 +138,17 @@ public sealed class ThreadToolset : IAgentToolset
         string                      Title,
         string                      BoardName,
         IReadOnlyList<Post>         Posts,
-        Dictionary<int, List<int>>  InboundAnchors,
-        int?                        LastReadPostNumber,
-        int?                        MarkPostNumber,
-        IReadOnlySet<int>           OwnPostNumbers,
+        Dictionary<long, List<long>> InboundAnchors,
+        long?                       LastReadPostNumber,
+        long?                       MarkPostNumber,
+        IReadOnlySet<long>          OwnPostNumbers,
         bool                        HasReplyToOwn);
 
     /// <summary>本文を 1 度ずつ走査して被アンカーマップ (target -> from[]) を作る。
     /// アンカー範囲 (>>N-M) は両端含めて展開、リスト (>>N,M) は個別にカウント。</summary>
-    private static Dictionary<int, List<int>> BuildInboundAnchorIndex(IReadOnlyList<Post> posts)
+    private static Dictionary<long, List<long>> BuildInboundAnchorIndex(IReadOnlyList<Post> posts)
     {
-        var map = new Dictionary<int, List<int>>();
+        var map = new Dictionary<long, List<long>>();
         foreach (var p in posts)
         {
             var body = CleanBody(p.Body);
@@ -157,7 +157,7 @@ public sealed class ThreadToolset : IAgentToolset
                 if (target <= 0 || target == p.Number) continue;
                 if (!map.TryGetValue(target, out var list))
                 {
-                    list = new List<int>();
+                    list = new List<long>();
                     map[target] = list;
                 }
                 // 同一レス内に >>N と >>N が複数あっても 1 票扱い。
@@ -170,7 +170,7 @@ public sealed class ThreadToolset : IAgentToolset
     /// <summary>本文中のアンカー記法から参照先レス番号を全列挙する。
     /// <c>&gt;&gt;5</c>, <c>&gt;&gt;5-7</c> (=5,6,7), <c>&gt;&gt;5,7,9</c> (=5,7,9) の混在に対応。
     /// 範囲が異常に広い場合は安全のため 50/100 件で打ち切る。</summary>
-    private static IEnumerable<int> ExtractAnchorTargets(string body)
+    private static IEnumerable<long> ExtractAnchorTargets(string body)
     {
         if (string.IsNullOrEmpty(body)) yield break;
         foreach (Match m in AnchorRefRe.Matches(body))
@@ -182,7 +182,7 @@ public sealed class ThreadToolset : IAgentToolset
                 var dash = sub.IndexOf('-');
                 if (dash < 0)
                 {
-                    if (int.TryParse(sub, out var n))
+                    if (long.TryParse(sub, out var n))
                     {
                         yield return n;
                         if (++emitted >= 100) yield break;
@@ -190,13 +190,13 @@ public sealed class ThreadToolset : IAgentToolset
                 }
                 else
                 {
-                    if (int.TryParse(sub[..dash], out var a) &&
-                        int.TryParse(sub[(dash + 1)..], out var b))
+                    if (long.TryParse(sub[..dash], out var a) &&
+                        long.TryParse(sub[(dash + 1)..], out var b))
                     {
                         var lo = Math.Min(a, b);
                         var hi = Math.Max(a, b);
                         var capped = Math.Min(hi, lo + 50);
-                        for (int n = lo; n <= capped; n++)
+                        for (long n = lo; n <= capped; n++)
                         {
                             yield return n;
                             if (++emitted >= 100) yield break;
@@ -663,7 +663,7 @@ public sealed class ThreadToolset : IAgentToolset
             if (!string.IsNullOrEmpty(url))
             {
                 if (!_dataLoader.TryParseThreadUrl(url, out var h, out var d, out var k))
-                    return (null, $"thread_url の解釈に失敗: \"{url}\" (5ch.io / bbspink.com のスレ URL である必要があります)");
+                    return (null, $"thread_url の解釈に失敗: \"{url}\" (対応掲示板のスレ URL である必要があります)");
 
                 // attached と一致するならそれを使う (= 状態系も読める)。
                 if (_attached is not null
@@ -686,7 +686,7 @@ public sealed class ThreadToolset : IAgentToolset
                     InboundAnchors:     BuildInboundAnchorIndex(posts),
                     LastReadPostNumber: null,
                     MarkPostNumber:     null,
-                    OwnPostNumbers:     new HashSet<int>(),
+                    OwnPostNumbers:     new HashSet<long>(),
                     HasReplyToOwn:      false);
                 return (ctx, null);
             }
@@ -712,7 +712,8 @@ public sealed class ThreadToolset : IAgentToolset
             title       = ctx.Title,
             board       = ctx.BoardName,
             board_url   = ctx.Board.Url,
-            thread_url  = $"https://{ctx.Board.Host}/test/read.cgi/{ctx.Board.DirectoryName}/{ctx.ThreadKey}/",
+            thread_url  = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(ctx.Board.Host)
+                              .ThreadUrl(ctx.Board.Host, ctx.Board.DirectoryName, ctx.ThreadKey),
             total_posts = ctx.Posts.Count,
             op = op is null ? null : new
             {
@@ -732,15 +733,15 @@ public sealed class ThreadToolset : IAgentToolset
             return ErrorJson("attached スレッドが無いので状態は取得できません (このツールは attached スレ専用)。");
 
         var ctx = _attached;
-        int? newStart = null;
-        int? newEnd   = null;
+        long? newStart = null;
+        long? newEnd   = null;
         int  newCount = 0;
-        if (ctx.MarkPostNumber is int mark && ctx.Posts.Count > 0)
+        if (ctx.MarkPostNumber is long mark && ctx.Posts.Count > 0)
         {
             newStart = mark;
             newEnd   = ctx.Posts[^1].Number;
             if (newEnd.Value >= newStart.Value)
-                newCount = newEnd.Value - newStart.Value + 1;
+                newCount = (int)(newEnd.Value - newStart.Value + 1);
         }
 
         string hint;
@@ -771,9 +772,9 @@ public sealed class ThreadToolset : IAgentToolset
     {
         if (!TryParseObject(argsJson, out var args))
             return ErrorJson("引数 JSON のパースに失敗");
-        if (!args.TryGetProperty("start", out var startEl) || !TryGetIntLoose(startEl, out var start))
+        if (!args.TryGetProperty("start", out var startEl) || !TryGetLongLoose(startEl, out var start))
             return ErrorJson("start が指定されていないか、整数として読み取れません");
-        if (!args.TryGetProperty("end",   out var endEl)   || !TryGetIntLoose(endEl,   out var end))
+        if (!args.TryGetProperty("end",   out var endEl)   || !TryGetLongLoose(endEl,   out var end))
             return ErrorJson("end が指定されていないか、整数として読み取れません");
 
         var (ctx, err) = await ResolveContextAsync(args, ct).ConfigureAwait(false);
@@ -788,7 +789,7 @@ public sealed class ThreadToolset : IAgentToolset
         if (hi - lo + 1 > MaxPostsPerCall)
             return ErrorJson($"範囲が広すぎます ({hi - lo + 1} 件)。1 度に取れるのは {MaxPostsPerCall} 件まで。分割して呼んでください");
 
-        var slice = new List<object>(hi - lo + 1);
+        var slice = new List<object>((int)(hi - lo + 1));
         foreach (var p in ctx.Posts)
         {
             if (p.Number < lo || p.Number > hi) continue;
@@ -877,7 +878,7 @@ public sealed class ThreadToolset : IAgentToolset
     {
         if (!TryParseObject(argsJson, out var args))
             return ErrorJson("引数 JSON のパースに失敗");
-        if (!args.TryGetProperty("number", out var nEl) || !TryGetIntLoose(nEl, out var number))
+        if (!args.TryGetProperty("number", out var nEl) || !TryGetLongLoose(nEl, out var number))
             return ErrorJson("number が指定されていないか、整数として読み取れません");
 
         var (ctx, err) = await ResolveContextAsync(args, ct).ConfigureAwait(false);
@@ -932,7 +933,7 @@ public sealed class ThreadToolset : IAgentToolset
     {
         if (!TryParseObject(argsJson, out var args))
             return ErrorJson("引数 JSON のパースに失敗");
-        if (!args.TryGetProperty("number", out var nEl) || !TryGetIntLoose(nEl, out var target))
+        if (!args.TryGetProperty("number", out var nEl) || !TryGetLongLoose(nEl, out var target))
             return ErrorJson("number が指定されていないか、整数として読み取れません");
 
         var limit = DefaultRepliesLimit;
@@ -955,7 +956,7 @@ public sealed class ThreadToolset : IAgentToolset
         }
 
         var truncated = fromList.Count > limit;
-        var picked    = truncated ? fromList.Take(limit) : (IEnumerable<int>)fromList;
+        var picked    = truncated ? fromList.Take(limit) : (IEnumerable<long>)fromList;
         var replies   = new List<object>(Math.Min(fromList.Count, limit));
         foreach (var fromN in picked)
         {
@@ -987,17 +988,17 @@ public sealed class ThreadToolset : IAgentToolset
         if (ctx is null) return ErrorJson(err!);
 
         var topK       = DefaultPopularTopK;
-        var rangeStart = 1;
-        var rangeEnd   = ctx.Posts.Count;
+        long rangeStart = 1;
+        long rangeEnd   = ctx.Posts.Count;
         var minCount   = 1;
 
         if (args.ValueKind == JsonValueKind.Object)
         {
             if (args.TryGetProperty("top_k", out var topKEl) && TryGetIntLoose(topKEl, out var k))
                 topK = Math.Clamp(k, 1, MaxPopularTopK);
-            if (args.TryGetProperty("range_start", out var rsEl) && TryGetIntLoose(rsEl, out var rs))
+            if (args.TryGetProperty("range_start", out var rsEl) && TryGetLongLoose(rsEl, out var rs))
                 rangeStart = Math.Max(1, rs);
-            if (args.TryGetProperty("range_end", out var reEl) && TryGetIntLoose(reEl, out var re))
+            if (args.TryGetProperty("range_end", out var reEl) && TryGetLongLoose(reEl, out var re))
                 rangeEnd = Math.Min(ctx.Posts.Count, re);
             if (args.TryGetProperty("min_count", out var mcEl) && TryGetIntLoose(mcEl, out var mc))
                 minCount = Math.Max(0, mc);
@@ -1115,7 +1116,7 @@ public sealed class ThreadToolset : IAgentToolset
             {
                 totalForThis     = fromList.Count;
                 truncatedForThis = fromList.Count > repliesPerPostLimit;
-                var picked = truncatedForThis ? fromList.Take(repliesPerPostLimit) : (IEnumerable<int>)fromList;
+                var picked = truncatedForThis ? fromList.Take(repliesPerPostLimit) : (IEnumerable<long>)fromList;
                 foreach (var fromN in picked)
                 {
                     var rp = ctx.Posts.FirstOrDefault(x => x.Number == fromN);
@@ -1266,7 +1267,7 @@ public sealed class ThreadToolset : IAgentToolset
 
         var url = urlEl.GetString() ?? "";
         if (!_dataLoader.TryParseBoardUrl(url, out var host, out var dir))
-            return ErrorJson($"board_url の解釈に失敗: \"{url}\" (5ch.io / bbspink.com の板 URL である必要があります)");
+            return ErrorJson($"board_url の解釈に失敗: \"{url}\" (対応掲示板の板 URL である必要があります)");
 
         var keywords     = CollectKeywords(args);
         var matchAll     = ReadMatchAll(args);
@@ -1316,7 +1317,8 @@ public sealed class ThreadToolset : IAgentToolset
             post_count  = t.PostCount,
             momentum    = ComputeMomentum(t.Key, t.PostCount),   // 勢い = 1 日あたりレス数の概算
             order       = t.Order,
-            thread_url  = $"https://{board.Host}/test/read.cgi/{board.DirectoryName}/{t.Key}/",
+            thread_url  = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host)
+                              .ThreadUrl(board.Host, board.DirectoryName, t.Key),
         }).ToArray();
 
         // モード判定 hint: keyword なしで呼ばれた = AI が自分で取捨選択するべきスキャンモード。
@@ -1547,12 +1549,12 @@ public sealed class ThreadToolset : IAgentToolset
         var ctx = _attached;
         var sb = new StringBuilder();
         sb.Append("- 総レス数: ").Append(ctx.Posts.Count).AppendLine(" 件");
-        if (ctx.LastReadPostNumber is int lr)
+        if (ctx.LastReadPostNumber is long lr)
             sb.Append("- 既読位置: >>").AppendLine(lr.ToString());
         else
             sb.AppendLine("- 既読位置: 未設定 (= まだスクロール痕跡が永続化されていない)");
 
-        if (ctx.MarkPostNumber is int mark && ctx.Posts.Count > 0)
+        if (ctx.MarkPostNumber is long mark && ctx.Posts.Count > 0)
         {
             var newEnd = ctx.Posts[^1].Number;
             if (newEnd >= mark)
@@ -1687,6 +1689,20 @@ public sealed class ThreadToolset : IAgentToolset
                 return el.TryGetInt32(out value);
             case JsonValueKind.String:
                 return int.TryParse(el.GetString(), out value);
+            default:
+                value = 0;
+                return false;
+        }
+    }
+
+    private static bool TryGetLongLoose(JsonElement el, out long value)
+    {
+        switch (el.ValueKind)
+        {
+            case JsonValueKind.Number:
+                return el.TryGetInt64(out value);
+            case JsonValueKind.String:
+                return long.TryParse(el.GetString(), out value);
             default:
                 value = 0;
                 return false;

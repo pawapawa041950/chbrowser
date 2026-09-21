@@ -125,7 +125,7 @@ public static class HtmlToDatConverter
 
         var sb = new StringBuilder(html.Length);
         var firstPost = true;
-        var lastPostNumber = 0;
+        long lastPostNumber = 0;
         var emittedCount = 0;
 
         for (var i = 0; i < opens.Count; i++)
@@ -135,7 +135,7 @@ public static class HtmlToDatConverter
             var blockEnd   = (i + 1 < opens.Count) ? opens[i + 1].Index : html.Length;
             var block      = html.Substring(blockStart, blockEnd - blockStart);
 
-            if (!int.TryParse(open.Groups["num"].Value, out var num)) continue;
+            if (!long.TryParse(open.Groups["num"].Value, out var num)) continue;
 
             // 連番が抜けている場合 (= あぼーん削除レス等) は dat の前に「うふ～ん」相当のダミーを埋めるべきだが、
             // 現実には DatParser が「行番号 == レス番号」前提で動いているため、ダミー行を挟んで連続性を保つ。
@@ -327,9 +327,15 @@ internal static class HtmlEntityFallbackEncoder
 
     /// <summary>UTF-16 文字列を Shift_JIS バイト列に変換 (= SJIS にない文字は <c>&amp;#xNNNN;</c> 参照に倒す)。</summary>
     public static byte[] GetBytes(string text)
+        => GetBytes(text, Encoding.GetEncoding("Shift_JIS"));
+
+    /// <summary>UTF-16 文字列を <paramref name="baseEncoding"/> のバイト列に変換する
+    /// (= その文字コードで表現できない文字は <c>&amp;#xNNNN;</c> 参照に倒す)。
+    /// したらば (EUC-JP) 等、SJIS 以外の掲示板への投稿で使う。<paramref name="baseEncoding"/> 自体は変更しない (Clone して使う)。</summary>
+    public static byte[] GetBytes(string text, Encoding baseEncoding)
     {
-        var sjis = (Encoding)Encoding.GetEncoding("Shift_JIS").Clone();
-        sjis.EncoderFallback = new HtmlEntityFallback();
-        return sjis.GetBytes(text);
+        var enc = (Encoding)baseEncoding.Clone();
+        enc.EncoderFallback = new HtmlEntityFallback();
+        return enc.GetBytes(text);
     }
 }

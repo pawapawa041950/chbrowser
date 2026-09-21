@@ -40,8 +40,16 @@ public partial class BoardListPane : UserControl
             case "setCategoryExpanded":
             {
                 var cat = payload.TryGetProperty("categoryName", out var cp) ? cp.GetString() : null;
+                var pid = payload.TryGetProperty("providerId",   out var pp) ? pp.GetString() : null;
                 var exp = payload.TryGetProperty("expanded",     out var ep) && ep.GetBoolean();
-                if (!string.IsNullOrEmpty(cat)) main.SetCategoryExpanded(cat, exp);
+                if (!string.IsNullOrEmpty(cat)) main.SetCategoryExpanded(cat, exp, pid);
+                break;
+            }
+            case "setProviderExpanded":
+            {
+                var pid = payload.TryGetProperty("providerId", out var pp) ? pp.GetString() : null;
+                var exp = payload.TryGetProperty("expanded",   out var ep) && ep.GetBoolean();
+                if (!string.IsNullOrEmpty(pid)) main.SetProviderExpanded(pid, exp);
                 break;
             }
             case "contextMenu":

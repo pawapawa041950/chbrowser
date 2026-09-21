@@ -473,7 +473,9 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 break;
             default:
                 AddressBarHasError = true;
-                StatusMessage = "認識できない URL です (5ch.io / bbspink.com の板 / スレ URL を入力してください)";
+                StatusMessage = "認識できない URL です (対応掲示板: "
+                              + string.Join(" / ", ChBrowser.Services.Bbs.BbsRegistry.All.Select(pv => pv.DisplayName))
+                              + " の板 / スレ URL を入力してください)";
                 break;
         }
     }
@@ -493,13 +495,40 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             }
         }
         var board = ResolveBoard(host, dir, "");
+        board = await EnrichUnknownBoardNameAsync(board).ConfigureAwait(true);
         await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
+    }
+
+    /// <summary>板一覧に無い板 (= <see cref="ResolveBoard"/> の fallback で BoardName が dir 名のまま) について、
+    /// 提供者が <see cref="ChBrowser.Services.Bbs.BbsCapabilities.BoardInfo"/> を持てば板設定の <c>BBS_TITLE</c> を引いて板名にする
+    /// (したらばは板一覧が無いので、URL から開いた板の名前はこれで補う)。失敗しても開く動作は止めない。</summary>
+    private async Task<Board> EnrichUnknownBoardNameAsync(Board board)
+    {
+        if (!string.Equals(board.BoardName, board.DirectoryName, StringComparison.Ordinal)) return board;
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+        if (!provider.Capabilities.HasFlag(ChBrowser.Services.Bbs.BbsCapabilities.BoardInfo)) return board;
+        try
+        {
+            var settings = await _settingClient.GetOrFetchAsync(board).ConfigureAwait(true);
+            if (settings is not null
+                && settings.TryGetValue("BBS_TITLE", out var title)
+                && !string.IsNullOrWhiteSpace(title))
+            {
+                return board with { BoardName = title.Trim() };
+            }
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[openByUrl] board name lookup failed for {board.Host}/{board.DirectoryName}: {ex.Message}");
+        }
+        return board;
     }
 
     /// <summary>スレ URL を開く: 既存 ThreadTab があればアクティブ化、無ければ新規。
     /// <paramref name="scrollToPostNumber"/> > 0 のとき、開いた直後に JS へ scrollToPost を push する
     /// (= 5ch.io URL に「/&lt;dir&gt;/&lt;key&gt;/&lt;N&gt;」のレス番号が含まれているクリック経路用)。</summary>
-    public async Task OpenThreadByUrlAsync(string host, string dir, string key, int scrollToPostNumber = 0)
+    public async Task OpenThreadByUrlAsync(string host, string dir, string key, long scrollToPostNumber = 0)
     {
         var rootIn = DataPaths.ExtractRootDomain(host);
         foreach (var tab in AllThreadTabs)
@@ -514,7 +543,11 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 return;
             }
         }
-        await OpenThreadFromListAsync(host, dir, key, "").ConfigureAwait(true);
+        // 板一覧に無い板 (したらば等) は板設定から板名を補ってからタブを作る
+        // (OpenThreadFromListAsync は板を内部で ResolveBoard するだけなので、ここでは板を解決して OpenThreadAsync を直接呼ぶ)。
+        var board = ResolveBoard(host, dir, "");
+        board = await EnrichUnknownBoardNameAsync(board).ConfigureAwait(true);
+        await OpenThreadAsync(board, new ThreadInfo(key, "", 0, 0)).ConfigureAwait(true);
         if (scrollToPostNumber > 0)
         {
             // 新タブ生成パス: 上の OpenThreadFromListAsync が OpenThreadAsync を await しているので、
@@ -594,11 +627,17 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 
         try
         {
-            var cats = await _bbsmenuClient.LoadFromDiskAsync().ConfigureAwait(true);
-            ApplyCategories(cats);
-            StatusMessage = cats.Count == 0
-                ? "板一覧未取得 - ファイル → 板一覧を更新 を実行してください"
-                : $"板一覧 (キャッシュ): {TotalBoards(cats)} 板";
+            var total = 0;
+            foreach (var provider in ChBrowser.Services.Bbs.BbsRegistry.All)
+            {
+                if ((provider.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) == 0) continue;
+                var cats = await _bbsmenuClient.LoadFromDiskAsync(provider).ConfigureAwait(true);
+                ApplyCategories(provider.Id, cats);
+                total += TotalBoards(cats);
+            }
+            StatusMessage = total == 0
+                ? "板一覧未取得 - ファイル → 5ch板一覧更新 を実行してください"
+                : $"板一覧 (キャッシュ): {total} 板";
         }
         catch (Exception ex)
         {
@@ -748,7 +787,14 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         ThreadTabWidth     = ComputeTabWidth(
             config.ThreadTabWidthMode,     config.ThreadTabWidthChars,     config.ThreadTabWidthPx);
 
-        // スレ表示 (thread.js) 向け
+        // 掲示板ごとのアンカー規則 (設定で上書き) を登録簿へ反映。C# 側の抽出 (連鎖 NG / 自分への返信検知) と
+        // JS 側 (下の anchorRules) が同じ規則を見る。
+        ChBrowser.Services.Bbs.AnchorRuleRegistry.Configure(config.AnchorRules);
+
+        // スレ表示 (thread.js) 向け。
+        // 提供者依存の項目 (レス番号ジャンプ桁数 / スレリンク判定 / アンカー規則) は現状 5ch のものを全タブ共通で送る。
+        // 段階 2 (他掲示板) でタブ単位の提供者に応じて送り分ける (doc/multi-bbs-design.md §8.1)。
+        var primary = ChBrowser.Services.Bbs.BbsRegistry.FiveCh;
         ThreadConfigJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             type                  = "setConfig",
@@ -757,6 +803,14 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             idHighlightThreshold  = config.IdHighlightThreshold,
             metaPopupClickOnly    = config.MetaPopupClickOnly,
             debug                 = config.DebugDisableRecovery,
+            postNumberDigits      = primary.PostNumberDigits,
+            // 登録済み全提供者のスレ URL を本文中リンクとして認識させる (= 他掲示板の URL も提供者追加で自動追従)。
+            threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
+                                        .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
+                                        .ToArray(),
+            anchorRules           = ChBrowser.Services.Bbs.AnchorRuleRegistry.For(primary).Rules
+                                        .Select(r => new { name = r.Name, pattern = r.Pattern, kind = r.Kind, ranges = r.Ranges, enabled = r.Enabled })
+                                        .ToArray(),
         });
 
         // Phase 11b: 3 ペイン向け。各ペインは自分の JSON だけ受け取り、setConfig.openOnSingleClick を解釈する。

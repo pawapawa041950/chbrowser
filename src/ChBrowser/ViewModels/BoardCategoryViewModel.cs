@@ -10,6 +10,8 @@ namespace ChBrowser.ViewModels;
 public sealed partial class BoardCategoryViewModel : ObservableObject
 {
     public string CategoryName { get; }
+    /// <summary>所属する掲示板提供者の Id (板一覧ペインのトップノード分け、開閉状態の同定に使う)。</summary>
+    public string ProviderId { get; }
     public IReadOnlyList<BoardViewModel> Boards { get; }
 
     /// <summary>初期は閉じた状態 (= bbsmenu のカテゴリ数が 50+ になりうるので折りたたんでおいた方が見やすい)。
@@ -20,6 +22,7 @@ public sealed partial class BoardCategoryViewModel : ObservableObject
     public BoardCategoryViewModel(BoardCategory category)
     {
         CategoryName = category.CategoryName;
+        ProviderId   = category.ProviderId;
         var list = new List<BoardViewModel>(category.Boards.Count);
         foreach (var b in category.Boards) list.Add(new BoardViewModel(b));
         Boards = list;

@@ -100,6 +100,18 @@ public partial class ThreadListPane : UserControl
         if (WebMessageBridge.TryDispatchCommonMessage(sender, type, payload, "スレ一覧表示領域")) return;
 
         if (type == "threadListRowMenu") { ShowThreadListRowContextMenu(payload); return; }
+
+        if (type == "openBoard")
+        {
+            // 板行 (「板一覧以外の取得済み板」集約タブ) のクリック → 板タブを開く (単/ダブルクリック設定は JS 側で吸収済)。
+            var bHost = payload.TryGetProperty("host",          out var bh) ? bh.GetString() : null;
+            var bDir  = payload.TryGetProperty("directoryName", out var bd) ? bd.GetString() : null;
+            var bName = payload.TryGetProperty("name",          out var bn) ? bn.GetString() : null;
+            if (string.IsNullOrEmpty(bHost) || string.IsNullOrEmpty(bDir)) return;
+            await main.OpenBoardFromHtmlListAsync(bHost, bDir, bName ?? bDir);
+            return;
+        }
+
         if (type != "openThread") return;
 
         var host  = payload.TryGetProperty("host",          out var hp) ? hp.GetString() : null;
@@ -126,6 +138,9 @@ public partial class ThreadListPane : UserControl
     private void ShowThreadListRowContextMenu(System.Text.Json.JsonElement payload)
     {
         if (Vm is not { } main) return;
+        var kind = payload.TryGetProperty("kind", out var kd) ? kd.GetString() : null;
+        if (kind == "board") { ShowThreadListBoardRowContextMenu(payload); return; }
+
         var host  = payload.TryGetProperty("host",          out var hp) ? hp.GetString() : null;
         var dir   = payload.TryGetProperty("directoryName", out var dp) ? dp.GetString() : null;
         var key   = payload.TryGetProperty("key",           out var kp) ? kp.GetString() : null;
@@ -197,10 +212,53 @@ public partial class ThreadListPane : UserControl
         Vm?.DeleteThreadLog(ctx.Board, ctx.ThreadKey, ctx.Title);
     }
 
-    /// <summary>{board, key} → 5ch.io 系の read.cgi 形式 URL を組み立てる
+    // ---- 板行 (data-kind="board") の右クリックメニュー ----
+
+    /// <summary>板行の右クリック通知を受けて板用の <see cref="ContextMenu"/> を popup する
+    /// (お気に入り追加 / URL コピー / 板の取得済みログ削除)。</summary>
+    private void ShowThreadListBoardRowContextMenu(System.Text.Json.JsonElement payload)
+    {
+        var host = payload.TryGetProperty("host",          out var hp) ? hp.GetString() : null;
+        var dir  = payload.TryGetProperty("directoryName", out var dp) ? dp.GetString() : null;
+        var name = payload.TryGetProperty("title",         out var tp) ? tp.GetString() : null;
+        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(dir)) return;
+
+        if (TryFindResource("ThreadListBoardRowContextMenu") is not ContextMenu menu) return;
+        menu.PlacementTarget = this;
+        menu.Placement       = PlacementMode.MousePoint;
+        menu.DataContext     = new ThreadListBoardRowContext(host, dir, string.IsNullOrEmpty(name) ? dir : name);
+        menu.IsOpen          = true;
+    }
+
+    private static ThreadListBoardRowContext? BoardCtxOf(object sender)
+        => (sender as MenuItem)?.DataContext as ThreadListBoardRowContext;
+
+    private void ThreadListBoardRowFav_Click(object sender, RoutedEventArgs e)
+    {
+        if (BoardCtxOf(sender) is not { } ctx) return;
+        Vm?.AddBoardToFavoritesByHostDir(ctx.Host, ctx.DirectoryName, ctx.Name);
+    }
+
+    private void ThreadListBoardRowCopyUrl_Click(object sender, RoutedEventArgs e)
+    {
+        if (BoardCtxOf(sender) is not { } ctx) return;
+        Clipboard.SetText(ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(ctx.Host).BoardUrl(ctx.Host, ctx.DirectoryName));
+    }
+
+    private void ThreadListBoardRowDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (BoardCtxOf(sender) is not { } ctx) return;
+        Vm?.DeleteBoardLogs(ctx.Host, ctx.DirectoryName, ctx.Name);
+    }
+
+    /// <summary>板行の右クリックメニュー操作で必要な値 (JS の data-host / data-dir / data-title)。</summary>
+    private sealed record ThreadListBoardRowContext(string Host, string DirectoryName, string Name);
+
+    /// <summary>{board, key} → 提供者の正規スレ URL を組み立てる
     /// (= <see cref="ThreadTabViewModel.Url"/> と同じ形式で揃える)。</summary>
     private static string ThreadUrl(ThreadListRowContext ctx)
-        => $"https://{ctx.Board.Host}/test/read.cgi/{ctx.Board.DirectoryName}/{ctx.ThreadKey}/";
+        => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(ctx.Board.Host)
+            .ThreadUrl(ctx.Board.Host, ctx.Board.DirectoryName, ctx.ThreadKey);
 
     /// <summary>スレ一覧行の右クリックメニュー操作で必要な値を 1 つに束ねた immutable record。
     /// Board は <see cref="MainViewModel.ResolveBoard"/> で解決済み (= bbsmenu 未登録の板でも fallback Board が入る)。</summary>
@@ -341,7 +399,8 @@ public partial class ThreadListPane : UserControl
     private void ThreadListTabOpenSettingTxt_Click(object sender, RoutedEventArgs e)
     {
         if (TabOf<ThreadListTabViewModel>(sender) is not { Board: { } board }) return;
-        var url = board.Url.TrimEnd('/') + "/SETTING.TXT";
+        var url = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).BoardInfoUrl(board);
+        if (string.IsNullOrEmpty(url)) return; // 板設定を持たない提供者
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo

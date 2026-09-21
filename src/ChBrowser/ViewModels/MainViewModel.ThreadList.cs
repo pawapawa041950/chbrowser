@@ -17,6 +17,9 @@ public sealed partial class MainViewModel
     /// <summary>「お気に入り以外の全ログ」タブ識別用の固定 Guid (= <see cref="AllLogsTabId"/> のお気に入り除外版)。</summary>
     private static readonly Guid NonFavLogsTabId = new("ffffffff-ffff-ffff-ffff-fffffffffffd");
 
+    /// <summary>「板一覧以外の取得済み板」タブ識別用の固定 Guid (= 行がスレではなく板の集約タブ)。</summary>
+    private static readonly Guid UnlistedBoardsTabId = new("ffffffff-ffff-ffff-ffff-fffffffffffc");
+
     /// <summary>「次スレ候補検索」タブの ID 計算で <see cref="ComputeNextThreadTabId"/> が使う prefix
     /// (= 同 (board, title) なら同タブを再利用するための deterministic hash)。</summary>
     private const string NextThreadSearchTabIdPrefix = "nextthread:";
@@ -166,6 +169,12 @@ public sealed partial class MainViewModel
             return Task.CompletedTask;
         }
 
+        if (tab.FavoritesFolderId == UnlistedBoardsTabId)
+        {
+            RefreshUnlistedBoardsTab(tab);
+            return Task.CompletedTask;
+        }
+
         if (tab.FavoritesFolderId is Guid id)
         {
             // 仮想ルート (= Guid.Empty) ならお気に入り全体、それ以外なら ID で folder 参照を引き戻す
@@ -183,38 +192,57 @@ public sealed partial class MainViewModel
     // -----------------------------------------------------------------
 
     /// <summary>「全ログ」タブを開く (既存タブがあればアクティブ化、無ければ生成して中身を構築)。
-    /// 中身の組み立ては <see cref="BuildAllLogsItems"/> を共有する (= リフレッシュ時もここを通る)。</summary>
-    public Task OpenAllLogsAsync()
+    /// 中身の組み立ては <see cref="BuildAllLogsItems"/> を共有する (= リフレッシュ時もここを通る)。
+    /// <paramref name="activate"/>=false は起動時のタブ復元用 (= 選択タブを切り替えない)。</summary>
+    public Task OpenAllLogsAsync(bool activate = true)
     {
         var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == AllLogsTabId);
         if (existingTab is not null)
         {
-            ActivateThreadListTab(existingTab);
+            MaybeActivateThreadListTab(existingTab, activate);
             return Task.CompletedTask;
         }
 
         var tab = new ThreadListTabViewModel(AllLogsTabId, "全ログ", t => RemoveThreadListTab(t));
         ThreadListTabs.Add(tab);
-        ActivateThreadListTab(tab);
+        MaybeActivateThreadListTab(tab, activate);
         RefreshAllLogsTab(tab);
         return Task.CompletedTask;
     }
 
     /// <summary>「お気に入り以外の全ログ」タブを開く (= 全ログから ★ 付きスレを除外したもの)。
     /// 既存タブがあればアクティブ化、無ければ生成して中身を構築する。</summary>
-    public Task OpenNonFavLogsAsync()
+    public Task OpenNonFavLogsAsync(bool activate = true)
     {
         var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == NonFavLogsTabId);
         if (existingTab is not null)
         {
-            ActivateThreadListTab(existingTab);
+            MaybeActivateThreadListTab(existingTab, activate);
             return Task.CompletedTask;
         }
 
         var tab = new ThreadListTabViewModel(NonFavLogsTabId, "お気に入り以外の全ログ", t => RemoveThreadListTab(t));
         ThreadListTabs.Add(tab);
-        ActivateThreadListTab(tab);
+        MaybeActivateThreadListTab(tab, activate);
         RefreshNonFavLogsTab(tab);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>「板一覧以外の取得済み板」タブを開く (= ローカルに取得済みデータがあるのに板一覧 (bbsmenu) に無い板を、
+    /// 板 1 件 = 1 行で並べる集約タブ。行クリックで板を開く)。既存タブがあればアクティブ化、無ければ生成して中身を構築する。</summary>
+    public Task OpenUnlistedBoardsAsync(bool activate = true)
+    {
+        var existingTab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == UnlistedBoardsTabId);
+        if (existingTab is not null)
+        {
+            MaybeActivateThreadListTab(existingTab, activate);
+            return Task.CompletedTask;
+        }
+
+        var tab = new ThreadListTabViewModel(UnlistedBoardsTabId, "板一覧以外の取得済み板", t => RemoveThreadListTab(t));
+        ThreadListTabs.Add(tab);
+        MaybeActivateThreadListTab(tab, activate);
+        RefreshUnlistedBoardsTab(tab);
         return Task.CompletedTask;
     }
 
@@ -263,28 +291,142 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>「板一覧以外の取得済み板」タブの中身を再構築する (= ディスク walk のみ、HTTP は呼ばない)。</summary>
+    private void RefreshUnlistedBoardsTab(ThreadListTabViewModel tab)
+    {
+        try
+        {
+            tab.IsBusy        = true;
+            tab.StatusMessage = "板一覧以外の取得済み板を収集中...";
+            var items         = BuildUnlistedBoardItems();
+            tab.SetItems(items, DateTimeOffset.UtcNow);
+            tab.Header        = $"📁 板一覧以外の取得済み板 ({items.Count})";
+            tab.StatusMessage = $"板一覧以外の取得済み板: {items.Count} 件";
+        }
+        catch (Exception ex)
+        {
+            tab.StatusMessage = $"板一覧以外の取得済み板の取得失敗: {ex.Message}";
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
+    }
+
+    /// <summary><see cref="UnlistedBoardScanner"/> の結果を板行 (<see cref="ThreadListItemKind.Board"/>) に変換する。
+    /// タイトル = 板名、板列 = 「提供者名 host」、数 = ローカル dat 件数。Key は空 (= スレではない)。</summary>
+    private List<ThreadListItem> BuildUnlistedBoardItems()
+    {
+        var scanner = new UnlistedBoardScanner(_paths, _settingClient);
+        var found   = scanner.Scan(FindBoardByDirectory);
+        var items   = new List<ThreadListItem>(found.Count);
+        foreach (var ub in found)
+        {
+            var b    = ub.Board;
+            var info = new ThreadInfo("", b.BoardName, ub.DatCount, 0);
+            items.Add(new ThreadListItem(info, b.Host, b.DirectoryName,
+                                         $"{ub.Provider.DisplayName} {b.Host}",
+                                         LogMarkState.None, false, ThreadListItemKind.Board));
+        }
+        return items;
+    }
+
+    /// <summary>開いている集約ログタブ (全ログ / お気に入り以外の全ログ / 板一覧以外の取得済み板) を再走査する
+    /// (= 板ログ削除のようにディスク上の板構成が変わった直後用)。</summary>
+    private void RefreshAggregateLogTabs()
+    {
+        foreach (var t in AllThreadListTabs.ToList())
+        {
+            if      (t.FavoritesFolderId == AllLogsTabId)        RefreshAllLogsTab(t);
+            else if (t.FavoritesFolderId == NonFavLogsTabId)     RefreshNonFavLogsTab(t);
+            else if (t.FavoritesFolderId == UnlistedBoardsTabId) RefreshUnlistedBoardsTab(t);
+        }
+    }
+
+    /// <summary>板の取得済みログ (= <c>data/&lt;root&gt;/&lt;dir&gt;/</c> 丸ごと) を確認ダイアログの上で削除する
+    /// (「板一覧以外の取得済み板」の行右クリック「板を削除」)。お気に入り登録は触らない。
+    /// 削除前にその板のスレタブ / スレ一覧タブを閉じる (タブ close 時の idx.json flush がディレクトリを作り直さないよう、
+    /// close → 削除の順)。パスは <see cref="DataPaths.BoardDir"/> と同じ組み立てだが EnsureDir を伴わないよう直接組む
+    /// (= 存在しない板を選んでも空フォルダを作らない)。</summary>
+    public void DeleteBoardLogs(string host, string directoryName, string boardName)
+    {
+        var rootIn   = DataPaths.ExtractRootDomain(host);
+        var boardDir = System.IO.Path.Combine(_paths.Root, rootIn, directoryName);
+        var datCount = System.IO.Directory.Exists(boardDir)
+            ? System.IO.Directory.EnumerateFiles(boardDir, "*.dat").Count()
+            : 0;
+
+        var message = $"{boardName} ({host}/{directoryName}) の取得済みログ (スレ {datCount} 件) をすべて削除します。\n"
+                    + "お気に入り登録は残ります。よろしいですか?";
+        var answer = System.Windows.MessageBox.Show(
+            message, "板を削除", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+        if (answer != System.Windows.MessageBoxResult.Yes) return;
+
+        static bool SameBoard(Board b, string rootIn, string dir)
+            => string.Equals(DataPaths.ExtractRootDomain(b.Host), rootIn, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(b.DirectoryName, dir, StringComparison.Ordinal);
+
+        foreach (var threadTab in AllThreadTabs.Where(t => SameBoard(t.Board, rootIn, directoryName)).ToList())
+            RemoveThreadTab(threadTab);
+        foreach (var listTab in AllThreadListTabs.Where(t => t.Board is { } b && SameBoard(b, rootIn, directoryName)).ToList())
+            RemoveThreadListTab(listTab);
+
+        try
+        {
+            if (System.IO.Directory.Exists(boardDir))
+                System.IO.Directory.Delete(boardDir, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"板の削除に失敗: {ex.Message}";
+            RefreshAggregateLogTabs();
+            return;
+        }
+
+        RefreshAggregateLogTabs();
+        StatusMessage = $"{boardName} の取得済みログを削除しました (スレ {datCount} 件)";
+    }
+
     /// <summary>data/&lt;rootDomain&gt;/&lt;dir&gt;/*.dat を全件走査し、各 dat を 1 行 (<see cref="ThreadListItem"/>) に変換する。
     /// subject.txt があれば突合してタイトル / postCount / 状態 (青/緑) を引き、
     /// なければ dat の 1 行目から title を取って Dropped (茶) でマーク。
-    /// <paramref name="excludeFavorites"/>=true ならお気に入り登録済みのスレを一覧から除外する。</summary>
+    /// <paramref name="excludeFavorites"/>=true ならお気に入り登録済みのスレを一覧から除外する。
+    /// 板 dir が 2 階層の掲示板 (したらば <c>internet/12249</c>) は <c>data/&lt;root&gt;/internet/12249/*.dat</c> と入れ子になるので、
+    /// 1 階層目に *.dat が無ければ 1 段だけ降りて <c>"&lt;parent&gt;/&lt;child&gt;"</c> を dir 名として扱う。</summary>
     private List<ThreadListItem> BuildAllLogsItems(bool excludeFavorites)
     {
         var items   = new List<ThreadListItem>();
         var favSet  = Favorites.CollectFavoriteThreadKeys();
 
-        foreach (var rootDomain in new[] { "5ch.io", "bbspink.com" })
+        foreach (var rootDomain in ChBrowser.Services.Bbs.BbsRegistry.StorageRoots)
         {
             var rootDir = System.IO.Path.Combine(_paths.Root, rootDomain);
             if (!System.IO.Directory.Exists(rootDir)) continue;
 
+            var boardDirs = new List<(string DirName, List<string> DatFiles)>();
             foreach (var dirPath in System.IO.Directory.EnumerateDirectories(rootDir))
             {
                 var dirName  = System.IO.Path.GetFileName(dirPath);
                 var datFiles = System.IO.Directory.EnumerateFiles(dirPath, "*.dat").ToList();
-                if (datFiles.Count == 0) continue;
+                if (datFiles.Count > 0)
+                {
+                    boardDirs.Add((dirName, datFiles));
+                    continue;
+                }
+                // 2 階層 dir: 直下に dat が無ければ子ディレクトリを板として見る
+                foreach (var subPath in System.IO.Directory.EnumerateDirectories(dirPath))
+                {
+                    var subDats = System.IO.Directory.EnumerateFiles(subPath, "*.dat").ToList();
+                    if (subDats.Count == 0) continue;
+                    boardDirs.Add((dirName + "/" + System.IO.Path.GetFileName(subPath), subDats));
+                }
+            }
+
+            foreach (var (dirName, datFiles) in boardDirs)
+            {
 
                 var board     = FindBoardByDirectory(rootDomain, dirName)
-                              ?? new Board(dirName, dirName, $"https://{rootDomain}/{dirName}/", "", 0);
+                              ?? UnlistedBoardScanner.BuildFallbackBoard(rootDomain, dirName, dirName);
                 var subjList  = LoadSubjectFromDiskSync(board);
                 var subjByKey = subjList.ToDictionary(t => t.Key);
                 var states    = BuildLogStates(board, subjList);
@@ -491,6 +633,7 @@ public sealed partial class MainViewModel
     /// dat 形式: <c>name&lt;&gt;mail&lt;&gt;date_id&lt;&gt;body&lt;&gt;title</c>。失敗時 null。</summary>
     private static string? ReadDatTitle(string datPath)
     {
+        if (ChBrowser.Services.Api.NumberedLogFormat.TryReadTitle(datPath, out var numberedTitle)) return numberedTitle;
         try
         {
             var sjis  = System.Text.Encoding.GetEncoding(932);

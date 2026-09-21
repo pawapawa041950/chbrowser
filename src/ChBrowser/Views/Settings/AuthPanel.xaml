@@ -51,5 +51,42 @@
             </Border>
         </DockPanel>
 
+        <!-- エッヂ掲示板 (bbs.eddibb.cc) の認証。初回投稿で発行される Cookie (edge-token) をアプリが
+             data/eddibb.cc/cookies.txt に保存し、ユーザがブラウザの認証ページで認証コードを入力すると以降はその Cookie で書ける。 -->
+        <Separator Margin="0,4,0,12" />
+        <TextBlock Text="エッヂ掲示板 (bbs.eddibb.cc) の認証" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,12">
+            初回の書き込みはエラーになり、6 桁の認証コードが表示されます。同時に発行される Cookie (edge-token) は
+            アプリが data/eddibb.cc/cookies.txt に保存します。書き込みダイアログの「認証ページを開く」から
+            ブラウザで認証コードを入力すると、以降はその Cookie で書き込めます。認証は書き込んだ環境 (IP アドレス) に紐づきます。
+        </TextBlock>
+
+        <TextBlock Text="認証トークン (任意)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,4">
+            認証ページの完了画面に表示されるトークンを入れると、Cookie が無いときにメール欄へ「#トークン」を付けて送ります。
+            通常は空欄のままで構いません (Cookie があればトークンは送りません)。
+        </TextBlock>
+        <TextBox Text="{Binding EddiAuthToken, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="420"
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,12" />
+
+        <TextBlock Text="Cookie" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,8">
+            エッヂ掲示板から受け取った Cookie (edge-token / tinker-token) を削除します。次の書き込みでは再び認証コードによる認証が必要になります。
+        </TextBlock>
+        <Button Content="エッヂの Cookie を削除"
+                Width="180"
+                HorizontalAlignment="Left"
+                Padding="8,4"
+                Margin="0,0,0,12"
+                Command="{Binding ClearEddiCookiesCommand}" />
+
     </StackPanel>
 </UserControl>

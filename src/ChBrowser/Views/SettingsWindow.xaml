@@ -60,6 +60,7 @@
         <DataTemplate x:Key="BoardListTemplate">  <settings:BoardListPanel /> </DataTemplate>
         <DataTemplate x:Key="ThreadListTemplate">    <settings:ThreadListPanel /> </DataTemplate>
         <DataTemplate x:Key="ThreadTemplate">        <settings:ThreadPanel /> </DataTemplate>
+        <DataTemplate x:Key="AnchorRulesTemplate">   <settings:AnchorRulesPanel /> </DataTemplate>
         <DataTemplate x:Key="TabTemplate">           <settings:TabPanel /> </DataTemplate>
         <DataTemplate x:Key="ImageTemplate">      <settings:ImagePanel /> </DataTemplate>
         <DataTemplate x:Key="ViewerTemplate">     <settings:ViewerPanel /> </DataTemplate>
@@ -195,6 +196,9 @@
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="スレッド">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ThreadTemplate}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="アンカー判定">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource AnchorRulesTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="タブ">
                                         <Setter Property="ContentTemplate" Value="{StaticResource TabTemplate}" />

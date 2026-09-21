@@ -5,7 +5,7 @@ namespace ChBrowser.Models;
 /// dat 形式: <c>名前&lt;&gt;メール&lt;&gt;日付 ID&lt;&gt;本文&lt;&gt;タイトル(1レス目のみ)</c>
 /// </summary>
 public sealed record Post(
-    int     Number,         // 1 始まりのレス番号
+    long    Number,         // 1 始まりのレス番号
     string  Name,           // 名前 (HTML デコード済み)
     string  Mail,           // メール (sage 等)
     string  DateText,       // 例: "2026/04/25(土) 12:34:56.78"

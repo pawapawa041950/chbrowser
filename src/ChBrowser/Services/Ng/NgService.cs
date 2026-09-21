@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
@@ -52,8 +53,8 @@ public sealed class NgService
 
     /// <summary>あるスレに対して、NG で hidden になるレス番号集合を計算する (連鎖あぼーん含む)。
     /// 互換 API: 内訳が要らない呼出側用。内部では <see cref="ComputeHiddenWithBreakdown"/> を呼ぶ。</summary>
-    public ISet<int> ComputeHidden(IList<Post> posts, string host, string directoryName,
-                                   IReadOnlySet<int>? previouslyHidden = null)
+    public ISet<long> ComputeHidden(IList<Post> posts, string host, string directoryName,
+                                   IReadOnlySet<long>? previouslyHidden = null)
         => ComputeHiddenWithBreakdown(posts, host, directoryName, previouslyHidden).HiddenNumbers;
 
     /// <summary>あるスレに対して、NG で hidden になるレス集合を per-rule の内訳付きで計算する。
@@ -71,10 +72,10 @@ public sealed class NgService
     /// 差分取得ではバッチに「新着レスだけ」が来るため、これが無いと「以前あぼーんされたレスへアンカーしている新着」を
     /// 連鎖あぼーんにできない。連鎖の種としてのみ使い、直接マッチの集計には影響しない。</para></summary>
     public NgHiddenBreakdown ComputeHiddenWithBreakdown(IList<Post> posts, string host, string directoryName,
-                                                        IReadOnlySet<int>? previouslyHidden = null)
+                                                        IReadOnlySet<long>? previouslyHidden = null)
     {
         var byRule = new Dictionary<Guid, int>();
-        var hidden = new HashSet<int>();
+        var hidden = new HashSet<long>();
         var rules  = GetActiveRules(host, directoryName);
         var hasSeeds = previouslyHidden is { Count: > 0 };
         if (rules.Count == 0 && !hasSeeds)
@@ -100,8 +101,11 @@ public sealed class NgService
 
         // 2. 連鎖あぼーん (無限再帰): hidden レスにアンカーしているレスも hidden。
         //    種は「今回バッチの直接マッチ」+「過去バッチで hidden 済み (previouslyHidden)」の両方。
-        var anchorMap = new Dictionary<int, int[]>(posts.Count);
-        foreach (var p in posts) anchorMap[p.Number] = ExtractAnchors(p.Body);
+
+        // アンカー判定は掲示板ごとの規則 (設定で上書き可) に従う。5ch の既定は従来の >>N と同じ。
+        var anchorRules = ChBrowser.Services.Bbs.AnchorRuleRegistry.ForHost(host);
+        var anchorMap = new Dictionary<long, long[]>(posts.Count);
+        foreach (var p in posts) anchorMap[p.Number] = anchorRules.ExtractNumbers(p.Body).ToArray();
 
         bool changed;
         do
@@ -242,27 +246,10 @@ public sealed class NgService
         _         => "",
     };
 
-    private static int[] ExtractAnchors(string body)
-    {
-        if (string.IsNullOrEmpty(body)) return Array.Empty<int>();
-        var list = new List<int>();
-        foreach (Match m in AnchorRegex.Matches(body))
-        {
-            if (!int.TryParse(m.Groups["from"].Value, out var from)) continue;
-            var toStr = m.Groups["to"].Value;
-            int to = string.IsNullOrEmpty(toStr) || !int.TryParse(toStr, out var t) ? from : t;
-            if (to < from) (from, to) = (to, from);
-            if (to - from > 50) to = from + 50;
-            for (var n = from; n <= to; n++) list.Add(n);
-        }
-        return list.ToArray();
-    }
-
-    private static readonly Regex AnchorRegex = new(@">>(?<from>\d+)(?:-(?<to>\d+))?", RegexOptions.Compiled);
 }
 
 /// <summary>NG hidden 集合の内訳。<see cref="NgService.ComputeHiddenWithBreakdown"/> の戻り値。</summary>
 public sealed record NgHiddenBreakdown(
     Dictionary<Guid, int> ByRuleDirect,
     int ChainOnly,
-    HashSet<int> HiddenNumbers);
+    HashSet<long> HiddenNumbers);

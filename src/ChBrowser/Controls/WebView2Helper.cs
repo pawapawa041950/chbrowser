@@ -21,15 +21,15 @@ public interface IThreadDisplayBinding
 {
     /// <summary>次回オープン時に viewport 下端に揃えたいレス番号 (= 「読了 prefix」の最大番号)。
     /// JS の <c>findReadProgressMaxNumber</c> が算定して保存し、appendPosts ペイロード経由で復元時に渡される。</summary>
-    int? ScrollTargetPostNumber { get; }
+    long? ScrollTargetPostNumber { get; }
 
     /// <summary>「以降新レス」ラベルの対象レス番号。null ならラベル非表示。
     /// appendPosts のメッセージに同梱して JS に push し、ラベル描画と dedup-tree の境界判定に使う。</summary>
-    int? MarkPostNumber { get; }
+    long? MarkPostNumber { get; }
 
     /// <summary>「自分の書き込み」としてマークされているレス番号集合。
     /// appendPosts のメッセージに同梱して JS に push し、レンダ時に「自分」バッジを表示させる。</summary>
-    System.Collections.Generic.IReadOnlyCollection<int> OwnPostNumbers { get; }
+    System.Collections.Generic.IReadOnlyCollection<long> OwnPostNumbers { get; }
 }
 
 /// <summary>WebView2 が「シェル HTML をどの経路で読み込んでいるか」のスコープ。

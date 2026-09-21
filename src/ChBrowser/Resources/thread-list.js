@@ -1,6 +1,8 @@
 // ChBrowser スレ一覧 (Phase 14a で WebView 化、Phase 11d で外出し)。
 // JS → C#:
 //   { type: 'openThread', host, directoryName, key, title, logState }   — クリック or ダブルクリックで開く
+//   { type: 'openBoard', host, directoryName, name }                     — 板行 (data-kind="board") のクリックで板を開く
+//   { type: 'threadListRowMenu', kind, host, directoryName, key, title } — 行の右クリック (kind: 'thread' | 'board')
 //   { type: 'paneActivated' }                                            — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
 // C# → JS:
 //   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
@@ -161,6 +163,16 @@
 
     function openTr(tr) {
         if (!window.chrome || !window.chrome.webview) return;
+        // 板行 (「板一覧以外の取得済み板」集約タブ) はスレではなく板を開く。
+        if (tr.dataset.kind === 'board') {
+            window.chrome.webview.postMessage({
+                type:          'openBoard',
+                host:          tr.dataset.host,
+                directoryName: tr.dataset.dir,
+                name:          tr.dataset.title,
+            });
+            return;
+        }
         // host/dir/key/title を全部送る (C# 側で Board と ThreadInfo を再構築するため、
         // 出元板に依存しないお気に入りディレクトリ表示でも動くようにする)
         window.chrome.webview.postMessage({
@@ -202,6 +214,7 @@
         selected = tr;
         window.chrome.webview.postMessage({
             type:          'threadListRowMenu',
+            kind:          tr.dataset.kind || 'thread',   // 'board' なら板用メニュー (C# 側で出し分け)
             host:          tr.dataset.host,
             directoryName: tr.dataset.dir,
             key:           tr.dataset.key,

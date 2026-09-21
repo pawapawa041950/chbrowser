@@ -64,29 +64,24 @@ public sealed partial class MainViewModel
     //   5. 永続化なし (= idx.json に持たない)。アプリ再起動 / 別経由の状態更新で自由に上書きされる。
     //   6. ToggleOwnPost からは発火しない (= 既存レスの own 切替で赤にはしない)。
 
-    /// <summary>「&gt;&gt;N」「&gt;&gt;N-M」形式のレスアンカーを本文から抽出する正規表現。
-    /// JS 側 <c>URL_OR_ANCHOR_RE</c> のアンカー部と同じ意味で、5ch dat の生本文 / HTML 化済本文どちらにも当たる。 </summary>
-    private static readonly Regex AnchorRefRe = new(@">>\s*(\d+)(?:\s*-\s*(\d+))?", RegexOptions.Compiled);
-
     /// <summary>差分取得で来た新着 batch のうち、いずれかが tab.OwnPostNumbers のレスにアンカーしているかを判定する。
-    /// 純粋関数 (= 副作用なし、tab.HasReplyToOwn の更新は呼び出し元責任)。 </summary>
+    /// アンカー判定は掲示板ごとの規則 (<see cref="ChBrowser.Services.Bbs.AnchorRuleRegistry"/>) に従い、
+    /// JS 側の描画 / ツリーと同じ抽出結果になる。純粋関数 (= 副作用なし、tab.HasReplyToOwn の更新は呼び出し元責任)。 </summary>
     private static bool DeltaHasReplyToOwn(ThreadTabViewModel tab, IReadOnlyList<Post> deltaPosts)
     {
         if (tab.OwnPostNumbers.Count == 0) return false;
         if (deltaPosts.Count == 0) return false;
+        var rules = ChBrowser.Services.Bbs.AnchorRuleRegistry.ForHost(tab.Board.Host);
         foreach (var p in deltaPosts)
         {
             if (p.Body is null) continue;
             // 自分のレス自身は除外 (= 自分が自分宛にアンカーしていても「返信あり」扱いしない)。
             if (tab.OwnPostNumbers.Contains(p.Number)) continue;
-            foreach (Match m in AnchorRefRe.Matches(p.Body))
+            foreach (var r in rules.ExtractRanges(p.Body))
             {
-                if (!int.TryParse(m.Groups[1].Value, out var from)) continue;
-                var to = m.Groups[2].Success && int.TryParse(m.Groups[2].Value, out var t) ? t : from;
-                if (to < from) (from, to) = (to, from);
                 // range が極端に広いケース (荒らし対策) は判定スキップ
-                if (to - from > 1024) continue;
-                for (var n = from; n <= to; n++)
+                if (r.To - r.From > 1024) continue;
+                for (var n = r.From; n <= r.To; n++)
                 {
                     if (tab.OwnPostNumbers.Contains(n)) return true;
                 }
@@ -127,7 +122,8 @@ public sealed partial class MainViewModel
             for (var i = prevCount; i < result.Posts.Count; i++) added.Add(result.Posts[i]);
             if (prevCount > 0)
             {
-                tab.MarkPostNumber = prevCount + 1;
+                // ラベル位置は「件数 + 1」ではなく今回バッチの最小番号 (= 実番号が疎な掲示板でも正しい。5ch では同じ値)。
+                tab.MarkPostNumber = added.Min(p => p.Number);
                 ChBrowser.Services.Logging.LogService.Instance.Write(
                     $"[fetchDelta]   → set tab.MarkPostNumber={prevCount + 1}, then AppendPostsWithNg(added={added.Count}, incremental=true)");
             }
@@ -196,7 +192,7 @@ public sealed partial class MainViewModel
         // 「以降新レス」ラベル位置 (MarkPostNumber) は永続化しない設計のため、ここでは初期化しない
         // (= タブ生成時のデフォルト null のままで OK。本セッション中のリフレッシュで新着が来た瞬間に立つ)。
         var savedIndex = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
-        if (savedIndex?.LastReadPostNumber is int savedPos)
+        if (savedIndex?.LastReadPostNumber is long savedPos)
             tab.ScrollTargetPostNumber = savedPos;
         if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
         {
@@ -252,7 +248,7 @@ public sealed partial class MainViewModel
                 ApplyFetchDelta(tab, prevCount, result, info.Title);
             }
 
-            SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+            SaveFetchedPostCount(board, info.Key, result.Posts.Count, result.Posts.Count > 0 ? result.Posts[^1].Number : null);
             // dat 連番ベースの件数を記録 (= 後続の差分取得の境界に使う。NG 透明化では減らない)。
             tab.FetchedPostCount = result.Posts.Count;
 
@@ -269,7 +265,7 @@ public sealed partial class MainViewModel
             // ローカルキャッシュも無いケース (= タブを今初めて作っているケース) では、失敗タブを残しても
             // ユーザにとって価値が無いので削除し、システムブラウザで read.cgi の HTML を開いて代替する。
             // ローカルキャッシュがある場合は別 catch (= キャッシュ表示維持) でフォールスルーする。
-            var fallbackUrl = $"https://{board.Host}/test/read.cgi/{board.DirectoryName}/{info.Key}/";
+            var fallbackUrl = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadPageUrl(board, info.Key);
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[openThread] 404 で dat 取得不可。ブラウザ fallback: {fallbackUrl}");
             StatusMessage = $"dat 落ち (404) — ブラウザで開きます: {fallbackUrl}";
@@ -354,8 +350,12 @@ public sealed partial class MainViewModel
     /// 新設計では「Cookie モード」は anon スロット (= state.json) を使うため、
     /// jar 側の <see cref="DonguriService.AcornValue"/> ではなく
     /// <see cref="DonguriService.AnonAcornValue"/> で判定する。</summary>
-    private PostAuthMode DefaultPostAuthMode()
+    private PostAuthMode DefaultPostAuthMode(Board board)
     {
+        // (0) どんぐりを使わない提供者 (したらば / まちBBS / エッヂ) では常に None
+        if (!ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).PostForm.UsesDonguriAuth)
+            return PostAuthMode.None;
+
         // (1) 保存された前回値を優先
         if (Enum.TryParse<PostAuthMode>(CurrentConfig.LastPostAuthMode, ignoreCase: false, out var saved))
             return saved;
@@ -372,6 +372,15 @@ public sealed partial class MainViewModel
     /// <summary>新規に開いた PostFormViewModel に AuthMode 変更フックを仕掛けて、
     /// ユーザが RadioButton を切り替えた瞬間に <see cref="AppConfig.LastPostAuthMode"/> を更新・保存する。
     /// ダイアログを <c>OK / Cancel</c> どちらで閉じても、選んだ瞬間の値が次回起動時の初期選択になる。</summary>
+    /// <summary>設定 <see cref="AppConfig.PostAuthTokens"/> から、この板の提供者向けの認証トークン (エッヂ等) を引く。無ければ null。</summary>
+    private string? PostAuthTokenFor(Board board)
+    {
+        var id = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).Id;
+        return CurrentConfig.PostAuthTokens is { } tokens && tokens.TryGetValue(id, out var t) && !string.IsNullOrWhiteSpace(t)
+            ? t.Trim()
+            : null;
+    }
+
     private void HookPersistAuthMode(PostFormViewModel vm)
     {
         vm.PropertyChanged += (_, e) =>
@@ -391,7 +400,7 @@ public sealed partial class MainViewModel
 
     /// <summary>スレ表示の post-no クリックメニュー → 「返信」で呼ばれる。
     /// 投稿ダイアログを「&gt;&gt;N\n」プリフィル状態で開く。</summary>
-    public void OpenReplyDialog(ThreadTabViewModel tab, int postNumber)
+    public void OpenReplyDialog(ThreadTabViewModel tab, long postNumber)
     {
         OpenPostDialogInternal(tab, $">>{postNumber}\n");
     }
@@ -712,8 +721,9 @@ public sealed partial class MainViewModel
 
     private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
     {
-        var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode());
-        HookPersistAuthMode(vm);
+        var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode(tab.Board), PostAuthTokenFor(tab.Board));
+        // どんぐりを使わない提供者では AuthMode は None 固定なので、保存値 (LastPostAuthMode) を上書きしない
+        if (vm.PostForm.UsesDonguriAuth) HookPersistAuthMode(vm);
         if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
         _ = ApplyLineLimitFromSettingAsync(vm, tab.Board);
         var cfg = CurrentConfig;
@@ -980,8 +990,8 @@ public sealed partial class MainViewModel
             return;
         }
         var board = listTab.Board;
-        var vm    = new PostFormViewModel(_postClient, board, DefaultPostAuthMode());
-        HookPersistAuthMode(vm);
+        var vm    = new PostFormViewModel(_postClient, board, DefaultPostAuthMode(board), PostAuthTokenFor(board));
+        if (vm.PostForm.UsesDonguriAuth) HookPersistAuthMode(vm);
         _ = ApplyLineLimitFromSettingAsync(vm, board);
         var dlg   = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow);
         dlg.Closed += async (_, _) =>
@@ -1041,7 +1051,7 @@ public sealed partial class MainViewModel
     ///
     /// 引数の <paramref name="readMaxPostNumber"/> は JS の <c>findReadProgressMaxNumber</c> が算定する
     /// 「先頭から連番が途切れず下端まで見終えた最大番号」(= 読了 prefix の最大番号)。 </summary>
-    public void UpdateScrollPosition(Board board, string threadKey, int readMaxPostNumber)
+    public void UpdateScrollPosition(Board board, string threadKey, long readMaxPostNumber)
     {
         var tab = FindThreadTab(board, threadKey);
         if (tab is not null) tab.ScrollTargetPostNumber = readMaxPostNumber;
@@ -1054,7 +1064,7 @@ public sealed partial class MainViewModel
     /// 既存値の不要な上書きを避けるためである。 </summary>
     public void FlushScrollPositionToDisk(ThreadTabViewModel tab)
     {
-        if (tab.ScrollTargetPostNumber is not int n) return;
+        if (tab.ScrollTargetPostNumber is not long n) return;
         try
         {
             var existing = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
@@ -1226,6 +1236,12 @@ public sealed partial class MainViewModel
                 if (!Guid.TryParse(entry.FolderId, out var id)) return;
                 if (id == Guid.Empty)
                     _ = OpenAllRootAsBoardAsync();
+                else if (id == AllLogsTabId)
+                    _ = OpenAllLogsAsync(activate: false);
+                else if (id == NonFavLogsTabId)
+                    _ = OpenNonFavLogsAsync(activate: false);
+                else if (id == UnlistedBoardsTabId)
+                    _ = OpenUnlistedBoardsAsync(activate: false);
                 else if (Favorites.FindById(id) is FavoriteFolderViewModel folder)
                     _ = OpenFavoritesFolderAsync(folder);
                 // フォルダが既に削除されていた場合は何もしない (= サイレントに skip)。
@@ -1272,7 +1288,7 @@ public sealed partial class MainViewModel
     /// タブの <see cref="ThreadTabViewModel.OwnPostNumbers"/> を更新 + idx.json 永続化 +
     /// JS への増分通知 (<c>updateOwnPosts</c>) を発火する。
     /// 同じ要望が連投されたときの冪等性も担保 (= isOwn=true で既に入っている場合は no-op)。</summary>
-    public void ToggleOwnPost(ThreadTabViewModel tab, int postNumber, bool isOwn)
+    public void ToggleOwnPost(ThreadTabViewModel tab, long postNumber, bool isOwn)
     {
         bool changed = isOwn
             ? tab.OwnPostNumbers.Add(postNumber)
@@ -1313,10 +1329,15 @@ public sealed partial class MainViewModel
 
     /// <summary>idx.json の <c>LastFetchedPostCount</c> を更新する (取得成功直後に呼ぶ)。
     /// 既存値があれば <c>with</c> で上書き、無ければ新規作成。</summary>
-    private void SaveFetchedPostCount(Board board, string threadKey, int postCount)
+    private void SaveFetchedPostCount(Board board, string threadKey, int postCount, long? maxPostNumber = null)
     {
         var existing = _threadIndex.Load(board.Host, board.DirectoryName, threadKey);
-        var updated  = (existing ?? new ThreadIndex(null, null)) with { LastFetchedPostCount = postCount };
+        var updated  = (existing ?? new ThreadIndex(null, null)) with
+        {
+            LastFetchedPostCount  = postCount,
+            // 最大番号は分かるときだけ更新 (= 番号以降で差分取得する提供者の境界)。
+            LastFetchedPostNumber = maxPostNumber ?? existing?.LastFetchedPostNumber,
+        };
         _threadIndex.Save(board.Host, board.DirectoryName, threadKey, updated);
     }
 

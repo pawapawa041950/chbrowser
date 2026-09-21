@@ -28,7 +28,7 @@ public sealed record AppendBatchData(IReadOnlyList<Post> Posts, bool IsIncrement
 public sealed record OwnPostsUpdateData(IReadOnlyList<OwnPostChange> Changes);
 
 /// <summary>1 件分の自分マークトグル結果。</summary>
-public sealed record OwnPostChange(int Number, bool IsOwn);
+public sealed record OwnPostChange(long Number, bool IsOwn);
 
 /// <summary>「指定レス番号までスクロール」要求のラッパー。
 /// <see cref="ThreadTabViewModel.PendingScrollToPost"/> に新インスタンスを setter することで、
@@ -38,8 +38,8 @@ public sealed record OwnPostChange(int Number, bool IsOwn);
 /// SetProperty 内の比較で「変化なし」と判定され PropertyChanged が出ない。class にして参照同一性で毎回発火させる。</para></summary>
 public sealed class ScrollToPostRequest
 {
-    public int Number { get; }
-    public ScrollToPostRequest(int number) => Number = number;
+    public long Number { get; }
+    public ScrollToPostRequest(long number) => Number = number;
 }
 
 /// <summary>
@@ -52,9 +52,10 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public Board  Board     { get; }
     public string ThreadKey { get; }
 
-    /// <summary>このスレの正規 URL (5ch.io / bbspink.com の <c>test/read.cgi</c> 形式)。
+    /// <summary>このスレの正規 URL (提供者の形式。5ch なら <c>test/read.cgi</c>)。
     /// アドレスバー表示やコンテキストメニューの「URLコピー」で使う。</summary>
-    public string Url => $"https://{Board.Host}/test/read.cgi/{Board.DirectoryName}/{ThreadKey}/";
+    public string Url => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host)
+        .ThreadUrl(Board.Host, Board.DirectoryName, ThreadKey);
 
     public IRelayCommand CloseCommand           { get; }
     public IRelayCommand CycleViewModeCommand  { get; }
@@ -91,7 +92,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>このタブで NG (直接 + 連鎖) により hidden になったレス番号の累積集合。
     /// 差分取得で新着バッチを判定するとき、連鎖あぼーんの種として <c>NgService.ComputeHiddenWithBreakdown</c> に渡す
     /// (= 以前あぼーんされたレスへアンカーしている新着も連鎖で隠す)。<see cref="HiddenCount"/> と同じ寿命で累積する。</summary>
-    public HashSet<int> HiddenPostNumbers { get; } = new();
+    public HashSet<long> HiddenPostNumbers { get; } = new();
 
     /// <summary>1 batch 分の <see cref="ChBrowser.Services.Ng.NgHiddenBreakdown"/> を内訳カウンタと
     /// <see cref="HiddenPostNumbers"/> に加算する。MainViewModel.AppendPostsWithNg / ReplaceVisiblePostsAfterNgAdd から呼ばれる。</summary>
@@ -108,18 +109,18 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// 同じ集合を 2 回送る (= ユーザが立て続けに NG 追加する) ケースに備え、IReadOnlyList を新インスタンス
     /// で setter する (= 参照同一だと PropertyChanged が飛ばない可能性がある)。 </summary>
     [ObservableProperty]
-    private IReadOnlyList<int>? _pendingHidePostNumbers;
+    private IReadOnlyList<long>? _pendingHidePostNumbers;
 
     /// <summary>NG 判定 AI が「攻撃的 (= スコア >= しきい値)」と判定したレス番号の「全集合」。
     /// 値が変わると WebView2Helper.AiHiddenPush (= setAiHidden) で JS に送られ、対象レスに
     /// <c>.ai-ng-hidden</c> クラスが付け外しされる (= 集合に無い番号は再表示される / 可逆)。
     /// <see cref="PendingHidePostNumbers"/> (= 物理削除) とは別系統。 </summary>
     [ObservableProperty]
-    private IReadOnlyList<int>? _aiHiddenPostNumbers;
+    private IReadOnlyList<long>? _aiHiddenPostNumbers;
 
     /// <summary>このスレで AI が出した NG スコア (レス番号 → 1..5)。永続化分の読み戻し + 逐次判定で更新される。
     /// しきい値と突き合わせて <see cref="AiHiddenPostNumbers"/> を再計算するための元データ。</summary>
-    public Dictionary<int, int> AiScores { get; } = new();
+    public Dictionary<long, int> AiScores { get; } = new();
 
     /// <summary>永続化済みスコア (<c>.aing.json</c>) を一度読み込んだか。スレ再オープン時の二重ロード防止。</summary>
     public bool AiScoresLoaded { get; set; }
@@ -170,7 +171,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// JS からの scrollPosition メッセージで随時更新される。
     /// </summary>
     [ObservableProperty]
-    private int? _scrollTargetPostNumber;
+    private long? _scrollTargetPostNumber;
 
     /// <summary>「以降新レス」ラベルの対象レス番号 (= ラベルがその直前に挿入される番号)。
     /// 永続化はしない (= 本アプリ起動以降の差分取得で来た新着のみを示す session-local な値)。
@@ -179,7 +180,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// JS 側はここの値を <c>appendPosts</c> ペイロード経由で受け取り、ラベル位置と
     /// dedup-tree モードでの「親ごと描写」境界に使う。</summary>
     [ObservableProperty]
-    private int? _markPostNumber;
+    private long? _markPostNumber;
 
     /// <summary>「直前の差分取得で来た新着レスのいずれかが、自分のレス (<see cref="OwnPostNumbers"/>) を参照していた」
     /// と検出された状態。立っているとスレ一覧の状態マークが赤 (<see cref="LogMarkState.RepliedToOwn"/>) になる。
@@ -218,7 +219,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// idx.json から復元 + post-no メニューの「自分の書き込み」トグルで増減する。
     /// <see cref="IThreadDisplayBinding.OwnPostNumbers"/> 経由で WebView2 の appendPosts ペイロードに同梱され、
     /// JS 側で「自分」バッジ表示に使われる。</summary>
-    public HashSet<int> OwnPostNumbers { get; } = new();
+    public HashSet<long> OwnPostNumbers { get; } = new();
 
     /// <summary>WebView2 への増分通知 — 自分マークのトグル結果を JS 側に push するためのチャネル。
     /// <see cref="ChBrowser.Controls.WebView2Helper"/> の OwnPostsUpdate 添付プロパティがこれを観測して
@@ -266,7 +267,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
             MediaOnly:   IsMediaFilterOn);
     }
 
-    IReadOnlyCollection<int> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;
+    IReadOnlyCollection<long> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;
 
     /// <summary>このスレを開いた時の元タイトル (お気に入り登録時 / kakikomi.txt 用)。
     /// アドレスバーから直接スレを開いた経路では初期値が空文字で、dat の 1 レス目を取得した
@@ -317,7 +318,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// しきい値 6 以上 (= OFF) の時は空集合 = 全再表示。逐次判定 / しきい値変更のたびに呼ぶ。</summary>
     public void RecomputeAiHidden(int threshold)
     {
-        var hidden = new List<int>();
+        var hidden = new List<long>();
         if (threshold <= 5)
         {
             foreach (var kv in AiScores)
@@ -350,14 +351,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     ///  - <paramref name="breakdown"/>: 内訳 (per-rule + 連鎖) — HiddenByRule / HiddenByChain に加算する</summary>
     public void ReplaceVisiblePostsAfterNgAdd(
         IReadOnlyList<Post> newVisible,
-        ICollection<int> newlyHiddenNumbers,
+        ICollection<long> newlyHiddenNumbers,
         ChBrowser.Services.Ng.NgHiddenBreakdown breakdown)
     {
         Posts = newVisible;
         HiddenCount += newlyHiddenNumbers.Count;
         AddHiddenBreakdown(breakdown);
         // 同じ集合を立て続けに送る場合に PropertyChanged が飛ぶよう、毎回新インスタンスを setter する。
-        PendingHidePostNumbers = new List<int>(newlyHiddenNumbers);
+        PendingHidePostNumbers = new List<long>(newlyHiddenNumbers);
     }
 
     // ViewMode 変更時の追加通知は不要 (= XAML は <c>{Binding ViewMode, Value={x:Static ThreadViewMode.Xxx}}</c> で

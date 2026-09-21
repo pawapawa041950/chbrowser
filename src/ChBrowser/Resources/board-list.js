@@ -123,7 +123,7 @@
         clearHighlights();
 
         var boards     = root.querySelectorAll('li.board');
-        var categories = root.querySelectorAll('details.category');
+        var categories = root.querySelectorAll('details.category, details.provider');
 
         if (!qLow) {
             for (var i = 0; i < boards.length; i++)     boards[i].classList.remove('filter-hidden');
@@ -158,14 +158,19 @@
         }
     }
 
-    // カテゴリ開閉 → C# 側 ViewModel に同期
+    // カテゴリ / 提供者ノードの開閉 → C# 側 ViewModel に同期
     root.addEventListener('toggle', function (e) {
         var d = e.target;
         if (!d || d.tagName !== 'DETAILS') return;
+        if (d.classList.contains('provider')) {
+            post({ type: 'setProviderExpanded', providerId: d.dataset.provider, expanded: d.open });
+            return;
+        }
         if (!d.classList.contains('category')) return;
         post({
             type:         'setCategoryExpanded',
             categoryName: d.dataset.category,
+            providerId:   d.dataset.provider || '',
             expanded:     d.open,
         });
     }, true);

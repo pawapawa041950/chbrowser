@@ -146,6 +146,15 @@ public sealed record AppConfig
     /// <summary>人気レス閾値 (= 被アンカー数 ≥ この値で赤マーカー)。即時反映 (setConfig メッセージ)。</summary>
     public int PopularThreshold { get; init; } = 3;
 
+    /// <summary>掲示板提供者 Id (例: "5ch") → アンカー判定規則の並び。未設定 (null / 空) の提供者は既定規則を使う。
+    /// 設定ウィンドウ「アンカー判定」で編集する。<c>doc/multi-bbs-design.md</c> §6。</summary>
+    public System.Collections.Generic.Dictionary<string, AnchorRule[]>? AnchorRules { get; init; }
+
+    /// <summary>掲示板提供者 Id → 書き込み用の認証トークン (任意)。エッヂ ("eddi") では認証ページの完了画面に出るトークンを
+    /// 入れると、認証 Cookie が無いときにメール欄へ <c>#トークン</c> として付けて送る。通常は初回投稿時の Cookie が
+    /// 自動保存されるので空でよい。設定ウィンドウ「認証」で編集する。</summary>
+    public System.Collections.Generic.Dictionary<string, string>? PostAuthTokens { get; init; }
+
     /// <summary>新規スレタブ生成時のデフォルト表示モード (Flat / Tree / DedupTree2)。
     /// 旧 config 値 "DedupTree" は読み込み時に dedupTree2 へ解決される (CreateThreadTab の switch)。</summary>
     public string DefaultThreadViewMode { get; init; } = "DedupTree2";

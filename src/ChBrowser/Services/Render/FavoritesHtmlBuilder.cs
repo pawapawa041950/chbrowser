@@ -22,7 +22,8 @@ public static class FavoritesHtmlBuilder
         sb.Append(@"<ul class=""fav-root"">");
 
         // 「機能」フォルダ (Phase 18) — お気に入り仮想ルートより上の兄弟。
-        // 永続化対象外 / drag 不可 / context menu なし、JS 側は data-type="function-folder" / "all-logs" で識別。
+        // 永続化対象外 / drag 不可 / context menu なし、JS 側は data-type="function-folder" / "all-logs" /
+        // "non-fav-logs" / "unlisted-boards" で識別。
         sb.Append(@"<li class=""fav-item"" data-type=""function-folder"">")
           .Append(@"<details class=""folder"" open>")
           .Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">機能</span></summary>")
@@ -32,6 +33,9 @@ public static class FavoritesHtmlBuilder
           .Append(@"</li>")
           .Append(@"<li class=""fav-item board-row"" data-type=""non-fav-logs"">")
           .Append(@"<span class=""icon icon-board""></span><span class=""label"">お気に入り以外の全ログ</span>")
+          .Append(@"</li>")
+          .Append(@"<li class=""fav-item board-row"" data-type=""unlisted-boards"">")
+          .Append(@"<span class=""icon icon-board""></span><span class=""label"">板一覧以外の取得済み板</span>")
           .Append(@"</li>")
           .Append(@"</ul></details></li>");
 
