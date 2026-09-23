@@ -186,7 +186,8 @@ public sealed partial class MainViewModel
             await Task.WhenAll(tasks).ConfigureAwait(true);
 
             // ここに到達 = キャンセルされずに最後まで走り切った = 完了。まとめて 1 回だけ保存する。
-            if (judgedCount > 0)
+            // 判定中にログを削除したスレは保存しない (消した .aing.json を作り直さない)。
+            if (judgedCount > 0 && !tab.LogDeleted)
             {
                 AiNgStore.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey, tab.AiScores);
                 ChBrowser.Services.Logging.LogService.Instance.Write(

@@ -1115,7 +1115,11 @@ public sealed partial class MainViewModel
         // ログ削除でも「うっかり消した → 復元したい」というユースケースが普通にあるため、
         // 再オープン履歴には積む (= 通常の close と同じ扱い)。再オープン時は dat を取り直して開く。
         var openTab = FindThreadTab(board, threadKey);
-        if (openTab is not null) RemoveThreadTab(openTab);
+        if (openTab is not null)
+        {
+            openTab.LogDeleted = true;   // 実行中の AI NG 判定 / AI 翻訳が消したファイルを保存し直さないように
+            RemoveThreadTab(openTab);
+        }
 
         NotifyThreadListLogMark(board, threadKey, LogMarkState.None);
 

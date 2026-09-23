@@ -154,6 +154,10 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public HashSet<long> TranslatingPosts { get; } = new();
     /// <summary>訳文の送信チャネル (TranslationUpdate 添付プロパティが観測して updateTranslations を送る)。</summary>
     [ObservableProperty] private TranslationUpdateMessage? _translationUpdate;
+    /// <summary>このスレのログを削除した (タブも閉じる)。実行中だった AI NG 判定 / AI 翻訳が終わったときに
+    /// スコア / 訳文を保存し直して、消したファイルを作り直さないための印。</summary>
+    public bool LogDeleted { get; set; }
+
     /// <summary>実行中の翻訳の取り消し (OFF にしたとき / タブを閉じたとき)。</summary>
     internal System.Threading.CancellationTokenSource? TranslateCts { get; set; }
 

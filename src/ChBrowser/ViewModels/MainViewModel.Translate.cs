@@ -73,8 +73,11 @@ public sealed partial class MainViewModel
     }
 
     private void SaveTranslation(ThreadTabViewModel tab)
-        => TranslationStore.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey,
+    {
+        if (tab.LogDeleted) return;   // 翻訳中にログを削除したスレ: 消した .tr.json を作り直さない
+        TranslationStore.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey,
             new ThreadTranslation(tab.IsTranslationOn, tab.TranslatedShown.OrderBy(n => n).ToList(), new Dictionary<long, string>(tab.Translations)));
+    }
 
     private static void PushTranslation(ThreadTabViewModel tab, IReadOnlyDictionary<long, string>? translations = null,
                                         IReadOnlyList<long>? show = null, IReadOnlyList<long>? hide = null,

@@ -228,6 +228,9 @@ public sealed class DatClient
         if (File.Exists(metaPath)) { File.Delete(metaPath); }
         var trPath = _paths.TranslationPath(board.Host, board.DirectoryName, threadKey);
         if (File.Exists(trPath)) { File.Delete(trPath); }
+        // AI NG のスコア (レス番号 → 1..5)。残すと、同じスレを取り直したときに古いスコアが同じ番号のレスに当たる
+        var aingPath = _paths.AiNgScoresPath(board.Host, board.DirectoryName, threadKey);
+        if (File.Exists(aingPath)) { File.Delete(aingPath); }
         return any;
     }
 
