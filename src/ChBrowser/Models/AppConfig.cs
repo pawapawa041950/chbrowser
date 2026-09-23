@@ -104,6 +104,24 @@ public sealed record AppConfig
     /// リーズニングモデルだと思考過程の生成で遅くなるため、既定 true。サーバ側で OFF にできているなら不要。</summary>
     public bool NgAiDisableReasoning { get; init; } = true;
 
+    // ---- AI 翻訳 (スレ / レスを日本語に翻訳。設定ウィンドウ「AI翻訳」) ----
+    // 各欄が空なら AI (Llm*) の設定を使う (= 翻訳専用のモデルを用意しなくても使える)。
+
+    /// <summary>AI 翻訳の OpenAI 互換 API URL。空なら AI (<see cref="LlmApiUrl"/>) の設定を使う。</summary>
+    public string TranslateApiUrl { get; init; } = "";
+    /// <summary>AI 翻訳の API キー (Bearer)。空なら AI の設定を使う。config.json に平文保存。</summary>
+    public string TranslateApiKey { get; init; } = "";
+    /// <summary>AI 翻訳のモデル名。空なら AI の設定を使う。</summary>
+    public string TranslateModel { get; init; } = "";
+    /// <summary>AI 翻訳のコンテキストサイズ (トークン数)。0 なら AI の設定を使う。1 回に送るレスの量もこれで決まる。</summary>
+    public int TranslateContextSize { get; init; } = 0;
+    /// <summary>AI 翻訳の同時実行数 (並行で投げる LLM リクエスト本数、全スレ合計)。既定 2。</summary>
+    public int TranslateConcurrency { get; init; } = 2;
+    /// <summary>AI 翻訳のリクエストにリーズニング無効化設定一式を付加するか (<see cref="NgAiDisableReasoning"/> と同じ)。既定 true。</summary>
+    public bool TranslateDisableReasoning { get; init; } = true;
+    /// <summary>各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか (スレッドペインの 🌐 メニュー「各レスごとに翻訳ボタンを表示する」)。</summary>
+    public bool ShowPostTranslateButtons { get; init; } = false;
+
     // ---- MCP サーバ (外部公開) ----
     // ChBrowser のスレ読み取り / 横断 / 開く 系ツール (14 個) を MCP (Model Context Protocol) で
     // 外部の MCP クライアント (Claude Desktop / Cursor 等) に公開する。動作中の本体プロセス内で

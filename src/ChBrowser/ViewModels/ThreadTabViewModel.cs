@@ -46,6 +46,27 @@ public sealed class AuthorProfilesMessage
     public AuthorProfilesMessage(IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> profiles) => Profiles = profiles;
 }
 
+/// <summary>JS の <c>updateTranslations</c> に渡すペイロード。<see cref="Translations"/> は届いた訳文 (レス番号 → 表示用本文)、
+/// <see cref="Show"/> は翻訳で表示するレス、<see cref="Hide"/> は原文に戻すレス、<see cref="Loading"/> / <see cref="Loaded"/> は
+/// 翻訳を始めた / 終えたレス (🌐 ボタンの読み込み中表示)。class なので同じ内容でも毎回送られる。</summary>
+public sealed class TranslationUpdateMessage
+{
+    public IReadOnlyDictionary<long, string> Translations { get; }
+    public IReadOnlyList<long> Show { get; }
+    public IReadOnlyList<long> Hide { get; }
+    public IReadOnlyList<long> Loading { get; }
+    public IReadOnlyList<long> Loaded { get; }
+    public TranslationUpdateMessage(IReadOnlyDictionary<long, string> translations, IReadOnlyList<long> show, IReadOnlyList<long> hide,
+                                    IReadOnlyList<long> loading, IReadOnlyList<long> loaded)
+    {
+        Translations = translations;
+        Show         = show;
+        Hide         = hide;
+        Loading      = loading;
+        Loaded       = loaded;
+    }
+}
+
 /// <summary>1 件分の評価の状態。<see cref="Dir"/> は 1 / -1 / 0、<see cref="Ok"/> = false は送信失敗 (表示を元に戻す)。</summary>
 public sealed record VoteChange(long Number, int Dir, bool Ok = true);
 
@@ -117,6 +138,24 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public IRelayCommand WriteCommand           { get; }
     /// <summary>ツールバー「AI」ボタン用。このスレの内容を文脈に LLM チャットウィンドウを開く。</summary>
     public IRelayCommand AiChatCommand          { get; }
+    /// <summary>🌐 メニュー「このスレを全て翻訳する」: スレ全体の翻訳の ON / OFF。</summary>
+    public IRelayCommand ToggleTranslationCommand { get; }
+
+    // ---- AI 翻訳 ----
+    /// <summary>このスレの訳文 (レス番号 → 表示用本文)。<c>.tr.json</c> から復元し、翻訳のたびに増える。appendPosts / resync に同梱する。</summary>
+    public Dictionary<long, string> Translations { get; } = new();
+    /// <summary>翻訳で表示しているレス番号 (原文に戻したレスは訳文を残したまま外す)。</summary>
+    public HashSet<long> TranslatedShown { get; } = new();
+    /// <summary>スレ全体の翻訳が ON (ツールバー 🌐 の押下状態。新着も自動で翻訳する)。</summary>
+    [ObservableProperty] private bool _isTranslationOn;
+    /// <summary>スレ全体の翻訳を実行中 (ツールバー 🌐 の表示用)。</summary>
+    [ObservableProperty] private bool _isTranslating;
+    /// <summary>いま LLM で訳しているレス番号 (🌐 ボタンの読み込み中表示。resync に同梱)。</summary>
+    public HashSet<long> TranslatingPosts { get; } = new();
+    /// <summary>訳文の送信チャネル (TranslationUpdate 添付プロパティが観測して updateTranslations を送る)。</summary>
+    [ObservableProperty] private TranslationUpdateMessage? _translationUpdate;
+    /// <summary>実行中の翻訳の取り消し (OFF にしたとき / タブを閉じたとき)。</summary>
+    internal System.Threading.CancellationTokenSource? TranslateCts { get; set; }
 
     [ObservableProperty]
     private string _header;
@@ -367,7 +406,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         Action<ThreadTabViewModel>?          refreshCallback        = null,
         Action<ThreadTabViewModel>?          addToFavoritesCallback = null,
         Action<ThreadTabViewModel>?          writeCallback          = null,
-        Action<ThreadTabViewModel>?          aiChatCallback         = null)
+        Action<ThreadTabViewModel>?          aiChatCallback         = null,
+        Action<ThreadTabViewModel>?          translateCallback      = null)
     {
         Board                  = board;
         ThreadKey              = info.Key;
@@ -379,6 +419,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         AddToFavoritesCommand  = new RelayCommand(() => addToFavoritesCallback?.Invoke(this));
         WriteCommand           = new RelayCommand(() => writeCallback?.Invoke(this));
         AiChatCommand          = new RelayCommand(() => aiChatCallback?.Invoke(this));
+        ToggleTranslationCommand = new RelayCommand(() => translateCallback?.Invoke(this));
         RefreshProviderConfig();
         // 表示モード切替ボタンのサイクル順で次へ進む (一周したら先頭へ)。
         // 旧 DedupTree は dedupTree2 へ置き換え中のためサイクルから除外している (ソースは残すが UI からは呼ばない)。

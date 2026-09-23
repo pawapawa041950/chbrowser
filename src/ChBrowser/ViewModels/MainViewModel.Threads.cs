@@ -305,6 +305,7 @@ public sealed partial class MainViewModel
         {
             tab.IsBusy = false;
             _ = LoadAuthorProfilesAsync(tab);
+            if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);   // スレ全体の翻訳が ON なら新着も訳す
         }
     }
 
@@ -344,6 +345,7 @@ public sealed partial class MainViewModel
         {
             tab.IsBusy = false;
             _ = LoadAuthorProfilesAsync(tab);
+            if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);
         }
     }
 
@@ -1488,7 +1490,9 @@ public sealed partial class MainViewModel
             refreshCallback:        t => _ = RefreshThreadAsync(t),
             addToFavoritesCallback: t => ToggleThreadFavorite(t),
             writeCallback:          t => OpenPostDialog(t),
-            aiChatCallback:         t => OpenAiChat(t));
+            aiChatCallback:         t => OpenAiChat(t),
+            translateCallback:      t => _ = ToggleThreadTranslationAsync(t));
+        LoadTranslation(tab);
 
         tab.ViewMode = CurrentConfig.DefaultThreadViewMode switch
         {

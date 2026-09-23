@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using System.Windows;
 using Microsoft.Web.WebView2.Wpf;
@@ -223,11 +224,26 @@ public static partial class WebView2Helper
             ownPostNumbers   = ownPosts,
             // アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。取得時点の評価より優先して表示する
             myVotes          = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.MyVotes,
+            // AI 翻訳: このバッチのレスの訳文と、翻訳で表示するレス (レス描画の時点で訳文で出す。全体は resync で送る)
+            translations     = TranslationsFor(wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel, data.Posts),
+            translatedShown  = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel) is { } trTab
+                                   ? data.Posts.Where(pp => trTab.TranslatedShown.Contains(pp.Number)).Select(pp => pp.Number).ToArray()
+                                   : System.Array.Empty<long>(),
             // 提供者依存のスレ表示設定 (レス番号の表示可否 / アンカー規則等)。JS はレス描画の前に適用する。
             provider         = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.ProviderConfig,
         }, PostJsonOptions);
 
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    /// <summary>appendPosts 1 バッチ分の訳文 (バッチ内のレスの分だけ。毎バッチ全体を送らない)。</summary>
+    private static System.Collections.Generic.Dictionary<long, string>? TranslationsFor(
+        ChBrowser.ViewModels.ThreadTabViewModel? tab, System.Collections.Generic.IReadOnlyList<ChBrowser.Models.Post> posts)
+    {
+        if (tab is null || tab.Translations.Count == 0) return null;
+        var d = new System.Collections.Generic.Dictionary<long, string>();
+        foreach (var p in posts) if (tab.Translations.TryGetValue(p.Number, out var t)) d[p.Number] = t;
+        return d.Count > 0 ? d : null;
     }
 
     // ------------------------------------------------------------
@@ -257,6 +273,9 @@ public static partial class WebView2Helper
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
             myVotes        = tab.MyVotes,
             authorProfiles = tab.AuthorProfiles,
+            translations   = tab.Translations,
+            translatedShown = tab.TranslatedShown,
+            translatingPosts = tab.TranslatingPosts,
             filter = new
             {
                 textQuery   = filter?.TextQuery ?? "",
@@ -290,6 +309,28 @@ public static partial class WebView2Helper
     {
         if (d is not WebView2 wv || e.NewValue is null) return;
         var json = JsonSerializer.Serialize(new { type = "updateOwnPosts", value = e.NewValue }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // TranslationUpdate (スレ表示: AI 翻訳の訳文と、翻訳 / 原文の切り替え)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty TranslationUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "TranslationUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnTranslationUpdateChanged));
+
+    public static object? GetTranslationUpdate(DependencyObject d) => d.GetValue(TranslationUpdateProperty);
+    public static void    SetTranslationUpdate(DependencyObject d, object? value) => d.SetValue(TranslationUpdateProperty, value);
+
+    private static void OnTranslationUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.TranslationUpdateMessage m) return;
+        var json = JsonSerializer.Serialize(new { type = "updateTranslations", translations = m.Translations, show = m.Show, hide = m.Hide,
+                                                  loading = m.Loading, loaded = m.Loaded }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

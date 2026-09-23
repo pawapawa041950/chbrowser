@@ -226,6 +226,8 @@ public sealed class DatClient
         if (File.Exists(idxPath)) { File.Delete(idxPath); }
         var metaPath = _paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey);
         if (File.Exists(metaPath)) { File.Delete(metaPath); }
+        var trPath = _paths.TranslationPath(board.Host, board.DirectoryName, threadKey);
+        if (File.Exists(trPath)) { File.Delete(trPath); }
         return any;
     }
 

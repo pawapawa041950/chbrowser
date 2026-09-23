@@ -151,6 +151,10 @@ public sealed class DataPaths
     public string AiNgScoresPath(string host, string directoryName, string threadKey)
         => Path.Combine(BoardDir(host, directoryName), threadKey + ".aing.json");
 
+    /// <summary>AI 翻訳の結果 (レス番号 → 訳文、翻訳表示中のレス、スレ全体の翻訳の ON/OFF)。</summary>
+    public string TranslationPath(string host, string directoryName, string threadKey)
+        => Path.Combine(BoardDir(host, directoryName), threadKey + ".tr.json");
+
     /// <summary>"hayabusa9.5ch.io" → "5ch.io"、"mercury.bbspink.com" → "bbspink.com"。</summary>
     public static string ExtractRootDomain(string host)
     {

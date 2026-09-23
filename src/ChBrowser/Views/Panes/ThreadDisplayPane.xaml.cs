@@ -32,6 +32,9 @@ public partial class ThreadDisplayPane : UserControl
 
     /// <summary>NG 判定 AI のしきい値ボタン。左クリックでアタッチ済み ContextMenu (しきい値メニュー) を開く。
     /// 右クリック用メニューを左クリックで開くだけなので、PlacementTarget をボタン自身に固定して下に出す。</summary>
+    /// <summary>ツールバー 🌐: AI 翻訳のメニューを出す (AI NG のしきい値ボタンと同じ出し方)。</summary>
+    private void TranslateMenuButton_Click(object sender, RoutedEventArgs e) => AiNgThresholdButton_Click(sender, e);
+
     private void AiNgThresholdButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn || btn.ContextMenu is null) return;
@@ -121,6 +124,7 @@ public partial class ThreadDisplayPane : UserControl
             case "ngAdd":              HandleNgAdd(sender, payload); break;
             case "toggleOwnPost":      HandleToggleOwnPost(sender, payload); break;
             case "vote":               HandleVote(sender, payload); break;
+            case "translatePost":      HandleTranslatePost(sender, payload); break;
             case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
             case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
             case "threadPreviewRequest": HandleThreadPreviewRequest(sender, payload); break;
@@ -826,6 +830,11 @@ public partial class ThreadDisplayPane : UserControl
                 case "own":
                     mi.Header = ctx.IsOwn ? "自分の書き込み解除" : "自分の書き込みにする";
                     break;
+                case "translate":
+                    // 翻訳で表示中なら「原文に戻す」、そうでなければ「このレスを翻訳」
+                    mi.Header = ctx.Wv.DataContext is ThreadTabViewModel ttab && ttab.TranslatedShown.Contains(ctx.Number)
+                        ? "原文に戻す" : "このレスを翻訳";
+                    break;
                 case "ngName":
                     mi.Header    = "名前 — "       + (string.IsNullOrEmpty(ctx.Name)    ? "(空)"   : ctx.Name);
                     mi.IsEnabled = !string.IsNullOrEmpty(ctx.Name);
@@ -840,6 +849,26 @@ public partial class ThreadDisplayPane : UserControl
                     break;
             }
         }
+    }
+
+    /// <summary>レス番号メニュー「このレスを翻訳」/「原文に戻す」。</summary>
+    private void PostNoTranslate_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (Vm is not { } main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        if (tab.TranslatedShown.Contains(ctx.Number)) main.ShowOriginal(tab, ctx.Number);
+        else _ = main.TranslatePostAsync(tab, ctx.Number);
+    }
+
+    /// <summary>各レスの名前行の 🌐 ボタン (JS の translatePost): 翻訳 / 原文に戻す の切り替え。</summary>
+    private void HandleTranslatePost(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (Vm is not { } main) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
+        _ = main.TogglePostTranslationAsync(tab, num);
     }
 
     /// <summary>クリックされた MenuItem (= sender) から PostNoMenuContext を取り出すヘルパ。

@@ -30,6 +30,16 @@ public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int
     public static LlmSettings NgFromConfig(AppConfig c)
         => new(c.NgAiApiUrl ?? "", c.NgAiApiKey ?? "", c.NgAiModel ?? "", c.NgAiContextSize);
 
+    /// <summary>AI 翻訳の接続。空の項目は AI (メインの「AI モデル」) の設定を使う。</summary>
+    public static LlmSettings TranslateFromConfig(AppConfig c)
+    {
+        var main = FromConfig(c);
+        return new(Pick(c.TranslateApiUrl, main.ApiUrl),
+                   Pick(c.TranslateApiKey, main.ApiKey),
+                   Pick(c.TranslateModel,  main.Model),
+                   c.TranslateContextSize > 0 ? c.TranslateContextSize : main.ContextSize);
+    }
+
     private static string Pick(string? primary, string? fallback)
         => string.IsNullOrWhiteSpace(primary) ? (fallback ?? "") : primary!;
 }

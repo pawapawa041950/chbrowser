@@ -47,6 +47,7 @@
             <Separator />
             <MenuItem Tag="reply" Header="返信"                  Click="PostNoReply_Click" />
             <MenuItem Tag="own"   Header="自分の書き込みにする"  Click="PostNoToggleOwn_Click" />
+            <MenuItem Tag="translate" Header="このレスを翻訳"   Click="PostNoTranslate_Click" />
             <Separator />
             <MenuItem Header="NG 登録">
                 <MenuItem Tag="ngName"    Click="PostNoNgName_Click" />
@@ -164,6 +165,49 @@
                                   ToolTip="画像 / 動画 URL を含むレスのみ表示。人気トグルと OR 動作">
                         <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </ToggleButton>
+
+                    <!-- AI 翻訳: 押すとメニュー (各レスの翻訳ボタンの表示 / このスレを全て翻訳する)。
+                         スレ全体の翻訳が ON の間は押下状態の色、実行中は ⏳ -->
+                    <Button Click="TranslateMenuButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="ToolTip" Value="AI 翻訳" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedTab.IsTranslationOn}" Value="True">
+                                        <Setter Property="Background"  Value="#CCE5FF" />
+                                        <Setter Property="BorderBrush" Value="#88B0DD" />
+                                        <Setter Property="ToolTip" Value="AI 翻訳 (このスレを翻訳表示中)" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="各レスごとに翻訳ボタンを表示する"
+                                          IsCheckable="False"
+                                          IsChecked="{Binding Main.ShowPostTranslateButtons, Mode=OneWay}"
+                                          Command="{Binding Main.ToggleShowPostTranslateButtonsCommand}"
+                                          ToolTip="各レスの名前行の末尾に 🌐 ボタンを出す (押すとそのレスを翻訳 / 原文に戻す。全スレ共通)" />
+                                <MenuItem Header="このスレを全て翻訳する"
+                                          IsCheckable="False"
+                                          IsChecked="{Binding SelectedTab.IsTranslationOn, Mode=OneWay}"
+                                          Command="{Binding SelectedTab.ToggleTranslationCommand}"
+                                          ToolTip="日本語以外のレスを全て翻訳する (新着も自動で翻訳)。もう一度選ぶと原文に戻す" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                        <TextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="🌐" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedTab.IsTranslating}" Value="True">
+                                            <Setter Property="Text" Value="⏳" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Button>
 
                     <!-- 差分取得 -->
                     <Button Style="{StaticResource ToolbarIconButton}"
@@ -403,6 +447,7 @@
                                   ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
                                   ctrl:WebView2Helper.VotesUpdate="{Binding VotesUpdate}"
                                   ctrl:WebView2Helper.AuthorProfilesUpdate="{Binding AuthorProfilesUpdate}"
+                                  ctrl:WebView2Helper.TranslationUpdate="{Binding TranslationUpdate}"
                                   ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"

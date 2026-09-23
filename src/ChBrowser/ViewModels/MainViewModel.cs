@@ -70,7 +70,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 
     /// <summary>タブを所属ペインから取り除く (= 閉じる)。所属不明ならアクティブペインから試みる。</summary>
     public void RemoveThreadTab(ThreadTabViewModel tab)
-        => (GroupOf(tab) ?? _activeThreadGroup).Tabs.Remove(tab);
+    {
+        tab.TranslateCts?.Cancel();   // 実行中の AI 翻訳を止める
+        (GroupOf(tab) ?? _activeThreadGroup).Tabs.Remove(tab);
+    }
 
     /// <summary>新しいスレ表示ペインを登録する (= Tabs の CollectionChanged を購読 + コレクションに追加)。
     /// ctor の初期 1 枚生成と、Phase 3 のペイン増設の両方から呼ばれる。</summary>
@@ -761,6 +764,25 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         PersistConfigCallback?.Invoke(next);
     }
 
+    /// <summary>スレ表示 (thread.js) 向けの全タブ共通の設定 (<c>setConfig</c>)。<see cref="ApplyConfig"/> と、
+    /// 🌐 メニュー「各レスごとに翻訳ボタンを表示する」の切り替えから作る。</summary>
+    private static string BuildThreadConfigJson(AppConfig config)
+        => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type                  = "setConfig",
+            popularThreshold      = config.PopularThreshold,
+            imageSizeThresholdMb  = config.ImageSizeThresholdMb,
+            idHighlightThreshold  = config.IdHighlightThreshold,
+            metaPopupClickOnly    = config.MetaPopupClickOnly,
+            debug                 = config.DebugDisableRecovery,
+            // 各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか (🌐 メニュー)
+            translateButtons      = config.ShowPostTranslateButtons,
+            // 登録済み全提供者のスレ URL を本文中リンクとして認識させる (= 他掲示板の URL も提供者追加で自動追従)。
+            threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
+                                        .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
+                                        .ToArray(),
+        });
+
     /// <summary>NgService への外部アクセス (NgWindow から再ロード等を呼ぶため)。</summary>
     public ChBrowser.Services.Ng.NgService NgService => _ng;
 
@@ -824,19 +846,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         // (ThreadTabViewModel.ProviderConfig。appendPosts に同梱 + setProviderConfig で即時反映)。
         // ここは全タブ共通の項目と、全提供者ぶんのスレリンク判定だけ。
         foreach (var openTab in AllThreadTabs) openTab.RefreshProviderConfig();
-        ThreadConfigJson = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            type                  = "setConfig",
-            popularThreshold      = config.PopularThreshold,
-            imageSizeThresholdMb  = config.ImageSizeThresholdMb,
-            idHighlightThreshold  = config.IdHighlightThreshold,
-            metaPopupClickOnly    = config.MetaPopupClickOnly,
-            debug                 = config.DebugDisableRecovery,
-            // 登録済み全提供者のスレ URL を本文中リンクとして認識させる (= 他掲示板の URL も提供者追加で自動追従)。
-            threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
-                                        .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
-                                        .ToArray(),
-        });
+        ThreadConfigJson = BuildThreadConfigJson(config);
+        ShowPostTranslateButtons = config.ShowPostTranslateButtons;
 
         // Phase 11b: 3 ペイン向け。各ペインは自分の JSON だけ受け取り、setConfig.openOnSingleClick を解釈する。
         FavoritesConfigJson  = System.Text.Json.JsonSerializer.Serialize(new

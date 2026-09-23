@@ -68,6 +68,17 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _ngAiDisableReasoning   = true;
     /// <summary>NG 判定 AI の接続確認結果。表示専用 (ConfigStorage に保存しない)。色分け converter の規約は他と同じ。</summary>
     [ObservableProperty] private string _ngAiConnectionStatus   = "未確認";
+
+    // AI 翻訳 (空の項目は AI の設定を使う)
+    [ObservableProperty] private string _translateApiUrl           = "";
+    [ObservableProperty] private string _translateApiKey           = "";
+    [ObservableProperty] private string _translateModel            = "";
+    [ObservableProperty] private int    _translateContextSize      = 0;
+    [ObservableProperty] private int    _translateConcurrency      = 2;
+    [ObservableProperty] private bool   _translateDisableReasoning = true;
+    /// <summary>AI 翻訳の接続確認結果。表示専用 (ConfigStorage に保存しない)。</summary>
+    [ObservableProperty] private string _translateConnectionStatus = "未確認";
+    public CommunityToolkit.Mvvm.Input.IAsyncRelayCommand TestTranslateConnectionCommand { get; }
     // MCP サーバ (内蔵ツールを外部 MCP クライアントへ公開・localhost HTTP)
     [ObservableProperty] private bool   _mcpServerEnabled       = false;
     [ObservableProperty] private int    _mcpServerPort          = 7393;
@@ -422,6 +433,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Categories.Add(new("認証",         "どんぐり (5ch) のメール認証、エッヂ・reddit の認証"));
         Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
         Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI)"));
+        Categories.Add(new("AI翻訳",       "スレ / レスの日本語への翻訳 (翻訳に使う AI モデル)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作、掲示板ごとの既定の並び順、reddit の「続き」の読み込み回数"));
@@ -464,6 +476,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         NgAiContextSize              = initial.NgAiContextSize;
         NgAiConcurrency              = initial.NgAiConcurrency;
         NgAiDisableReasoning         = initial.NgAiDisableReasoning;
+        TranslateApiUrl              = initial.TranslateApiUrl;
+        TranslateApiKey              = initial.TranslateApiKey;
+        TranslateModel               = initial.TranslateModel;
+        TranslateContextSize         = initial.TranslateContextSize;
+        TranslateConcurrency         = initial.TranslateConcurrency;
+        TranslateDisableReasoning    = initial.TranslateDisableReasoning;
         McpServerEnabled             = initial.McpServerEnabled;
         McpServerPort                = initial.McpServerPort;
         DonguriEmail                 = initial.DonguriEmail;
@@ -547,6 +565,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                                                         () => _testLlmConnectionAction is not null);
         TestNgAiConnectionCommand   = new AsyncRelayCommand(TestNgAiConnectionAsync,
                                                         () => _testLlmConnectionAction is not null);
+        TestTranslateConnectionCommand = new AsyncRelayCommand(TestTranslateConnectionAsync,
+                                                        () => _testLlmConnectionAction is not null);
 
         RefreshCacheSizeDisplay();
     }
@@ -615,6 +635,29 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>AI 翻訳の「接続確認」。空の項目は AI の設定で補って (= 実際に翻訳で使う接続で) 確かめる。</summary>
+    private async System.Threading.Tasks.Task TestTranslateConnectionAsync()
+    {
+        if (_testLlmConnectionAction is null) return;
+        FlushPendingSave();
+        TranslateConnectionStatus = "確認中…";
+        try
+        {
+            var settings = LlmSettings.TranslateFromConfig(ToConfig());
+            if (string.IsNullOrWhiteSpace(settings.ApiUrl) || string.IsNullOrWhiteSpace(settings.Model))
+            {
+                TranslateConnectionStatus = "NG — API URL とモデル名を入力してください (空なら AI の設定を使いますが、AI も未設定です)";
+                return;
+            }
+            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
+            TranslateConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
+        }
+        catch (Exception ex)
+        {
+            TranslateConnectionStatus = $"NG — {ex.Message}";
+        }
+    }
+
     private async System.Threading.Tasks.Task RunRedditAsync(Func<RedditSettingsHooks, System.Threading.Tasks.Task> action)
     {
         if (_reddit is null) return;
@@ -643,7 +686,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(RedditBusy):
             case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
             case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
-            case nameof(NgAiConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
+            case nameof(NgAiConnectionStatus):
+            case nameof(TranslateConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
             case nameof(EmojiFontDownloaded):   // 絵文字フォントの DL 状態は表示専用 (ConfigStorage に書かない)
             case nameof(EmojiFontStatus):       // 絵文字フォントの DL 状況テキストも表示専用
             case nameof(SelectedAnchorRuleRow):      // グリッドの選択行は表示専用
@@ -714,6 +758,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         NgAiContextSize             = NgAiContextSize,
         NgAiConcurrency             = NgAiConcurrency,
         NgAiDisableReasoning        = NgAiDisableReasoning,
+        TranslateApiUrl             = (TranslateApiUrl ?? "").Trim(),
+        TranslateApiKey             = TranslateApiKey ?? "",
+        TranslateModel              = (TranslateModel ?? "").Trim(),
+        TranslateContextSize        = Math.Max(0, TranslateContextSize),
+        TranslateConcurrency        = Math.Clamp(TranslateConcurrency, 1, 16),
+        TranslateDisableReasoning   = TranslateDisableReasoning,
         McpServerEnabled            = McpServerEnabled,
         McpServerPort               = McpServerPort,
         DonguriEmail                = DonguriEmail,

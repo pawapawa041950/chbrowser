@@ -36,7 +36,7 @@ public static class AiNgJudge
     /// <item><c>reasoning={enabled:false,max_tokens:0}</c> (OpenRouter 系) /
     /// <c>thinking={type:"disabled"}</c> (Anthropic 系) — ゲートウェイ経由のとき用。</item>
     /// </list></summary>
-    private static readonly IReadOnlyDictionary<string, object?> ReasoningOff = new Dictionary<string, object?>
+    internal static readonly IReadOnlyDictionary<string, object?> ReasoningOff = new Dictionary<string, object?>
     {
         ["chat_template_kwargs"] = new Dictionary<string, object?>
         {

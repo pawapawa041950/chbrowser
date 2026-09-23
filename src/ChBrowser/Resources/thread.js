@@ -14,6 +14,7 @@
 //   { type: 'shortcut', descriptor }        — Phase 16: ショートカット/マウス操作のディスパッチ要求
 //   { type: 'gesture',  descriptor }        — Phase 16: マウスジェスチャー認識結果のディスパッチ要求
 //   { type: 'vote', number, dir, prev }     — レスの評価ボタン (dir: 1 / -1 / 0、prev: 押す前)。結果は updateVotes で返る
+//   { type: 'translatePost', number }       — 各レスの 🌐 ボタン → 翻訳 / 原文に戻す (AI 翻訳)
 //
 // 各タブが専属 WebView2 を持つので、タブ切替で DOM が再構築されることはない。
 // scroll target の同梱と tryScrollToTarget は「初回ロード時 (idx.json からの位置復元)」用。
@@ -75,6 +76,12 @@
     /** 投稿者情報 (投稿者名 → { name, displayName, iconUrl, profileUrl, createdEpoch, stats, nsfw })。
      *  updateAuthorProfiles で後から届き、届いた投稿者のアイコンを差し込む。resync で全体が来る。 */
     let authorProfiles = new Map();
+    /** AI 翻訳: レス番号 → 訳文 (表示用の本文)。appendPosts (そのバッチの分) / resync (全体) / updateTranslations で届く。 */
+    let translations = new Map();
+    /** AI 翻訳: 翻訳で表示しているレス番号。p.body (原文) は変えず、表示だけ訳文にする (ツリー・アンカー・検索は原文で動く)。 */
+    let translatedShown = new Set();
+    /** AI 翻訳: いま LLM で訳しているレス番号 (🌐 ボタンを読み込み中の表示にする)。 */
+    let translatePending = new Set();
     /** num → 当該レスを >>参照しているレス番号配列。renderCurrentViewMode で全再構築、
      *  appendPosts (flat) で増分更新。返信数バッジ生成のために常に最新を保つ。 */
     let currentReverseIndex = new Map();
@@ -525,6 +532,18 @@
             '.post-vote.pending{opacity:.5}' +
             '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
             '.post-avatar.empty{display:none}' +
+            // 各レスの 🌐 ボタン (名前行の末尾)。html.show-tr-buttons (🌐 メニュー) のとき全レスに、そうでなくても
+            // 訳文があるレス・翻訳中のレス (.has-tr) には出す。翻訳表示中は押下状態、訳している最中は回転表示
+            '.post-tr-btn{display:none;margin-left:.4em;padding:0 .3em;border:1px solid #c8c8c8;border-radius:3px;cursor:pointer;' +
+                'font-size:.9em;line-height:1.35;vertical-align:baseline;user-select:none;opacity:.6}' +
+            'html.show-tr-buttons .post-tr-btn,.post-tr-btn.has-tr{display:inline-block}' +
+            '.post-tr-btn:hover{opacity:1;background:#eaf1f8}' +
+            '.post-tr-btn.active{opacity:1;background:#cce5ff;border-color:#88b0dd;box-shadow:inset 0 1px 2px rgba(0,0,0,.15)}' +
+            '.post-tr-btn.loading{opacity:1;cursor:progress}' +
+            '.post-tr-btn .tr-spin{display:inline-block;width:.8em;height:.8em;border:2px solid #9cc3e8;border-top-color:#0b5cad;' +
+                'border-radius:50%;vertical-align:-.1em;animation:tr-spin .8s linear infinite}' +
+            '@keyframes tr-spin{to{transform:rotate(360deg)}}' +
+
             '.post-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}' +
             '#author-card{position:fixed;z-index:10000;min-width:220px;max-width:300px;background:#fff;color:#222;border:1px solid #ccc;' +
                 'border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:12px;font-size:13px;line-height:1.5}' +
@@ -1009,7 +1028,7 @@
     // ---- テンプレートエンジン (post.html を読んで {{var}} / {{#if}}{{/if}} を解釈) ----
 
     // raw 挿入する変数名 (HTML 既処理済)。それ以外は HTML エスケープして挿入。
-    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children', 'parentRef', 'score', 'avatar']);
+    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children', 'parentRef', 'score', 'avatar', 'trButton']);
 
     function _isTemplateTruthy(v) {
         if (v === undefined || v === null) return false;
@@ -1096,6 +1115,8 @@
     let _templateHasExtVars = false;
     // {{avatar}} を持たない旧テンプレでは、アイコンを名前の前に差し込む
     let _templateHasAvatar = false;
+    // {{trButton}} を持たない旧テンプレでは、🌐 ボタンを名前の後ろに差し込む
+    let _templateHasTrButton = false;
     function _ensurePostTemplate() {
         if (_postTemplateChunks !== null) return;
         const el = document.getElementById('post-template');
@@ -1109,6 +1130,7 @@
         // postDataFor が名前欄の後ろに差し込む (= 旧テンプレでも reddit の返信先が見えるように)。
         _templateHasExtVars = raw.indexOf('{{score}}') >= 0;
         _templateHasAvatar  = raw.indexOf('{{avatar}}') >= 0;
+        _templateHasTrButton = raw.indexOf('{{trButton}}') >= 0;
         try { _postTemplateChunks = _parseTemplate(raw); }
         catch (e) {
             console.error('[chbrowser] post template parse error:', e);
@@ -1343,14 +1365,102 @@
         }
     }
 
+    /** 表示に使う本文: 翻訳で表示中なら訳文、そうでなければ原文 (p.body)。 */
+    function displayBodyOf(p) {
+        const n = p.number;
+        return translatedShown.has(n) && translations.has(n) ? translations.get(n) : (p.body || '');
+    }
+
+    /** 本文 HTML と媒体スロット HTML (翻訳で表示中なら訳文)。構造上の返信先 (レス順表示のときだけ) は先頭の行。
+     *  翻訳中か / 訳文を表示中かは名前行の 🌐 ボタンで分かる (本文には印を付けない)。 */
+    function buildPostBodyParts(p, parentLine) {
+        const built = buildBodyAndMedia(displayBodyOf(p));
+        let body = built.body;
+        if (parentLine) body = parentLine + (body ? '<br>' + body : '');
+        return { body: body, media: built.media };
+    }
+
+    /** 各レスの 🌐 ボタン (名前行の末尾)。🌐 メニューで ON なら全レスに、OFF でも訳文のあるレス・翻訳中のレス (.has-tr) には出す。
+     *  翻訳表示中は .active (押下状態)、訳している最中は .loading (回転表示)。 */
+    function buildTrButtonHtml(p) {
+        const n = p.number;
+        const shown   = translatedShown.has(n) && translations.has(n);
+        const loading = translatePending.has(n);
+        const hasTr   = loading || translations.has(n);
+        const title = loading ? '翻訳中…' : (shown ? '原文に戻す' : 'このレスを翻訳');
+        return '<span class="post-tr-btn' + (hasTr ? ' has-tr' : '') + (shown ? ' active' : '') + (loading ? ' loading' : '') + '" data-number="' + n
+             + '" title="' + title + '" role="button">' + (loading ? '<span class="tr-spin"></span>' : '\u{1F310}') + '</span>';
+    }
+
+    /** レス n の 🌐 ボタンを、画面上の全箇所で描き直す。 */
+    function refreshTrButtons(n) {
+        const p = postsByNumber.get(n);
+        if (!p) return;
+        const html = buildTrButtonHtml(p);
+        for (const el of document.querySelectorAll('.post-tr-btn[data-number="' + n + '"]')) el.outerHTML = html;
+    }
+
+    /** レス n の本文と媒体を、画面上の全箇所 (本体 / ツリーの重複表示) で描き直す (翻訳 / 原文の切り替え)。
+     *  見出し・返信ツリーは触らない。差し替えた本文にはアンカーのポップアップ・画像の遅延読み込みを付け直す。 */
+    function rerenderPostBody(n) {
+        const p = postsByNumber.get(n);
+        if (!p) return;
+        const ext = buildExtHeaderParts(p);
+        const parts = buildPostBodyParts(p, ext.parentLine);
+        for (const no of document.querySelectorAll('.post-no[data-number="' + n + '"]')) {
+            const post = no.closest('.post');
+            if (!post) continue;
+            const body  = post.querySelector(':scope > .post-body');
+            const media = post.querySelector(':scope > .post-media');
+            if (body) {
+                body.innerHTML = parts.body;
+                body.querySelectorAll('a.anchor').forEach(function (a) {
+                    if (!postsByNumber.has(parseInt(a.dataset.from, 10))) a.classList.add('missing');
+                });
+                attachAnchorHandlers(body, 0);
+            }
+            if (media) media.innerHTML = parts.media;
+            observeImageSlots(post);
+        }
+    }
+
+    /** 訳文と翻訳表示の状態を取り込む (appendPosts / resync)。obj: { 番号: 訳文 }、shown: [番号]。 */
+    function mergeTranslations(obj, shown) {
+        if (obj && typeof obj === 'object')
+            for (const k of Object.keys(obj)) { const n = parseInt(k, 10); if (!isNaN(n)) translations.set(n, obj[k]); }
+        if (Array.isArray(shown)) for (const n of shown) if (typeof n === 'number') translatedShown.add(n);
+    }
+
+    /** updateTranslations: 届いた訳文を取り込み、翻訳 / 原文を切り替えたレスの本文を描き直す。 */
+    function applyTranslationUpdate(msg) {
+        const affected = new Set();
+        const buttonsOnly = new Set();
+        if (msg.translations && typeof msg.translations === 'object')
+            for (const k of Object.keys(msg.translations)) {
+                const n = parseInt(k, 10);
+                if (isNaN(n)) continue;
+                translations.set(n, msg.translations[k]);
+                if (translatedShown.has(n)) affected.add(n);
+                buttonsOnly.add(n);
+            }
+        for (const n of msg.show || []) { translatedShown.add(n); affected.add(n); }
+        for (const n of msg.hide || []) { translatedShown.delete(n); affected.add(n); }
+        const buttons = new Set([...affected, ...buttonsOnly]);
+        for (const n of msg.loading || []) { translatePending.add(n); buttons.add(n); }
+        for (const n of msg.loaded  || []) { translatePending.delete(n); buttons.add(n); }
+        for (const n of affected) rerenderPostBody(n);
+        for (const n of buttons) refreshTrButtons(n);
+        if (affected.size > 0 && !isFilterEmpty()) applySearchHighlightToAll();
+    }
+
     /** post 1 件の view-data を作る (テンプレに渡す変数たち)。 */
     function postDataFor(p, isEmbedded, omitId, children) {
         const num     = p.number;
         const replies = currentReverseIndex.get(num) || [];
         const count   = replies.length;
         // body は文字本文、media は末尾に並べる画像/動画/YouTube スロット HTML。
-        const built = buildBodyAndMedia(p.body || '');
         const ext   = buildExtHeaderParts(p);
+        const built = buildPostBodyParts(p, ext.parentLine);
         _ensurePostTemplate();
         let nameHtml = buildBodyHtml(p.name || '');
         if (!_templateHasExtVars && ext.score) {
@@ -1358,13 +1468,16 @@
         }
         const avatar = buildAvatarHtml(p);
         if (avatar && !_templateHasAvatar) nameHtml = avatar + nameHtml;
-        const bodyHtml = ext.parentLine ? ext.parentLine + (built.body ? '<br>' + built.body : '') : built.body;
+        const trButton = buildTrButtonHtml(p);
+        if (!_templateHasTrButton) nameHtml += trButton;
+        const bodyHtml = built.body;
         return {
             number:         num,
             name:           nameHtml,
             parentRef:      '',                      // 旧: 見出しの返信先。本文 1 行目 (レス順表示のみ) に移したので常に空 (テンプレ互換のため変数は残す)
             score:          ext.score,               // 評価値 / 評価ボタンの HTML (reddit 等)。無ければ空
             avatar:         _templateHasAvatar ? avatar : '',   // 投稿者のアイコン (▸ の右。reddit 等)。無ければ空
+            trButton:       _templateHasTrButton ? trButton : '', // AI 翻訳の 🌐 ボタン (名前行の末尾。表示は html.show-tr-buttons)
             showNumber:     SHOW_POST_NUMBERS,
             mail:           p.mail || '',            // メール欄 (sage 等)。RAW_TEMPLATE_VARS に含めないので escape 適用。
             date:           p.dateText || '',
@@ -3756,6 +3869,16 @@
     }, true);
 
     document.addEventListener('click', function (e) {
+        // 各レスの 🌐 ボタン → 翻訳 / 原文に戻す (訳している最中は何もしない)
+        const trBtn = e.target.closest && e.target.closest('.post-tr-btn');
+        if (trBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const bn = parseInt(trBtn.dataset.number, 10);
+            if (!isNaN(bn) && !translatePending.has(bn) && window.chrome && window.chrome.webview)
+                window.chrome.webview.postMessage({ type: 'translatePost', number: bn });
+            return;
+        }
         // 投稿者のアイコン → プロフィールのカード
         const avatarEl = e.target.closest && e.target.closest('.post-avatar');
         if (avatarEl) {
@@ -4861,6 +4984,7 @@
                         ownPostNumbers = new Set(msg.ownPostNumbers);
                     }
                     if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
+                    mergeTranslations(msg.translations, msg.translatedShown);
                     window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental);
                     break;
                 case 'updateOwnPosts':
@@ -4875,6 +4999,9 @@
                     break;
                 case 'updateAuthorProfiles':
                     applyAuthorProfiles(msg.profiles);
+                    break;
+                case 'updateTranslations':
+                    applyTranslationUpdate(msg);
                     break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
@@ -4909,6 +5036,10 @@
                         }
                         loadMyVotes(msg.myVotes);
                         votePending.clear();
+                        translations = new Map();
+                        translatedShown = new Set();
+                        translatePending = new Set(Array.isArray(msg.translatingPosts) ? msg.translatingPosts : []);
+                        mergeTranslations(msg.translations, msg.translatedShown);
                         authorProfiles = new Map();
                         if (msg.authorProfiles && typeof msg.authorProfiles === 'object')
                             for (const k of Object.keys(msg.authorProfiles)) authorProfiles.set(k, msg.authorProfiles[k]);
@@ -4977,6 +5108,9 @@
                         closeFrom(0);
                     }
                     if (typeof msg.debug === 'boolean') DEBUG_DIAG = msg.debug;
+                    // AI 翻訳: 各レスの 🌐 ボタンを出すか (ボタンは常に描画しておき、表示だけ切り替える)
+                    if (typeof msg.translateButtons === 'boolean')
+                        document.documentElement.classList.toggle('show-tr-buttons', msg.translateButtons);
                     // ---- 掲示板提供者ごとの設定 (doc/multi-bbs-design.md) ----
                     if (typeof msg.postNumberDigits === 'number' && msg.postNumberDigits >= 1) NUM_JUMP_MAX_DIGITS = Math.min(12, msg.postNumberDigits);
                     if (Array.isArray(msg.threadLinkRules)) THREAD_LINK_RULES = compileThreadLinkRules(msg.threadLinkRules);
