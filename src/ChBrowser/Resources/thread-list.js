@@ -1,10 +1,14 @@
 // ChBrowser スレ一覧 (Phase 14a で WebView 化、Phase 11d で外出し)。
+// ページ (シェル + 表の見出し) は 1 回だけ読み込み、行は C# から setItems (JSON) で受け取って組み立てる。
+// 一覧を取り直してもページを読み直さないので、列幅・並べ替え・絞り込み・選択行・スクロール位置がそのまま残る。
 // JS → C#:
+//   { type: 'ready' }                                                    — シェル読み込み完了 (C# は現在の行を送る)
 //   { type: 'openThread', host, directoryName, key, title, logState }   — クリック or ダブルクリックで開く
 //   { type: 'openBoard', host, directoryName, name }                     — 板行 (data-kind="board") のクリックで板を開く
 //   { type: 'threadListRowMenu', kind, host, directoryName, key, title } — 行の右クリック (kind: 'thread' | 'board')
 //   { type: 'paneActivated' }                                            — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
 // C# → JS:
+//   { type: 'setItems', rows: [{ kind, key, host, dir, no, title, board, count, momentum, log, fav }, ...] } — 行の全体
 //   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
 //   { type: 'setConfig', openOnSingleClick: bool }                       — Phase 11b: クリック動作の設定
 
@@ -222,6 +226,70 @@
         });
     });
 
+    // ---------- 行の組み立て (setItems) ----------
+
+    function esc(t) {
+        return String(t == null ? '' : t)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    var LOG_CLASS = { 1: 'has-log', 2: 'has-update', 3: 'has-dropped', 4: 'has-replied-to-own' };
+
+    /** 1 行分の HTML。スレ行と板行 (data-kind="board"、「板一覧以外の取得済み板」集約タブ) で列構成と data-* は同じ。
+     *  td には省略表示 (text-overflow) されても元テキストが見えるよう title 属性を付ける。 */
+    function rowHtml(r) {
+        var title = esc(r.title), board = esc(r.board);
+        if (r.kind === 'board') {
+            return '<tr class="row-board" data-kind="board" data-key="" data-host="' + esc(r.host) + '" data-dir="' + esc(r.dir)
+                 + '" data-no="0" data-title="' + title + '" data-board="' + board + '" data-count="' + r.count + '" data-momentum="0" data-log="0">'
+                 + '<td class="col-log"><span class="log-mark"></span></td><td class="col-no"></td>'
+                 + '<td class="col-title" title="' + title + '">' + title + '</td>'
+                 + '<td class="col-board" title="' + board + '">' + board + '</td>'
+                 + '<td class="col-count" title="' + r.count + '">' + r.count + '</td><td class="col-momentum"></td></tr>';
+        }
+        var cls = (LOG_CLASS[r.log] ? LOG_CLASS[r.log] + ' ' : '') + (r.fav ? 'is-favorited ' : '');
+        var m = esc(r.momentum || '0');
+        return '<tr class="' + cls + '" data-key="' + esc(r.key) + '" data-host="' + esc(r.host) + '" data-dir="' + esc(r.dir)
+             + '" data-no="' + r.no + '" data-title="' + title + '" data-board="' + board + '" data-count="' + r.count
+             + '" data-momentum="' + m + '" data-log="' + (r.log | 0) + '">'
+             + '<td class="col-log"><span class="log-mark"></span></td>'
+             + '<td class="col-no" title="' + r.no + '">' + r.no + '</td>'
+             + '<td class="col-title" title="' + title + '">' + title + '</td>'
+             + '<td class="col-board" title="' + board + '">' + board + '</td>'
+             + '<td class="col-count" title="' + r.count + '">' + r.count + '</td>'
+             + '<td class="col-momentum" title="' + m + '">' + m + '</td></tr>';
+    }
+
+    /** 行を全部差し替える。tbody 自体は残すのでクリック等のハンドラ・列幅・見出しの並べ替え状態はそのまま。
+     *  並べ替え・絞り込みはかけ直し、選択行は同じスレ (host + dir + key) があれば付け直す。 */
+    function setItems(rows) {
+        var sel = selected && selected.isConnected
+            ? { host: selected.dataset.host, dir: selected.dataset.dir, key: selected.dataset.key, kind: selected.dataset.kind || '' }
+            : null;
+        var html = '';
+        for (var i = 0; i < rows.length; i++) html += rowHtml(rows[i]);
+        tbody.innerHTML = html;
+
+        selected = null;
+        if (sel) {
+            var trs = tbody.querySelectorAll('tr');
+            for (var j = 0; j < trs.length; j++) {
+                var d = trs[j].dataset;
+                if (d.host === sel.host && d.dir === sel.dir && d.key === sel.key && (d.kind || '') === sel.kind) {
+                    trs[j].classList.add('selected');
+                    selected = trs[j];
+                    break;
+                }
+            }
+        }
+        // 見出しで選んでいた並べ替えを当て直す (行は subject.txt 順で届く)
+        var activeTh = document.querySelector('thead th.sort-asc, thead th.sort-desc');
+        if (activeTh && activeTh.dataset && activeTh.dataset.sort && !(activeTh.dataset.sort === 'no' && activeTh.classList.contains('sort-asc'))) {
+            sortBy(activeTh.dataset.sort, activeTh.dataset.sortType, activeTh.classList.contains('sort-asc') ? 1 : -1);
+        }
+        applyListSearch();
+    }
+
     // C# からの増分通知 (LogMarkUpdate / setConfig) を受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function(e) {
@@ -257,20 +325,8 @@
                     if (change.isFavorited) tr.classList.add('is-favorited');
                     else                    tr.classList.remove('is-favorited');
                 });
-            } else if (msg.type === 'replaceItems' && typeof msg.html === 'string') {
-                // tbody の中身を一括差し替え (= リフレッシュ時の flash 回避)。
-                // tbody 自身は残るので、tbody.addEventListener で attach 済の click ハンドラは保持される。
-                // thead の sortable / col-resizer も触らないので状態は維持。
-                tbody.innerHTML = msg.html;
-                selected = null;  // 古い <tr> は破棄されたので選択もリセット
-                // 直前にユーザがクリックしていた sort 状態を再適用 (新行は subject.txt 順なので並び直しが必要)。
-                var activeTh = document.querySelector('thead th.sort-asc, thead th.sort-desc');
-                if (activeTh && activeTh.dataset && activeTh.dataset.sort) {
-                    var dir = activeTh.classList.contains('sort-asc') ? 1 : -1;
-                    sortBy(activeTh.dataset.sort, activeTh.dataset.sortType, dir);
-                }
-                // 行が再生成されたので現在の検索クエリをかけ直す。
-                applyListSearch();
+            } else if (msg.type === 'setItems' && Array.isArray(msg.rows)) {
+                setItems(msg.rows);
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;
@@ -362,4 +418,7 @@
             parent.replaceChild(frag, tn);
         }
     }
+
+    // シェルの準備完了 → C# が現在の行 (setItems) を送る。ページを読み直したとき (CSS 変更 / 別ペインへのタブ移動) も同じ経路で復元される
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'ready' });
 })();

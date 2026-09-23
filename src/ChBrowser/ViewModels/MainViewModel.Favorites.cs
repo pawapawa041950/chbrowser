@@ -116,9 +116,15 @@ public sealed partial class MainViewModel
         RefreshFavoritedStateOfAllTabs();
     }
 
-    /// <summary>HTML 再生成。Favorites.Changed 発火のたびに呼ばれる。</summary>
+    /// <summary>お気に入りペインへツリーを送る (<c>setFavorites</c>)。Favorites.Changed 発火のたび、
+    /// およびページ (シェル) を読み込んだ JS の <c>ready</c> で呼ばれる。ページは読み直さない。</summary>
+    public void PushFavorites()
+        => FavoritesPush = new FavoritesMessage(ChBrowser.Services.Render.FavoritesHtmlBuilder.BuildTree(Favorites.Items));
+
+    /// <summary>お気に入りペインのシェル HTML を (CSS の変更を反映して) 作り直す。中身が変わればページが読み直され、
+    /// JS の <c>ready</c> でツリーが送り直される。</summary>
     public void RefreshFavoritesHtml()
-        => FavoritesHtml = ChBrowser.Services.Render.FavoritesHtmlBuilder.Build(Favorites.Items);
+        => FavoritesHtml = ChBrowser.Services.Render.FavoritesHtmlBuilder.BuildShell();
 
     /// <summary>JS の openFavorite メッセージから呼ばれる。
     /// id を ViewModel ツリーから引いて種別ごとに既存メソッドへルーティング。</summary>

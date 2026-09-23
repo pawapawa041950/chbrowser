@@ -28,6 +28,10 @@ public partial class BoardListPane : UserControl
 
         switch (type)
         {
+            case "ready":
+                // ページ (シェル) を読み込んだ直後 / 読み直した後: 中身を全部送る
+                main.PushBoardTree();
+                break;
             case "openBoard":
             {
                 var host = payload.TryGetProperty("host", out var hp) ? hp.GetString() : null;

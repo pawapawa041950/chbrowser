@@ -118,9 +118,7 @@ public sealed partial class MainViewModel
             return;
         }
 
-        // 移動先では WebView2 が新規生成される。Html は初回のみ設定する設計なので、現在の Items から
-        // Html を作り直して「移動先の初期 HTML」を最新にする (= 古い一覧が出るのを防ぐ)。
-        tab.RebuildHtmlForReattach();
+        // 移動先では WebView2 が新規生成される。ページ (シェル) を読み込んだ JS が ready を送り、行はそこで送り直される。
         SuppressTabCloseSideEffects = true;
         try
         {

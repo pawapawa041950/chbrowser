@@ -8,134 +8,47 @@ using ChBrowser.ViewModels;
 namespace ChBrowser.Services.Render;
 
 /// <summary>
-/// スレ一覧 (subject.txt 由来 or お気に入りディレクトリ由来) を 1 枚の HTML として組み立てる。
-///
-/// Phase 11d で外部 CSS/JS 構成に統一: `Resources/thread-list.html` をシェルとして読み、
-/// `<!--{{ITEMS}}-->` にテーブルを埋め込み、`/*{{CSS}}*/` `/*{{JS}}*/` にディスク優先 CSS/JS を注入する
-/// (= favorites/board-list と同じプレースホルダ方式)。
+/// スレ一覧ペイン。ページ (シェル + 表の見出し) は 1 回だけ読み込み、行は JSON で送って JS が組み立てる
+/// (<c>setItems</c> メッセージ。板一覧・お気に入りと同じ「シェル + データ push」方式)。
+/// 一覧を取り直してもページを読み直さないので、列幅・並べ替え・絞り込み・選択行・スクロール位置がそのまま残る。
+/// ページを読み直したとき (CSS の変更 / 別ペインへのタブ移動で WebView が作り直されたとき) は JS の <c>ready</c> で行を送り直す。
 /// </summary>
 public static class ThreadListHtmlBuilder
 {
     private static string? _shellHtmlCache;
     private static readonly object Lock = new();
 
-    /// <summary>初回表示用 — シェル HTML + thead + tbody を組み立てて返す。
-    /// このメソッドが返す文字列はそのまま <see cref="Microsoft.Web.WebView2.Wpf.WebView2.NavigateToString"/>
-    /// に渡され、WebView2 が完全リロードされる (= 初回のみ呼ぶ)。
-    /// 2 回目以降のリフレッシュは <see cref="BuildRowsHtml"/> 経由で tbody だけ差し替えるため flash しない。</summary>
-    public static string Build(
-        IReadOnlyList<ThreadListItem> items,
-        DateTimeOffset                now)
-    {
-        var sb = new StringBuilder(8192);
-        sb.Append(@"<table><thead><tr>");
-        sb.Append(@"<th class=""col-log sortable"" data-sort=""log"" data-sort-type=""num""></th>");
-        sb.Append(@"<th class=""col-no sortable sort-asc"" data-sort=""no"" data-sort-type=""num"">No</th>");
-        sb.Append(@"<th class=""sortable"" data-sort=""title"" data-sort-type=""str"">タイトル</th>");
-        sb.Append(@"<th class=""col-board sortable"" data-sort=""board"" data-sort-type=""str"">板</th>");
-        sb.Append(@"<th class=""col-count sortable"" data-sort=""count"" data-sort-type=""num"">数</th>");
-        sb.Append(@"<th class=""col-momentum sortable"" data-sort=""momentum"" data-sort-type=""num"">勢い</th>");
-        sb.Append(@"</tr></thead><tbody>");
-        AppendRows(sb, items, now);
-        sb.Append("</tbody></table>");
+    /// <summary>スレ一覧ペインのシェル HTML (表の見出しまで。行は空)。</summary>
+    public static string BuildShell() => LoadShellHtml();
 
-        return LoadShellHtml().Replace("<!--{{ITEMS}}-->", sb.ToString());
-    }
+    private const string TableSkeleton =
+        @"<table><thead><tr>" +
+        @"<th class=""col-log sortable"" data-sort=""log"" data-sort-type=""num""></th>" +
+        @"<th class=""col-no sortable sort-asc"" data-sort=""no"" data-sort-type=""num"">No</th>" +
+        @"<th class=""sortable"" data-sort=""title"" data-sort-type=""str"">タイトル</th>" +
+        @"<th class=""col-board sortable"" data-sort=""board"" data-sort-type=""str"">板</th>" +
+        @"<th class=""col-count sortable"" data-sort=""count"" data-sort-type=""num"">数</th>" +
+        @"<th class=""col-momentum sortable"" data-sort=""momentum"" data-sort-type=""num"">勢い</th>" +
+        @"</tr></thead><tbody></tbody></table>";
 
-    /// <summary>リフレッシュ時の差分 push 用 — `<tbody>` の中身 (= `<tr>...</tr>` 列) だけを返す。
-    /// JS 側は受け取った文字列をそのまま <c>tbody.innerHTML</c> に流し込んで in-place 更新する。
-    /// シェル / thead / WebView 全体は触らないため flash は起きず、リサイザーや列ソート / クリック
-    /// イベントリスナー (= tbody 自身に attach) も保持される。</summary>
-    public static string BuildRowsHtml(
-        IReadOnlyList<ThreadListItem> items,
-        DateTimeOffset                now)
+    /// <summary>行の送信データ。勢いは <paramref name="now"/> 時点で計算する (表示と並べ替えに使う)。</summary>
+    public static IReadOnlyList<ThreadListRow> BuildRows(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
     {
-        var sb = new StringBuilder(8192);
-        AppendRows(sb, items, now);
-        return sb.ToString();
-    }
-
-    private static void AppendRows(StringBuilder sb, IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
-    {
+        var rows = new List<ThreadListRow>(items.Count);
         foreach (var item in items)
         {
+            var t = item.Info;
             if (item.Kind == ThreadListItemKind.Board)
             {
-                AppendBoardRow(sb, item);
+                // 板そのものを表す行 (「板一覧以外の取得済み板」集約タブ)。No / 勢いは空、数 = ローカル dat 件数
+                rows.Add(new ThreadListRow("board", "", item.Host, item.DirectoryName, 0, t.Title, item.BoardName, t.PostCount, null, 0, false));
                 continue;
             }
-            var t        = item.Info;
-            var momentum = CalcMomentum(t, now);
-            var state    = item.State;
-            var sortVal  = (int)state; // None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
-
-            sb.Append(@"<tr class=""");
-            switch (state)
-            {
-                case LogMarkState.Cached:       sb.Append("has-log "); break;
-                case LogMarkState.Updated:      sb.Append("has-update "); break;
-                case LogMarkState.Dropped:      sb.Append("has-dropped "); break;
-                case LogMarkState.RepliedToOwn: sb.Append("has-replied-to-own "); break;
-            }
-            if (item.IsFavorited) sb.Append("is-favorited ");
-            sb.Append('"');
-            sb.Append(@" data-key=""").Append(HtmlEscape.Attr(t.Key)).Append('"');
-            sb.Append(@" data-host=""").Append(HtmlEscape.Attr(item.Host)).Append('"');
-            sb.Append(@" data-dir=""").Append(HtmlEscape.Attr(item.DirectoryName)).Append('"');
-            sb.Append(@" data-no=""").Append(t.Order).Append('"');
-            sb.Append(@" data-title=""").Append(HtmlEscape.Attr(t.Title)).Append('"');
-            sb.Append(@" data-board=""").Append(HtmlEscape.Attr(item.BoardName)).Append('"');
-            sb.Append(@" data-count=""").Append(t.PostCount).Append('"');
-            sb.Append(@" data-momentum=""").Append(momentum.ToString("F1", CultureInfo.InvariantCulture)).Append('"');
-            sb.Append(@" data-log=""").Append(sortVal).Append('"');
-            sb.Append('>');
-            // マウスオーバー時のツールチップ用に title 属性を付与する。td は overflow:hidden +
-            // text-overflow:ellipsis でテキストが省略されることが多いため、特にタイトル / 板名は元テキストを
-            // 取得できるようにしておく (= ブラウザネイティブの title 属性ホバーで表示)。
-            // 数値系の col-no / col-count / col-momentum は省略されにくいが、整合性のため同じく title を付ける。
-            var titleAttr    = HtmlEscape.Attr(t.Title);
-            var boardAttr    = HtmlEscape.Attr(item.BoardName);
-            var momentumStr  = momentum.ToString("F1", CultureInfo.InvariantCulture);
-            sb.Append(@"<td class=""col-log""><span class=""log-mark""></span></td>");
-            sb.Append(@"<td class=""col-no"" title=""").Append(t.Order).Append(@""">").Append(t.Order).Append("</td>");
-            sb.Append(@"<td class=""col-title"" title=""").Append(titleAttr).Append(@""">").Append(HtmlEscape.Text(t.Title)).Append("</td>");
-            sb.Append(@"<td class=""col-board"" title=""").Append(boardAttr).Append(@""">").Append(HtmlEscape.Text(item.BoardName)).Append("</td>");
-            sb.Append(@"<td class=""col-count"" title=""").Append(t.PostCount).Append(@""">").Append(t.PostCount).Append("</td>");
-            sb.Append(@"<td class=""col-momentum"" title=""").Append(momentumStr).Append(@""">").Append(momentumStr).Append("</td>");
-            sb.Append("</tr>");
+            var momentum = CalcMomentum(t, now).ToString("F1", CultureInfo.InvariantCulture);
+            rows.Add(new ThreadListRow("thread", t.Key, item.Host, item.DirectoryName, t.Order, t.Title, item.BoardName, t.PostCount,
+                momentum, (int)item.State, item.IsFavorited));   // Log: None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
         }
-    }
-
-    /// <summary>板そのものを表す行 (「板一覧以外の取得済み板」集約タブ)。
-    /// スレ行と同じ列構成 / data-* を持たせつつ、<c>data-kind="board"</c> と <c>row-board</c> クラスで JS 側が区別する
-    /// (= クリックで openBoard、右クリックで板用メニュー)。No / 勢い は空、数 = ローカル dat 件数。
-    /// 数値列の data-* は列ソートが <c>parseFloat</c> で安全に扱えるよう 0 を入れる。</summary>
-    private static void AppendBoardRow(StringBuilder sb, ThreadListItem item)
-    {
-        var name      = item.Info.Title;
-        var nameAttr  = HtmlEscape.Attr(name);
-        var boardAttr = HtmlEscape.Attr(item.BoardName);
-        var count     = item.Info.PostCount;
-
-        sb.Append(@"<tr class=""row-board""");
-        sb.Append(@" data-kind=""board""");
-        sb.Append(@" data-key=""""");
-        sb.Append(@" data-host=""").Append(HtmlEscape.Attr(item.Host)).Append('"');
-        sb.Append(@" data-dir=""").Append(HtmlEscape.Attr(item.DirectoryName)).Append('"');
-        sb.Append(@" data-no=""0""");
-        sb.Append(@" data-title=""").Append(nameAttr).Append('"');
-        sb.Append(@" data-board=""").Append(boardAttr).Append('"');
-        sb.Append(@" data-count=""").Append(count).Append('"');
-        sb.Append(@" data-momentum=""0""");
-        sb.Append(@" data-log=""0""");
-        sb.Append('>');
-        sb.Append(@"<td class=""col-log""><span class=""log-mark""></span></td>");
-        sb.Append(@"<td class=""col-no""></td>");
-        sb.Append(@"<td class=""col-title"" title=""").Append(nameAttr).Append(@""">").Append(HtmlEscape.Text(name)).Append("</td>");
-        sb.Append(@"<td class=""col-board"" title=""").Append(boardAttr).Append(@""">").Append(HtmlEscape.Text(item.BoardName)).Append("</td>");
-        sb.Append(@"<td class=""col-count"" title=""").Append(count).Append(@""">").Append(count).Append("</td>");
-        sb.Append(@"<td class=""col-momentum""></td>");
-        sb.Append("</tr>");
+        return rows;
     }
 
     /// <summary>シェル HTML キャッシュをクリア (Phase 11d「すべての CSS を再読み込み」用)。</summary>
@@ -174,6 +87,7 @@ public static class ThreadListHtmlBuilder
             var emojiCss = ChBrowser.Services.Fonts.EmojiFontService
                 .BuildBodyFontCssOrNull("'Segoe UI','Yu Gothic UI','Meiryo'", "sans-serif") ?? "";
             _shellHtmlCache = html
+                .Replace("<!--{{ITEMS}}-->",        TableSkeleton)
                 .Replace("/*{{CSS}}*/",             css + emojiCss)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
                 .Replace("/*{{JS}}*/",              js);
@@ -181,3 +95,8 @@ public static class ThreadListHtmlBuilder
         }
     }
 }
+
+/// <summary>スレ一覧の 1 行 (<c>setItems</c> で JS へ送る)。<see cref="Kind"/> = "thread" / "board" (板そのものの行)。
+/// <see cref="Momentum"/> は表示用の文字列 (板の行は null)、<see cref="Log"/> は状態マーク (0〜4、並べ替えにも使う)。</summary>
+public sealed record ThreadListRow(string Kind, string Key, string Host, string Dir, int No, string Title, string Board,
+                                   int Count, string? Momentum, int Log, bool Fav);

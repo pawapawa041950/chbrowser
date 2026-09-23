@@ -32,6 +32,7 @@
             </DockPanel>
             <wv2:WebView2 x:Name="BoardListWebView"
                           ctrl:WebView2Helper.Html="{Binding BoardListHtml}"
+                          ctrl:WebView2Helper.BoardTreePush="{Binding BoardTreePush}"
                           ctrl:WebView2Helper.PaneConfigJson="{Binding BoardListConfigJson}"
                           ctrl:WebView2Helper.PaneShortcutsJson="{Binding BoardListShortcutsJson}"
                           ctrl:WebView2Helper.PaneSearchPush="{Binding BoardListSearchQuery}"

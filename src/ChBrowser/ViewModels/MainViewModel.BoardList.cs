@@ -83,11 +83,48 @@ public sealed partial class MainViewModel
     /// <summary>5ch の板一覧を差し替える (互換 API)。</summary>
     private void ApplyCategories(IReadOnlyList<BoardCategory> cats) => ApplyCategories("5ch", cats);
 
-    /// <summary>提供者 1 つ分の板一覧を差し替え、<see cref="BoardCategories"/> を提供者の登録順に組み直す。</summary>
+    /// <summary>提供者 1 つ分の板一覧を差し替え、板一覧ペインにはその掲示板のノードだけを送る。</summary>
     private void ApplyCategories(string providerId, IReadOnlyList<BoardCategory> cats)
     {
-        // 提供者 Id が入っていない (旧経路 / 5ch JSON) 場合は付け直す
-        _categoriesByProvider[providerId] = cats.Select(c => c.ProviderId == providerId ? c : c with { ProviderId = providerId }).ToList();
+        SetProviderCategories(providerId, cats);
+        RebuildBoardCategories();
+        PushBoardTree(providerId);
+    }
+
+    /// <summary>提供者の板一覧を内部表に入れる (表示は変えない)。提供者 Id が入っていない (旧経路 / 5ch JSON) 場合は付け直す。</summary>
+    private void SetProviderCategories(string providerId, IReadOnlyList<BoardCategory> cats)
+        => _categoriesByProvider[providerId] = cats.Select(c => c.ProviderId == providerId ? c : c with { ProviderId = providerId }).ToList();
+
+    /// <summary>ディスクに保存済みの板一覧を全提供者分まとめて読む (起動時)。読み込みは並行で行い、板一覧ペインへは 1 回だけ送る。
+    /// 読めなかった提供者は空のまま (他の提供者は表示する)。戻り値は読めた板の総数。</summary>
+    private async Task<int> LoadAllBoardListsFromDiskAsync()
+    {
+        var providers = ChBrowser.Services.Bbs.BbsRegistry.All
+            .Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0)
+            .ToList();
+        var loads = providers.Select(async p =>
+        {
+            try { return (p, cats: await _bbsmenuClient.LoadFromDiskAsync(p).ConfigureAwait(false), error: (string?)null); }
+            catch (System.Exception ex) { return (p, cats: (IReadOnlyList<BoardCategory>)System.Array.Empty<BoardCategory>(), error: (string?)ex.Message); }
+        }).ToList();
+        var results = await Task.WhenAll(loads).ConfigureAwait(true);
+
+        var total = 0;
+        foreach (var (p, cats, error) in results)
+        {
+            if (error is not null)
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[boardList] {p.Id} の保存済み板一覧を読めませんでした: {error}");
+            SetProviderCategories(p.Id, cats);
+            total += TotalBoards(cats);
+        }
+        RebuildBoardCategories();
+        PushBoardTree();
+        return total;
+    }
+
+    /// <summary><see cref="BoardCategories"/> を提供者の登録順に組み直す (板の解決・AI 用の平坦な一覧もこれを見る)。</summary>
+    private void RebuildBoardCategories()
+    {
         BoardCategories.Clear();
         foreach (var provider in ChBrowser.Services.Bbs.BbsRegistry.All)
         {
@@ -101,22 +138,27 @@ public sealed partial class MainViewModel
                 });
             }
         }
-        RefreshBoardListHtml();
     }
 
-    /// <summary>板一覧 WebView2 用の HTML を <see cref="BoardCategories"/> から再生成する。
-    /// 板一覧を持つ提供者はカテゴリが無くてもトップノードを出す (= 「未取得」を見せる)。</summary>
-    public void RefreshBoardListHtml()
+    /// <summary>板一覧ペインへ中身を送る (<c>setBoardTree</c>)。<paramref name="providerId"/> を指定するとその掲示板のノードだけ
+    /// (JS はそのノードだけ差し替える)、null なら全体。ページ (シェル) の読み込み直後は JS の <c>ready</c> を受けて全体を送る。</summary>
+    public void PushBoardTree(string? providerId = null)
     {
         // 板一覧を持つ掲示板は従来どおり。持たない掲示板 (したらば / reddit) も「検索」「表示済み板」を出すためにノードを作る。
-        var providers = ChBrowser.Services.Bbs.BbsRegistry.All
+        var nodes = ChBrowser.Services.Bbs.BbsRegistry.All
+            .Where(p => providerId is null || p.Id == providerId)
             .Select(p => new ChBrowser.Services.Render.BoardListProviderNode(
                 p.Id, p.DisplayName, !_providerExpanded.TryGetValue(p.Id, out var ex) || ex,
                 HasBoardList:   (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0,
                 SupportsSearch: p.SupportsBoardSearch))
             .ToList();
-        BoardListHtml = ChBrowser.Services.Render.BoardListHtmlBuilder.Build(providers, BoardCategories);
+        BoardTreePush = new BoardTreeMessage(providerId is null,
+            ChBrowser.Services.Render.BoardListHtmlBuilder.BuildTree(nodes, BoardCategories));
     }
+
+    /// <summary>板一覧ペインのシェル HTML を (CSS の変更を反映して) 作り直す。中身が変わればページが読み直され、
+    /// JS の <c>ready</c> で全体が送り直される。</summary>
+    public void RefreshBoardListHtml() => BoardListHtml = ChBrowser.Services.Render.BoardListHtmlBuilder.BuildShell();
 
     /// <summary>JS 側 setProviderExpanded メッセージから呼ばれる (HTML は再生成しない)。</summary>
     public void SetProviderExpanded(string providerId, bool expanded)

@@ -1,14 +1,19 @@
 // ChBrowser お気に入りペイン (Phase 14b) renderer.
+// ページ (シェル) は 1 回だけ読み込み、ツリーは C# から setFavorites (JSON) で受け取ってその場で組み直す。
+// お気に入りを追加・削除・移動してもページを読み直さないので、スクロール位置・選択・絞り込みがそのまま残る。
 // 階層は <details>/<summary> なのでブラウザ標準の Ctrl+F で閉じたフォルダも自動展開される。
-// JS はイベント送信だけ担当。状態の正本は C# 側 (FavoritesViewModel)。
+// 状態の正本は C# 側 (FavoritesViewModel)。
 //
 // JS → C# メッセージ:
+//   { type: 'ready' }                                               — シェル読み込み完了 (C# はツリーを送る)
 //   { type: 'openFavorite',     id }                                — クリック or ダブルクリックで開く
 //   { type: 'setFolderExpanded', id, expanded }                     — フォルダ <details> トグル
 //   { type: 'moveFavorite',     sourceId, targetId, position }      — D&D で移動
 //   { type: 'contextMenu',      target, id }
 //   { type: 'shortcut'|'gesture', descriptor }                      — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
+//   { type: 'setFavorites', items: [node, ...] }                    — ツリー全体 (「お気に入り」仮想ルートの子)
+//       node: { type: 'folder'|'board'|'thread', id, name, expanded, host, dir, key, board, children: [node...] }
 //   { type: 'setConfig', openOnSingleClick: bool }                  — Phase 11b: クリック動作の設定
 //   { type: 'setShortcutBindings', bindings: {...} }                 — Phase 16
 
@@ -36,6 +41,8 @@
     }
 
     var selected = null;
+    // 現在の絞り込み (setPaneSearch)。ツリーを組み直したときに当て直す
+    var paneSearchQuery = '';
     function setSelected(li) {
         if (selected) selected.classList.remove('selected');
         if (li) li.classList.add('selected');
@@ -100,10 +107,72 @@
                     openOnSingleClick = msg.openOnSingleClick;
                 }
             } else if (msg.type === 'setPaneSearch') {
-                applyPaneSearch(typeof msg.query === 'string' ? msg.query : '');
+                paneSearchQuery = typeof msg.query === 'string' ? msg.query : '';
+                applyPaneSearch(paneSearchQuery);
+            } else if (msg.type === 'setFavorites') {
+                setFavorites(Array.isArray(msg.items) ? msg.items : []);
             }
             // setShortcutBindings は shortcut-bridge.js 内で受信。
         });
+    }
+
+    // ---------- ツリーの組み立て (setFavorites) ----------
+
+    function esc(t) {
+        return String(t == null ? '' : t)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function nodeHtml(n) {
+        if (n.type === 'folder') {
+            var h = '<li class="fav-item" data-type="folder" data-id="' + esc(n.id) + '" draggable="true">'
+                  + '<details class="folder"' + (n.expanded ? ' open' : '') + '>'
+                  + '<summary class="folder-row"><span class="icon icon-folder"></span><span class="label">' + esc(n.name) + '</span></summary>'
+                  + '<ul class="children">';
+            var cs = n.children || [];
+            for (var i = 0; i < cs.length; i++) h += nodeHtml(cs[i]);
+            return h + '</ul></details></li>';
+        }
+        if (n.type === 'board') {
+            return '<li class="fav-item board-row" data-type="board" data-id="' + esc(n.id) + '" data-host="' + esc(n.host)
+                 + '" data-dir="' + esc(n.dir) + '" data-name="' + esc(n.name) + '" draggable="true">'
+                 + '<span class="icon icon-board"></span><span class="label">' + esc(n.name) + '</span></li>';
+        }
+        if (n.type === 'thread') {
+            return '<li class="fav-item thread-row" data-type="thread" data-id="' + esc(n.id) + '" data-host="' + esc(n.host)
+                 + '" data-dir="' + esc(n.dir) + '" data-key="' + esc(n.key) + '" data-title="' + esc(n.name)
+                 + '" data-board="' + esc(n.board) + '" draggable="true">'
+                 + '<span class="icon icon-thread"></span><span class="label">' + esc(n.name) + '</span></li>';
+        }
+        return '';
+    }
+
+    /** 「機能」フォルダ (永続化対象外 / drag 不可 / コンテキストメニューなし) と「お気に入り」仮想ルートを含むツリー全体を組む。
+     *  機能フォルダ・仮想ルートの開閉はユーザの操作をそのまま残す (C# は持っていない)。 */
+    function setFavorites(items) {
+        var sel = selected && selected.isConnected ? (selected.dataset.id || selected.dataset.type) : null;
+        var fnOpen   = root.querySelector('li[data-type="function-folder"] > details');
+        var rootOpen = root.querySelector('li[data-type="virtual-root"] > details');
+        var h = '<ul class="fav-root">'
+              + '<li class="fav-item" data-type="function-folder"><details class="folder"' + (!fnOpen || fnOpen.open ? ' open' : '') + '>'
+              + '<summary class="folder-row"><span class="icon icon-folder"></span><span class="label">機能</span></summary><ul class="children">'
+              + '<li class="fav-item board-row" data-type="all-logs"><span class="icon icon-board"></span><span class="label">全ログ</span></li>'
+              + '<li class="fav-item board-row" data-type="non-fav-logs"><span class="icon icon-board"></span><span class="label">お気に入り以外の全ログ</span></li>'
+              + '<li class="fav-item board-row" data-type="unlisted-boards"><span class="icon icon-board"></span><span class="label">板一覧以外の取得済み板</span></li>'
+              + '</ul></details></li>'
+              + '<li class="fav-item" data-type="virtual-root"><details class="folder"' + (!rootOpen || rootOpen.open ? ' open' : '') + '>'
+              + '<summary class="folder-row"><span class="icon icon-folder"></span><span class="label">お気に入り</span></summary><ul class="children">';
+        for (var i = 0; i < items.length; i++) h += nodeHtml(items[i]);
+        h += '</ul></details></li></ul>';
+        root.innerHTML = h;
+
+        selected = null;
+        if (sel) {
+            var el = root.querySelector('li.fav-item[data-id="' + CSS.escape(sel) + '"]')
+                  || root.querySelector('li.fav-item[data-type="' + CSS.escape(sel) + '"]:not([data-id])');
+            if (el) setSelected(el);
+        }
+        if (paneSearchQuery) applyPaneSearch(paneSearchQuery);
     }
 
     // ---------- 絞り込み (お気に入りツリー) ----------
@@ -368,4 +437,7 @@
         });
         draggingId = null;
     });
+
+    // シェルの準備完了 → C# がツリー (setFavorites) を送る。ページを読み直したとき (CSS 変更等) も同じ経路で復元される
+    post({ type: 'ready' });
 })();

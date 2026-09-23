@@ -101,6 +101,13 @@ public partial class ThreadListPane : UserControl
 
         if (type == "threadListRowMenu") { ShowThreadListRowContextMenu(payload); return; }
 
+        // ページ (シェル) を読み込んだ / 読み直した直後: 行を送り直す
+        if (type == "ready")
+        {
+            if (sender is FrameworkElement { DataContext: ThreadListTabViewModel readyTab }) readyTab.ResendItems();
+            return;
+        }
+
         if (type == "openBoard")
         {
             // 板行 (「板一覧以外の取得済み板」集約タブ) のクリック → 板タブを開く (単/ダブルクリック設定は JS 側で吸収済)。

@@ -10,6 +10,49 @@ namespace ChBrowser.Controls;
 public static partial class WebView2Helper
 {
     // ------------------------------------------------------------
+    // BoardTreePush (板一覧: 中身を setBoardTree で送る。ページはシェルを 1 回読むだけ)
+    // 送信は WebView ごとに FIFO (PostJsonWhenReadyAsync) なので、近接した更新も順番どおりに届く。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty BoardTreePushProperty =
+        DependencyProperty.RegisterAttached(
+            "BoardTreePush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnBoardTreePushChanged));
+
+    public static object? GetBoardTreePush(DependencyObject d) => d.GetValue(BoardTreePushProperty);
+    public static void    SetBoardTreePush(DependencyObject d, object? value) => d.SetValue(BoardTreePushProperty, value);
+
+    private static void OnBoardTreePushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.BoardTreeMessage m) return;
+        var json = JsonSerializer.Serialize(new { type = "setBoardTree", full = m.Full, providers = m.Providers }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
+    }
+
+    // ------------------------------------------------------------
+    // FavoritesPush (お気に入り: ツリーを setFavorites で送る。ページはシェルを 1 回読むだけ)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty FavoritesPushProperty =
+        DependencyProperty.RegisterAttached(
+            "FavoritesPush",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnFavoritesPushChanged));
+
+    public static object? GetFavoritesPush(DependencyObject d) => d.GetValue(FavoritesPushProperty);
+    public static void    SetFavoritesPush(DependencyObject d, object? value) => d.SetValue(FavoritesPushProperty, value);
+
+    private static void OnFavoritesPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.FavoritesMessage m) return;
+        var json = JsonSerializer.Serialize(new { type = "setFavorites", items = m.Items }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
+    }
+
+    // ------------------------------------------------------------
     // LogMarkUpdate (スレ一覧: has-log クラスを postMessage で toggle)
     // ------------------------------------------------------------
 
@@ -103,28 +146,23 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
-    // ItemsHtmlPatch (スレ一覧: tbody innerHTML を in-place 差分 push)
-    //
-    // 2 回目以降のリフレッシュで Html を再 NavigateToString すると WebView2 の DOM が破棄され
-    // 一瞬画面が真っ白になる (= flash) ため、tbody だけを差し替える経路を別建てする。
-    // JS 側の thread-list.js は { type: 'replaceItems', html } を受けて tbody.innerHTML を置き換える。
+    // ThreadListItemsPush (スレ一覧: 行を setItems で送る。ページはシェルを 1 回読むだけ)
     // ------------------------------------------------------------
 
-    public static readonly DependencyProperty ItemsHtmlPatchProperty =
+    public static readonly DependencyProperty ThreadListItemsPushProperty =
         DependencyProperty.RegisterAttached(
-            "ItemsHtmlPatch",
-            typeof(string),
+            "ThreadListItemsPush",
+            typeof(object),
             typeof(WebView2Helper),
-            new PropertyMetadata(null, OnItemsHtmlPatchChanged));
+            new PropertyMetadata(null, OnThreadListItemsPushChanged));
 
-    public static string? GetItemsHtmlPatch(DependencyObject d) => (string?)d.GetValue(ItemsHtmlPatchProperty);
-    public static void    SetItemsHtmlPatch(DependencyObject d, string? value) => d.SetValue(ItemsHtmlPatchProperty, value);
+    public static object? GetThreadListItemsPush(DependencyObject d) => d.GetValue(ThreadListItemsPushProperty);
+    public static void    SetThreadListItemsPush(DependencyObject d, object? value) => d.SetValue(ThreadListItemsPushProperty, value);
 
-    private static void OnItemsHtmlPatchChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    private static void OnThreadListItemsPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (d is not WebView2 wv) return;
-        if (e.NewValue is not string html || string.IsNullOrEmpty(html)) return;
-        var json = JsonSerializer.Serialize(new { type = "replaceItems", html }, PostJsonOptions);
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.ThreadListItemsMessage m) return;
+        var json = JsonSerializer.Serialize(new { type = "setItems", rows = m.Rows }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
     }
 

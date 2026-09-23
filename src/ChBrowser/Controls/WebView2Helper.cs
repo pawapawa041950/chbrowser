@@ -576,7 +576,13 @@ public static partial class WebView2Helper
     private static readonly ConditionalWeakTable<WebView2, ShellState>     ShellStates    = new();
     private static readonly ConditionalWeakTable<WebView2, ViewerState>    ViewerStates   = new();
 
-    private sealed class HtmlNavState { public TaskCompletionSource? CurrentNav; }
+    private sealed class HtmlNavState
+    {
+        public TaskCompletionSource? CurrentNav;
+        /// <summary>Html の変更ごとに増える番号。await から戻った時点で自分より新しい変更があれば、その変更に任せて何もしない
+        /// (= 最後に設定された HTML が必ず最後に表示される)。</summary>
+        public int Seq;
+    }
     private sealed class ShellState   { public Task? NavigationTask; }
     private sealed class ViewerState  { public Task? NavigationTask; }
 
@@ -607,6 +613,12 @@ public static partial class WebView2Helper
         var html = e.NewValue as string;
         if (string.IsNullOrEmpty(html)) return;
 
+        // 近接した変更 (例: 起動時に板一覧が 5ch → まちBBS → エッヂ の順に 3 回作り直される) は、下の await から
+        // 戻る順が保証されないため、古い HTML が後から NavigateToString されて最新を上書きすることがあった
+        // (= 起動時にまちBBS / エッヂの板一覧が空に見える)。変更ごとに番号を振り、await の後で自分が最新でなければ何もしない。
+        var navState = HtmlNavStates.GetValue(wv, _ => new HtmlNavState());
+        var mySeq    = ++navState.Seq;
+
         try
         {
             // WebView2 が visual tree に入る前に EnsureCoreWebView2Async を呼ぶと「初期化は完了するが
@@ -625,7 +637,8 @@ public static partial class WebView2Helper
 
             await EnsureCoreAsync(wv).ConfigureAwait(true);
 
-            var state = HtmlNavStates.GetValue(wv, _ => new HtmlNavState());
+            var state = navState;
+            if (mySeq != state.Seq) return;   // より新しい変更がある
 
             // 直前のナビが進行中なら完了を待つ (= 連続ナビの直列化)。
             // NavigateToString を続けて呼ぶと WebView2 内部で前のものをキャンセルするが、
@@ -635,6 +648,7 @@ public static partial class WebView2Helper
             {
                 try { await prev.Task.ConfigureAwait(true); }
                 catch { /* 前のナビが失敗しても次は走らせる */ }
+                if (mySeq != state.Seq) return;   // 待っている間に新しい変更が来た
             }
 
             var tcs = new TaskCompletionSource();

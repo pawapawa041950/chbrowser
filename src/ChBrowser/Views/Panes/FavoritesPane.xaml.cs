@@ -44,6 +44,10 @@ public partial class FavoritesPane : UserControl
 
         switch (type)
         {
+            case "ready":
+                // ページ (シェル) を読み込んだ直後 / 読み直した後: ツリーを全部送る
+                main.PushFavorites();
+                break;
             case "openFavorite":
             {
                 var idStr = payload.TryGetProperty("id", out var p) ? p.GetString() : null;

@@ -5,9 +5,11 @@ using ChBrowser.ViewModels;
 namespace ChBrowser.Services.Render;
 
 /// <summary>
-/// お気に入りペイン (Phase 14b) を 1 枚の HTML として組み立てる。
+/// お気に入りペイン (Phase 14b)。ページ (シェル) は 1 回だけ読み込み、ツリーは JSON で送って JS が組み立てる
+/// (<c>setFavorites</c> メッセージ。板一覧・スレ一覧と同じ「シェル + データ push」方式)。
+/// お気に入りを追加・削除・移動してもページを読み直さないので、スクロール位置・選択・絞り込みがそのまま残る。
 ///
-/// 階層: フォルダは <c>&lt;details&gt;/&lt;summary&gt;</c>、板/スレは <c>&lt;li&gt;</c>。
+/// 階層: フォルダは <c>&lt;details&gt;/&lt;summary&gt;</c>、板/スレは <c>&lt;li&gt;</c> (JS 側で組む)。
 /// 全エントリに <c>data-id</c> (Guid) と <c>data-type</c> (folder/board/thread) を付与し、
 /// JS のイベントハンドラ (dblclick / contextmenu / dragstart / drop) はその id を C# に postMessage で送る。
 /// </summary>
@@ -16,101 +18,27 @@ public static class FavoritesHtmlBuilder
     private static string? _shellHtmlCache;
     private static readonly object Lock = new();
 
-    public static string Build(IReadOnlyList<FavoriteEntryViewModel> roots)
+    /// <summary>お気に入りペインのシェル HTML (中身は空。JS が <c>ready</c> を送り、C# が <c>setFavorites</c> で中身を送る)。</summary>
+    public static string BuildShell() => LoadShellHtml();
+
+    /// <summary>お気に入りツリーの送信データ (「お気に入り」仮想ルートの子の並び)。</summary>
+    public static IReadOnlyList<FavoriteNode> BuildTree(IReadOnlyList<FavoriteEntryViewModel> roots)
     {
-        var sb = new StringBuilder(4096);
-        sb.Append(@"<ul class=""fav-root"">");
-
-        // 「機能」フォルダ (Phase 18) — お気に入り仮想ルートより上の兄弟。
-        // 永続化対象外 / drag 不可 / context menu なし、JS 側は data-type="function-folder" / "all-logs" /
-        // "non-fav-logs" / "unlisted-boards" で識別。
-        sb.Append(@"<li class=""fav-item"" data-type=""function-folder"">")
-          .Append(@"<details class=""folder"" open>")
-          .Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">機能</span></summary>")
-          .Append(@"<ul class=""children"">")
-          .Append(@"<li class=""fav-item board-row"" data-type=""all-logs"">")
-          .Append(@"<span class=""icon icon-board""></span><span class=""label"">全ログ</span>")
-          .Append(@"</li>")
-          .Append(@"<li class=""fav-item board-row"" data-type=""non-fav-logs"">")
-          .Append(@"<span class=""icon icon-board""></span><span class=""label"">お気に入り以外の全ログ</span>")
-          .Append(@"</li>")
-          .Append(@"<li class=""fav-item board-row"" data-type=""unlisted-boards"">")
-          .Append(@"<span class=""icon icon-board""></span><span class=""label"">板一覧以外の取得済み板</span>")
-          .Append(@"</li>")
-          .Append(@"</ul></details></li>");
-
-        // 全エントリを「お気に入り」仮想ルートフォルダの下に入れる。
-        // この li は永続化対象ではないため data-id を持たず、data-type="virtual-root" で識別する
-        // (= JS 側で contextMenu / drag 不可 / 開閉のみ、C# 側は target='virtual-root' で専用メニューを出す)。
-        sb.Append(@"<li class=""fav-item"" data-type=""virtual-root"">")
-          .Append(@"<details class=""folder"" open>")
-          .Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">お気に入り</span></summary>")
-          .Append(@"<ul class=""children"">");
-        foreach (var vm in roots) AppendEntry(sb, vm);
-        sb.Append("</ul></details></li>");
-
-        sb.Append("</ul>");
-        return LoadShellHtml().Replace("<!--{{ITEMS}}-->", sb.ToString());
+        var list = new List<FavoriteNode>(roots.Count);
+        foreach (var vm in roots) if (ToNode(vm) is { } n) list.Add(n);
+        return list;
     }
 
-    private static void AppendEntry(StringBuilder sb, FavoriteEntryViewModel vm)
+    private static FavoriteNode? ToNode(FavoriteEntryViewModel vm) => vm switch
     {
-        switch (vm)
-        {
-            case FavoriteFolderViewModel folder: AppendFolder(sb, folder); break;
-            case FavoriteBoardViewModel  board:  AppendBoard (sb, board);  break;
-            case FavoriteThreadViewModel thread: AppendThread(sb, thread); break;
-        }
-    }
-
-    private static void AppendFolder(StringBuilder sb, FavoriteFolderViewModel folder)
-    {
-        sb.Append(@"<li class=""fav-item"" data-type=""folder"" data-id=""")
-          .Append(folder.Model.Id).Append('"').Append(@" draggable=""true""")
-          .Append('>');
-
-        sb.Append(@"<details class=""folder""");
-        if (folder.IsExpanded) sb.Append(@" open");
-        sb.Append('>');
-
-        sb.Append(@"<summary class=""folder-row""><span class=""icon icon-folder""></span><span class=""label"">")
-          .Append(HtmlEscape.Text(folder.DisplayName)).Append("</span></summary>");
-
-        sb.Append(@"<ul class=""children"">");
-        foreach (var c in folder.Children) AppendEntry(sb, c);
-        sb.Append("</ul>");
-
-        sb.Append("</details>");
-        sb.Append("</li>");
-    }
-
-    private static void AppendBoard(StringBuilder sb, FavoriteBoardViewModel bvm)
-    {
-        var b = bvm.Model;
-        sb.Append(@"<li class=""fav-item board-row"" data-type=""board"" data-id=""").Append(b.Id).Append('"');
-        sb.Append(@" data-host=""").Append(HtmlEscape.Attr(b.Host)).Append('"');
-        sb.Append(@" data-dir=""").Append(HtmlEscape.Attr(b.DirectoryName)).Append('"');
-        sb.Append(@" data-name=""").Append(HtmlEscape.Attr(b.BoardName)).Append('"');
-        sb.Append(@" draggable=""true""");
-        sb.Append('>');
-        sb.Append(@"<span class=""icon icon-board""></span><span class=""label"">").Append(HtmlEscape.Text(b.BoardName)).Append("</span>");
-        sb.Append("</li>");
-    }
-
-    private static void AppendThread(StringBuilder sb, FavoriteThreadViewModel tvm)
-    {
-        var t = tvm.Model;
-        sb.Append(@"<li class=""fav-item thread-row"" data-type=""thread"" data-id=""").Append(t.Id).Append('"');
-        sb.Append(@" data-host=""").Append(HtmlEscape.Attr(t.Host)).Append('"');
-        sb.Append(@" data-dir=""").Append(HtmlEscape.Attr(t.DirectoryName)).Append('"');
-        sb.Append(@" data-key=""").Append(HtmlEscape.Attr(t.ThreadKey)).Append('"');
-        sb.Append(@" data-title=""").Append(HtmlEscape.Attr(t.Title)).Append('"');
-        sb.Append(@" data-board=""").Append(HtmlEscape.Attr(t.BoardName)).Append('"');
-        sb.Append(@" draggable=""true""");
-        sb.Append('>');
-        sb.Append(@"<span class=""icon icon-thread""></span><span class=""label"">").Append(HtmlEscape.Text(t.Title)).Append("</span>");
-        sb.Append("</li>");
-    }
+        FavoriteFolderViewModel f => new FavoriteNode("folder", f.Model.Id.ToString(), f.DisplayName, f.IsExpanded,
+                                         Children: BuildTree(f.Children)),
+        FavoriteBoardViewModel  b => new FavoriteNode("board", b.Model.Id.ToString(), b.Model.BoardName,
+                                         Host: b.Model.Host, Dir: b.Model.DirectoryName),
+        FavoriteThreadViewModel t => new FavoriteNode("thread", t.Model.Id.ToString(), t.Model.Title,
+                                         Host: t.Model.Host, Dir: t.Model.DirectoryName, Key: t.Model.ThreadKey, Board: t.Model.BoardName),
+        _ => null,
+    };
 
     /// <summary>シェル HTML キャッシュをクリア (Phase 11d「すべての CSS を再読み込み」用)。</summary>
     public static void InvalidateCache()
@@ -132,6 +60,7 @@ public static class FavoritesHtmlBuilder
             var emojiCss = ChBrowser.Services.Fonts.EmojiFontService
                 .BuildBodyFontCssOrNull("'Segoe UI','Yu Gothic UI','Meiryo'", "sans-serif") ?? "";
             _shellHtmlCache = html
+                .Replace("<!--{{ITEMS}}-->",        "")
                 .Replace("/*{{CSS}}*/",             css + emojiCss)
                 .Replace("/*{{SHORTCUT_BRIDGE}}*/", bridge)
                 .Replace("/*{{JS}}*/",              js);
@@ -139,3 +68,9 @@ public static class FavoritesHtmlBuilder
         }
     }
 }
+
+/// <summary>お気に入りツリーの 1 ノード (<c>setFavorites</c> で JS へ送る)。<see cref="Type"/> = "folder" / "board" / "thread"。
+/// フォルダは <see cref="Expanded"/> と <see cref="Children"/>、板・スレは所在 (<see cref="Host"/> / <see cref="Dir"/> / <see cref="Key"/>) を持つ。</summary>
+public sealed record FavoriteNode(string Type, string Id, string Name, bool Expanded = false,
+                                  string? Host = null, string? Dir = null, string? Key = null, string? Board = null,
+                                  IReadOnlyList<FavoriteNode>? Children = null);

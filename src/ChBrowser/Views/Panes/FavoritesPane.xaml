@@ -80,6 +80,7 @@
             </DockPanel>
             <wv2:WebView2 x:Name="FavoritesWebView"
                           ctrl:WebView2Helper.Html="{Binding FavoritesHtml}"
+                          ctrl:WebView2Helper.FavoritesPush="{Binding FavoritesPush}"
                           ctrl:WebView2Helper.PaneConfigJson="{Binding FavoritesConfigJson}"
                           ctrl:WebView2Helper.PaneShortcutsJson="{Binding FavoritesShortcutsJson}"
                           ctrl:WebView2Helper.PaneSearchPush="{Binding FavoritesSearchQuery}"

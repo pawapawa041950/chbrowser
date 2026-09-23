@@ -78,11 +78,9 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     [ObservableProperty]
     private FavoritedPatch? _favoritedUpdate;
 
-    /// <summary>リフレッシュ時に <c>tbody.innerHTML</c> を差し替えるための差分 push。null は no-op。
-    /// 初回表示は <see cref="Html"/> による NavigateToString だが、2 回目以降のリフレッシュはこちらを使い、
-    /// シェル全体の再ナビゲートを避けて画面が一瞬白くなる事象を防ぐ。</summary>
+    /// <summary>行の送信 (<c>setItems</c>)。WebView2Helper.ThreadListItemsPush が観測して postMessage する。</summary>
     [ObservableProperty]
-    private string? _itemsHtmlPatch;
+    private ThreadListItemsMessage? _itemsPush;
 
     /// <summary>このタブが現在 TabControl で選択されているか。各タブが専有する WebView2 の
     /// Visibility をこれに bind する (= 選択タブだけ可視、他は Collapsed)。
@@ -157,34 +155,28 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     }
 
     /// <summary>事前に組み立てた <see cref="ThreadListItem"/> 列を直接セット (お気に入り展開タブ用)。
-    /// 初回 (= Html 未設定) はシェル丸ごと NavigateToString。2 回目以降は tbody だけ差し替えて
-    /// flash を防ぐ (= <see cref="ItemsHtmlPatch"/> 経由で JS が in-place 更新)。</summary>
+    /// ページ (シェル) は最初の 1 回だけ読み込み、行は <see cref="ItemsPush"/> で送る (JS が表を組み直す。ページは読み直さない)。</summary>
     public void SetItems(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
     {
-        Items            = items;
-        if (string.IsNullOrEmpty(Html))
-        {
-            // 初回: シェル + thead + tbody を NavigateToString
-            Html = ThreadListHtmlBuilder.Build(items, now);
-        }
-        else
-        {
-            // 2 回目以降: tbody innerHTML だけ差分 push (= 画面が真っ白にならない)
-            // ObservableProperty の content equality check により、生成 HTML が前回と完全一致すれば
-            // 変化検知が走らず JS には何も送られない (= 「リフレッシュ後も内容が同じ」場合の最適化)。
-            ItemsHtmlPatch = ThreadListHtmlBuilder.BuildRowsHtml(items, now);
-        }
+        Items = items;
+        if (string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
+        ItemsPush        = new ThreadListItemsMessage(ThreadListHtmlBuilder.BuildRows(items, now));
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
     }
 
-    /// <summary>別ペインへ移動する直前に、現在の <see cref="Items"/> から <see cref="Html"/> を作り直して
-    /// 「移動先 WebView の初期 HTML」を最新状態にする (複数ペイン化)。
-    /// Html は初回のみ設定し以降は <see cref="ItemsHtmlPatch"/> で差分更新する設計なので、これをしないと
-    /// 移動先の新規 WebView が「初回ロード時の古い一覧」を表示してしまう。</summary>
-    public void RebuildHtmlForReattach()
+    /// <summary>ページを読み込み直した WebView (CSS の変更 / 別ペインへの移動で作り直された WebView) から <c>ready</c> が来たとき:
+    /// 現在の行を送り直す。</summary>
+    public void ResendItems()
     {
-        Html = ThreadListHtmlBuilder.Build(Items, DateTimeOffset.UtcNow);
+        if (Items.Count == 0 && ItemsPush is null) return;   // まだ一覧を出していない
+        ItemsPush = new ThreadListItemsMessage(ThreadListHtmlBuilder.BuildRows(Items, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>シェル HTML を作り直す (CSS の再読み込み)。中身が変わればページが読み直され、<c>ready</c> で行が送り直される。</summary>
+    public void RefreshShell()
+    {
+        if (!string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
     }
 
     /// <summary>1 件のスレッドのマーク状態を変更する増分通知を送る (集約タブ対応のため host/dir も指定)。</summary>
@@ -237,4 +229,11 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
                 return true;
         return false;
     }
+}
+
+/// <summary>スレ一覧の行の送信 (<c>setItems</c>)。class (参照同一性) なので同じ内容でも毎回送られる。</summary>
+public sealed class ThreadListItemsMessage
+{
+    public IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> Rows { get; }
+    public ThreadListItemsMessage(IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> rows) => Rows = rows;
 }

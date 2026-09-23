@@ -1,14 +1,18 @@
 // ChBrowser 板一覧 (Phase 14a) renderer.
+// ページ (シェル) は 1 回だけ読み込み、中身は C# から setBoardTree (JSON) で受け取って組み立てる。
+// 1 掲示板分の更新はその掲示板のノードだけ差し替えるので、スクロール位置・選択・絞り込み・他の掲示板の開閉はそのまま。
 // 階層は <details>/<summary> なのでブラウザ標準の Ctrl+F で閉じたカテゴリも自動展開される。
-// JS はイベントハンドラだけを担当 (postMessage で C# にユーザ操作を通知)。
 //
 // JS → C# メッセージ:
+//   { type: 'ready' }                                      — シェル読み込み完了 (C# は中身を全部送る)
 //   { type: 'openBoard', host, directoryName, name }       — 板クリック or ダブルクリック (設定による)
 //   { type: 'setCategoryExpanded', categoryName, expanded } — カテゴリの開閉トグル
 //   { type: 'providerAction', providerId, action }         — 板一覧の無い掲示板の「検索」(search) /「表示済み板」(shown)
 //   { type: 'contextMenu', target: 'board', host, directoryName, name } — 板右クリック
 //   { type: 'shortcut'|'gesture', descriptor }              — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
+//   { type: 'setBoardTree', full: bool, providers: [...] } — 中身。full なら全体を作り直し、そうでなければ該当掲示板のノードだけ差し替え
+//       provider: { id, name, expanded, hasBoardList, supportsSearch, boardCount, emptyMessage, categories: [{ name, expanded, boards: [{ host, dir, name }] }] }
 //   { type: 'setConfig', openOnSingleClick: bool }         — Phase 11b: クリック動作の設定
 //   { type: 'setShortcutBindings', bindings: {...} }        — Phase 16
 
@@ -23,6 +27,8 @@
     if (!root) return;
 
     var selected = null;
+    // 現在の絞り込み (setPaneSearch)。中身を差し替えたときに当て直す
+    var paneSearchQuery = '';
 
     // Phase 11b: デフォルト ON (= 1 クリックで開く)。setConfig で C# から上書きされる。
     var openOnSingleClick = true;
@@ -70,6 +76,76 @@
         if (!openOnSingleClick) openLi(li);
     });
 
+    // ---------- 中身の組み立て (setBoardTree) ----------
+
+    function esc(t) {
+        return String(t == null ? '' : t)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    /** 掲示板ノード 1 つ分の HTML (<details class="provider">)。 */
+    function providerHtml(pv) {
+        var h = '<details class="provider"' + (pv.expanded ? ' open' : '') + ' data-provider="' + esc(pv.id) + '">'
+              + '<summary class="provider-name">' + esc(pv.name)
+              + (typeof pv.boardCount === 'number' ? ' <span class="provider-count">' + pv.boardCount + '</span>' : '')
+              + '</summary>';
+        if (!pv.hasBoardList) {
+            // 板一覧を持たない掲示板 (したらば / reddit): 「検索」と「表示済み板」。li.board と同じ見た目で、provider-action で見分ける
+            h += '<ul class="boards provider-actions">';
+            if (pv.supportsSearch)
+                h += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="search">\u{1F50D} 検索</li>';
+            h += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="shown">\u{1F4C1} 表示済み板</li></ul>';
+        } else if (pv.emptyMessage) {
+            h += '<div class="provider-empty">' + esc(pv.emptyMessage) + '</div>';
+        } else {
+            var cats = pv.categories || [];
+            for (var i = 0; i < cats.length; i++) {
+                var c = cats[i];
+                h += '<details class="category"' + (c.expanded ? ' open' : '') + ' data-category="' + esc(c.name) + '" data-provider="' + esc(pv.id) + '">'
+                   + '<summary class="category-name">' + esc(c.name) + '</summary><ul class="boards">';
+                var bs = c.boards || [];
+                for (var j = 0; j < bs.length; j++) {
+                    var b = bs[j];
+                    h += '<li class="board" data-host="' + esc(b.host) + '" data-dir="' + esc(b.dir) + '" data-name="' + esc(b.name) + '">' + esc(b.name) + '</li>';
+                }
+                h += '</ul></details>';
+            }
+        }
+        return h + '</details>';
+    }
+
+    function applyBoardTree(msg) {
+        var providers = Array.isArray(msg.providers) ? msg.providers : [];
+        // 選択中の板 (または「検索」等の項目) を覚えておき、作り直した後に付け直す
+        var sel = selected && selected.isConnected
+            ? { host: selected.dataset.host, dir: selected.dataset.dir, provider: selected.dataset.provider, action: selected.dataset.action }
+            : null;
+
+        if (msg.full) {
+            var html = '';
+            for (var i = 0; i < providers.length; i++) html += providerHtml(providers[i]);
+            root.innerHTML = html;
+        } else {
+            for (var k = 0; k < providers.length; k++) {
+                var pv  = providers[k];
+                var cur = root.querySelector('details.provider[data-provider="' + CSS.escape(pv.id) + '"]');
+                if (cur) cur.outerHTML = providerHtml(pv);
+                else     root.insertAdjacentHTML('beforeend', providerHtml(pv));
+            }
+        }
+
+        selected = null;
+        if (sel) {
+            var q = sel.action
+                ? 'li.provider-action[data-provider="' + CSS.escape(sel.provider || '') + '"][data-action="' + CSS.escape(sel.action) + '"]'
+                : 'li.board[data-host="' + CSS.escape(sel.host || '') + '"][data-dir="' + CSS.escape(sel.dir || '') + '"]';
+            var el = root.querySelector(q);
+            if (el) { el.classList.add('selected'); selected = el; }
+        }
+        // 絞り込み中なら新しい中身にも当てる
+        if (paneSearchQuery) applyPaneSearch(paneSearchQuery);
+    }
+
     // C# からの setConfig / setPaneSearch / setShortcutBindings 受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
@@ -80,7 +156,10 @@
                     openOnSingleClick = msg.openOnSingleClick;
                 }
             } else if (msg.type === 'setPaneSearch') {
-                applyPaneSearch(typeof msg.query === 'string' ? msg.query : '');
+                paneSearchQuery = typeof msg.query === 'string' ? msg.query : '';
+                applyPaneSearch(paneSearchQuery);
+            } else if (msg.type === 'setBoardTree') {
+                applyBoardTree(msg);
             }
             // setShortcutBindings は shortcut-bridge.js 内で受信。
         });
@@ -204,4 +283,7 @@
             name:           li.dataset.name,
         });
     });
+
+    // シェルの準備完了 → C# が中身 (setBoardTree full) を送る。ページを読み直したとき (CSS 変更等) も同じ経路で復元される
+    post({ type: 'ready' });
 })();

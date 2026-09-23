@@ -254,9 +254,13 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 
     /// <summary>板一覧 WebView2 にバインドする HTML (Phase 14a)。</summary>
     [ObservableProperty] private string _boardListHtml = "";
+    /// <summary>板一覧ペインへ送る中身 (<see cref="PushBoardTree"/> が作る。WebView2Helper.BoardTreePush が観測して postMessage)。</summary>
+    [ObservableProperty] private BoardTreeMessage? _boardTreePush;
 
     /// <summary>お気に入りペイン WebView2 にバインドする HTML (Phase 14b)。</summary>
     [ObservableProperty] private string _favoritesHtml = "";
+    /// <summary>お気に入りペインへ送るツリー (<see cref="PushFavorites"/> が作る。WebView2Helper.FavoritesPush が観測して postMessage)。</summary>
+    [ObservableProperty] private FavoritesMessage? _favoritesPush;
 
     /// <summary>スレ表示 WebView2 に setConfig メッセージとして送る JSON (Phase 11)。</summary>
     [ObservableProperty] private string _threadConfigJson = "";
@@ -630,7 +634,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         _activeThreadListGroup = firstListGroup;
         RegisterThreadListGroup(firstListGroup);
 
-        Favorites.Changed += RefreshFavoritesHtml;
+        Favorites.Changed += PushFavorites;
         // 「上ボタン」バー: お気に入り変更のたびに再構築 (= フォルダ直下を ObservableCollection に流し込む)。
         Favorites.Changed += RefreshTopButtons;
         RefreshTopButtons();
@@ -648,18 +652,13 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// <summary>ローカル保存済みの bbsmenu とお気に入りを最初に読み込む。なければ空のまま。</summary>
     public async Task InitializeAsync()
     {
+        RefreshFavoritesHtml();                                   // お気に入りペインのシェル (1 回だけ読み込む)
         Favorites.Reload();
 
         try
         {
-            var total = 0;
-            foreach (var provider in ChBrowser.Services.Bbs.BbsRegistry.All)
-            {
-                if ((provider.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) == 0) continue;
-                var cats = await _bbsmenuClient.LoadFromDiskAsync(provider).ConfigureAwait(true);
-                ApplyCategories(provider.Id, cats);
-                total += TotalBoards(cats);
-            }
+            RefreshBoardListHtml();                               // シェル (1 回だけ読み込む)
+            var total = await LoadAllBoardListsFromDiskAsync().ConfigureAwait(true);
             StatusMessage = total == 0
                 ? "板一覧未取得 - メニューの 板一覧 → 5ch板一覧更新 を実行してください"
                 : $"板一覧 (キャッシュ): {total} 板";
@@ -875,11 +874,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         ChBrowser.Controls.WebView2Helper.InvalidateShellCaches();
         RefreshFavoritesHtml();
         RefreshBoardListHtml();
-        var now = DateTimeOffset.UtcNow;
         foreach (var tab in AllThreadListTabs)
         {
-            // SetItems は Html プロパティを再設定するので WebView2 が再ナビゲートされる
-            tab.SetItems(tab.Items, now);
+            // シェルが変わればページが読み直され、JS の ready で行が送り直される
+            tab.RefreshShell();
         }
         StatusMessage = "CSS を再読み込みしました (スレ表示タブは開き直し必要)";
     }
@@ -910,4 +908,24 @@ public sealed partial class ProviderAuthStatusItem : ObservableObject
 
     /// <summary>クリック: ログイン中なら状態を確かめ直し、そうでなければログイン窓を出す。</summary>
     public void Activate() => _ = ChBrowser.Services.Bbs.ProviderAuthDisplay.ActivateAsync(Auth);
+}
+
+/// <summary>板一覧ペインへの <c>setBoardTree</c> メッセージ。<see cref="Full"/> = true なら全体 (JS は作り直す)、
+/// false なら含まれる掲示板のノードだけ差し替える。class (参照同一性) なので同じ内容でも毎回送られる。</summary>
+public sealed class BoardTreeMessage
+{
+    public bool Full { get; }
+    public IReadOnlyList<ChBrowser.Services.Render.BoardTreeProvider> Providers { get; }
+    public BoardTreeMessage(bool full, IReadOnlyList<ChBrowser.Services.Render.BoardTreeProvider> providers)
+    {
+        Full      = full;
+        Providers = providers;
+    }
+}
+
+/// <summary>お気に入りペインへの <c>setFavorites</c> メッセージ (ツリー全体。お気に入りは小さいので毎回全体を送り、JS がその場で組み直す)。</summary>
+public sealed class FavoritesMessage
+{
+    public IReadOnlyList<ChBrowser.Services.Render.FavoriteNode> Items { get; }
+    public FavoritesMessage(IReadOnlyList<ChBrowser.Services.Render.FavoriteNode> items) => Items = items;
 }
