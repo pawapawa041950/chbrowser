@@ -72,6 +72,9 @@
     let myVotes = new Map();
     /** 評価を送信中のレス番号 (結果が返るまで同じレスのボタンは押せない)。 */
     const votePending = new Set();
+    /** 投稿者情報 (投稿者名 → { name, displayName, iconUrl, profileUrl, createdEpoch, stats, nsfw })。
+     *  updateAuthorProfiles で後から届き、届いた投稿者のアイコンを差し込む。resync で全体が来る。 */
+    let authorProfiles = new Map();
     /** num → 当該レスを >>参照しているレス番号配列。renderCurrentViewMode で全再構築、
      *  appendPosts (flat) で増分更新。返信数バッジ生成のために常に最新を保つ。 */
     let currentReverseIndex = new Map();
@@ -481,6 +484,8 @@
     // レスの評価ボタン。null なら評価できない (評価値 ext.score があれば表示だけ)。
     //   { mode: 'updown' | 'up', upLabel: '👍', downLabel: '👎', canUndo: bool }
     var VOTING = null;
+    // 投稿者のアイコン (▸ の右) とプロフィールのカードを出す掲示板か (reddit)
+    var AUTHOR_PROFILES = false;
     var lastProviderConfigKey = '';
     function applyProviderConfig(cfg) {
         if (!cfg || typeof cfg !== 'object') return;
@@ -490,6 +495,7 @@
         if (typeof cfg.postNumberDigits === 'number') NUM_JUMP_MAX_DIGITS = Math.max(0, Math.min(12, cfg.postNumberDigits));
         if (typeof cfg.watchoi === 'boolean') USE_WATCHOI = cfg.watchoi;
         if ('voting' in cfg) VOTING = (cfg.voting && typeof cfg.voting === 'object') ? cfg.voting : null;
+        if (typeof cfg.authorProfiles === 'boolean') AUTHOR_PROFILES = cfg.authorProfiles;
         if (typeof cfg.showPostNumbers === 'boolean') {
             SHOW_POST_NUMBERS = cfg.showPostNumbers;
             document.documentElement.classList.toggle('hide-post-numbers', !SHOW_POST_NUMBERS);
@@ -516,7 +522,21 @@
             '.vote-btn.active{background:rgba(176,96,0,.25);font-weight:bold}' +
             '.vote-btn.vote-down.active{background:rgba(80,100,200,.25)}' +
             '.vote-btn.disabled{cursor:default}' +
-            '.post-vote.pending{opacity:.5}';
+            '.post-vote.pending{opacity:.5}' +
+            '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
+            '.post-avatar.empty{display:none}' +
+            '.post-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}' +
+            '#author-card{position:fixed;z-index:10000;min-width:220px;max-width:300px;background:#fff;color:#222;border:1px solid #ccc;' +
+                'border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:12px;font-size:13px;line-height:1.5}' +
+            '#author-card .ac-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}' +
+            '#author-card .ac-icon{width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none;background:#eee}' +
+            '#author-card .ac-name{font-weight:bold;font-size:14px;word-break:break-all}' +
+            '#author-card .ac-nsfw{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#d93a00;color:#fff;font-size:11px}' +
+            '#author-card .ac-stats{display:flex;gap:16px;margin:6px 0}' +
+            '#author-card .ac-stat-v{font-weight:bold}' +
+            '#author-card .ac-stat-l,#author-card .ac-cake{color:#666;font-size:12px}' +
+            '#author-card .ac-open{margin-top:8px;width:100%;padding:4px 0;border:1px solid #0079d3;border-radius:14px;background:#0079d3;color:#fff;cursor:pointer;font-size:12px}' +
+            '#author-card .ac-open:hover{background:#1484d6}';
         const el = document.createElement('style');
         el.id = 'chb-provider-styles';
         el.textContent = css;
@@ -989,7 +1009,7 @@
     // ---- テンプレートエンジン (post.html を読んで {{var}} / {{#if}}{{/if}} を解釈) ----
 
     // raw 挿入する変数名 (HTML 既処理済)。それ以外は HTML エスケープして挿入。
-    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children', 'parentRef', 'score']);
+    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children', 'parentRef', 'score', 'avatar']);
 
     function _isTemplateTruthy(v) {
         if (v === undefined || v === null) return false;
@@ -1074,6 +1094,8 @@
 
     let _postTemplateChunks = null;
     let _templateHasExtVars = false;
+    // {{avatar}} を持たない旧テンプレでは、アイコンを名前の前に差し込む
+    let _templateHasAvatar = false;
     function _ensurePostTemplate() {
         if (_postTemplateChunks !== null) return;
         const el = document.getElementById('post-template');
@@ -1086,6 +1108,7 @@
         // 拡張情報 (返信先 / 評価値) の変数を持たない旧テンプレ (ユーザが編集して保存したもの) では、
         // postDataFor が名前欄の後ろに差し込む (= 旧テンプレでも reddit の返信先が見えるように)。
         _templateHasExtVars = raw.indexOf('{{score}}') >= 0;
+        _templateHasAvatar  = raw.indexOf('{{avatar}}') >= 0;
         try { _postTemplateChunks = _parseTemplate(raw); }
         catch (e) {
             console.error('[chbrowser] post template parse error:', e);
@@ -1138,6 +1161,95 @@
         score = buildScoreHtml(p);
         return { parentLine: parentLine, score: score };
     }
+
+    /** 投稿者のアイコン (▸ の右)。投稿者情報がまだ届いていなければ空の枠 (非表示) を置き、届いたら updateAuthorProfiles で差し込む。
+     *  退会済み ([deleted]) 等は出さない。クリックでプロフィールのカード。 */
+    function buildAvatarHtml(p) {
+        if (!AUTHOR_PROFILES || !p) return '';
+        const name = plainName(p.name);
+        if (!name || name === '[deleted]' || name === '[removed]') return '';
+        return '<span class="post-avatar' + (authorIconOf(name) ? '' : ' empty') + '" data-author="' + escapeHtml(name) + '">'
+             + avatarImgHtml(name) + '</span>';
+    }
+    function authorIconOf(name) {
+        const prof = authorProfiles.get(name);
+        return prof && prof.iconUrl ? prof.iconUrl : '';
+    }
+    function avatarImgHtml(name) {
+        const url = authorIconOf(name);
+        return url ? '<img src="' + escapeHtml(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '';
+    }
+
+    /** updateAuthorProfiles: 届いた投稿者のアイコンを、画面上の全箇所 (本体 / ツリーの重複表示 / ポップアップ) に差し込む。 */
+    function applyAuthorProfiles(obj) {
+        if (!obj || typeof obj !== 'object') return;
+        for (const name of Object.keys(obj)) {
+            authorProfiles.set(name, obj[name]);
+            const img = avatarImgHtml(name);
+            if (!img) continue;
+            for (const el of document.querySelectorAll('.post-avatar[data-author="' + CSS.escape(name) + '"]')) {
+                el.innerHTML = img;
+                el.classList.remove('empty');
+            }
+        }
+    }
+
+    // ---- 投稿者のプロフィールのカード (アイコンのクリック) ----
+    let authorCard = null;
+    function closeAuthorCard() {
+        if (authorCard) { authorCard.remove(); authorCard = null; }
+    }
+    function formatCakeDay(epoch) {
+        if (typeof epoch !== 'number' || epoch <= 0) return '';
+        const d = new Date(epoch * 1000);
+        const now = new Date();
+        let years = now.getFullYear() - d.getFullYear();
+        if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) years--;
+        const ymd = d.getFullYear() + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+        return '\u{1F382} アカウント作成日 ' + ymd + (years >= 1 ? ' (' + years + ' 年)' : '');
+    }
+    function showAuthorCard(name, anchorEl) {
+        closeAuthorCard();
+        const prof = authorProfiles.get(name);
+        if (!prof) return;
+        const card = document.createElement('div');
+        card.id = 'author-card';
+        let h = '<div class="ac-head">'
+              + (prof.iconUrl ? '<img class="ac-icon" src="' + escapeHtml(prof.iconUrl) + '" alt="" referrerpolicy="no-referrer">' : '<div class="ac-icon"></div>')
+              + '<div><span class="ac-name">' + escapeHtml(prof.displayName || prof.name) + '</span>'
+              + (prof.nsfw ? '<span class="ac-nsfw">NSFW</span>' : '') + '</div></div>';
+        const stats = Array.isArray(prof.stats) ? prof.stats : [];
+        if (stats.length) {
+            h += '<div class="ac-stats">';
+            for (const st of stats) h += '<div><div class="ac-stat-v">' + escapeHtml(st.value) + '</div><div class="ac-stat-l">' + escapeHtml(st.label) + '</div></div>';
+            h += '</div>';
+        }
+        const cake = formatCakeDay(prof.createdEpoch);
+        if (cake) h += '<div class="ac-cake">' + escapeHtml(cake) + '</div>';
+        if (prof.profileUrl) h += '<button class="ac-open" type="button">プロフィールを開く</button>';
+        card.innerHTML = h;
+        const openBtn = card.querySelector('.ac-open');
+        if (openBtn) openBtn.addEventListener('click', function () {
+            closeAuthorCard();
+            if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage({ type: 'openUrl', url: prof.profileUrl });
+        });
+        document.body.appendChild(card);
+        // アイコンの右下に出す。画面からはみ出すなら左 / 上へずらす
+        const r = anchorEl.getBoundingClientRect();
+        const cw = card.offsetWidth, ch = card.offsetHeight;
+        let x = r.left, y = r.bottom + 4;
+        if (x + cw > window.innerWidth - 8)  x = Math.max(8, window.innerWidth - cw - 8);
+        if (y + ch > window.innerHeight - 8) y = Math.max(8, r.top - ch - 4);
+        card.style.left = x + 'px';
+        card.style.top  = y + 'px';
+        authorCard = card;
+    }
+    // カードの外をクリック / Esc / スクロールで閉じる
+    document.addEventListener('mousedown', function (e) {
+        if (authorCard && !authorCard.contains(e.target) && !(e.target.closest && e.target.closest('.post-avatar'))) closeAuthorCard();
+    }, true);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAuthorCard(); }, true);
+    window.addEventListener('scroll', closeAuthorCard, { passive: true });
 
     /** レス p に対する自分の評価 (1 / -1 / 0)。アプリから送ったもの (myVotes) を優先し、無ければ取得時点の ext.myVote。 */
     function effectiveVote(p) {
@@ -1244,12 +1356,15 @@
         if (!_templateHasExtVars && ext.score) {
             nameHtml += ' <span class="post-score">' + ext.score + '</span>';
         }
+        const avatar = buildAvatarHtml(p);
+        if (avatar && !_templateHasAvatar) nameHtml = avatar + nameHtml;
         const bodyHtml = ext.parentLine ? ext.parentLine + (built.body ? '<br>' + built.body : '') : built.body;
         return {
             number:         num,
             name:           nameHtml,
             parentRef:      '',                      // 旧: 見出しの返信先。本文 1 行目 (レス順表示のみ) に移したので常に空 (テンプレ互換のため変数は残す)
             score:          ext.score,               // 評価値 / 評価ボタンの HTML (reddit 等)。無ければ空
+            avatar:         _templateHasAvatar ? avatar : '',   // 投稿者のアイコン (▸ の右。reddit 等)。無ければ空
             showNumber:     SHOW_POST_NUMBERS,
             mail:           p.mail || '',            // メール欄 (sage 等)。RAW_TEMPLATE_VARS に含めないので escape 適用。
             date:           p.dateText || '',
@@ -3641,6 +3756,17 @@
     }, true);
 
     document.addEventListener('click', function (e) {
+        // 投稿者のアイコン → プロフィールのカード
+        const avatarEl = e.target.closest && e.target.closest('.post-avatar');
+        if (avatarEl) {
+            e.preventDefault();
+            e.stopPropagation();
+            const who = avatarEl.dataset.author || '';
+            if (authorCard && authorCard.dataset.author === who) { closeAuthorCard(); return; }
+            showAuthorCard(who, avatarEl);
+            if (authorCard) authorCard.dataset.author = who;
+            return;
+        }
         // 評価ボタン (👍 / 👎)
         const voteBtn = e.target.closest && e.target.closest('.vote-btn');
         if (voteBtn) {
@@ -4747,6 +4873,9 @@
                 case 'updateVotes':
                     applyVoteChanges(msg.changes);
                     break;
+                case 'updateAuthorProfiles':
+                    applyAuthorProfiles(msg.profiles);
+                    break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
                 case 'resyncThreadState':
@@ -4780,6 +4909,10 @@
                         }
                         loadMyVotes(msg.myVotes);
                         votePending.clear();
+                        authorProfiles = new Map();
+                        if (msg.authorProfiles && typeof msg.authorProfiles === 'object')
+                            for (const k of Object.keys(msg.authorProfiles)) authorProfiles.set(k, msg.authorProfiles[k]);
+                        closeAuthorCard();
                         if (msg.filter && typeof msg.filter === 'object') {
                             currentFilter = {
                                 textQuery:   typeof msg.filter.textQuery === 'string' ? msg.filter.textQuery : '',

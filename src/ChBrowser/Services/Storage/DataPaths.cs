@@ -104,6 +104,13 @@ public sealed class DataPaths
         return Path.Combine(EnsureDir(Path.Combine(Root, root)), "cookies.txt");
     }
 
+    /// <summary>投稿者情報 (アイコン・プロフィール) の保存先 (<c>data/&lt;掲示板のルート&gt;/authors.json</c>)。</summary>
+    public string AuthorProfilesPath(ChBrowser.Services.Bbs.IBbsProvider provider)
+    {
+        var root = provider.StorageRoots.Count > 0 ? provider.StorageRoots[0] : provider.Id;
+        return Path.Combine(EnsureDir(Path.Combine(Root, root)), "authors.json");
+    }
+
     /// <summary>reddit のログイン状態の表示用メモ (<c>data/reddit.com/auth.json</c>、ユーザー名と最終ログイン時刻だけ)。
     /// ログインの Cookie 自体は WebView2 の reddit 用プロファイルが持つ。</summary>
     public string RedditAuthPath => Path.Combine(EnsureDir(Path.Combine(Root, "reddit.com")), "auth.json");

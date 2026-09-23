@@ -402,6 +402,7 @@
                     <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
                                   ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
                                   ctrl:WebView2Helper.VotesUpdate="{Binding VotesUpdate}"
+                                  ctrl:WebView2Helper.AuthorProfilesUpdate="{Binding AuthorProfilesUpdate}"
                                   ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"

@@ -256,6 +256,7 @@ public static partial class WebView2Helper
             markPostNumber = (long?)tab.MarkPostNumber,
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
             myVotes        = tab.MyVotes,
+            authorProfiles = tab.AuthorProfiles,
             filter = new
             {
                 textQuery   = filter?.TextQuery ?? "",
@@ -289,6 +290,27 @@ public static partial class WebView2Helper
     {
         if (d is not WebView2 wv || e.NewValue is null) return;
         var json = JsonSerializer.Serialize(new { type = "updateOwnPosts", value = e.NewValue }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // AuthorProfilesUpdate (スレ表示: 投稿者のアイコン・プロフィールを後から届ける)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty AuthorProfilesUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "AuthorProfilesUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnAuthorProfilesUpdateChanged));
+
+    public static object? GetAuthorProfilesUpdate(DependencyObject d) => d.GetValue(AuthorProfilesUpdateProperty);
+    public static void    SetAuthorProfilesUpdate(DependencyObject d, object? value) => d.SetValue(AuthorProfilesUpdateProperty, value);
+
+    private static void OnAuthorProfilesUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.AuthorProfilesMessage m) return;
+        var json = JsonSerializer.Serialize(new { type = "updateAuthorProfiles", profiles = m.Profiles }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

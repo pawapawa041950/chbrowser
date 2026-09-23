@@ -304,6 +304,7 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsBusy = false;
+            _ = LoadAuthorProfilesAsync(tab);
         }
     }
 
@@ -342,6 +343,52 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsBusy = false;
+            _ = LoadAuthorProfilesAsync(tab);
+        }
+    }
+
+    private ChBrowser.Services.Bbs.AuthorProfileCache? _authorProfileCache;
+    private ChBrowser.Services.Bbs.AuthorProfileCache AuthorProfileCache => _authorProfileCache ??= new(p => _paths.AuthorProfilesPath(p));
+
+    /// <summary>スレの投稿者のアイコン・プロフィールを揃える (投稿者情報を持つ掲示板だけ。reddit)。
+    /// 保存済みのものはすぐ送り、無い / 古いものは掲示板に問い合わせて届いたら送る (表示はレスより後から差し込まれる)。
+    /// 投稿者は名前で識別し、問い合わせにはアカウント ID を使う (レスの拡張情報か、スレの meta.json の対応表から引く)。
+    /// 自動処理扱い (ログインが切れていても窓は出さない) で、失敗しても表示には影響しない。</summary>
+    private async Task LoadAuthorProfilesAsync(ThreadTabViewModel tab)
+    {
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host);
+        if (!provider.SupportsAuthorProfiles || tab.Posts.Count == 0) return;
+        try
+        {
+            var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (n, id) in _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.AuthorIds ?? new())
+                idByName[n] = id;
+            foreach (var p in tab.Posts)
+                if (p.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(p.Name)) idByName[p.Name] = aid;
+            var names = tab.Posts.Select(p => p.Name).Where(n => idByName.ContainsKey(n)).Distinct(StringComparer.Ordinal).ToList();
+            if (names.Count == 0) return;
+
+            var cache = AuthorProfileCache;
+            tab.AddAuthorProfiles(cache.Get(provider, names.Where(n => !tab.AuthorProfiles.ContainsKey(n))));
+
+            var stale = cache.Stale(provider, names, DateTimeOffset.UtcNow);
+            if (stale.Count == 0) return;
+            ChBrowser.Services.Bbs.AuthorProfileFetch fetched;
+            using (ChBrowser.Services.Bbs.ProviderRequestContext.Background())
+                fetched = await provider.FetchAuthorProfilesAsync(_subjectClient.Http, stale.Select(n => idByName[n]).Distinct(StringComparer.Ordinal).ToList(), default).ConfigureAwait(true);
+            // アカウント ID → 名前 (同じ ID の別名は無い前提。念のため最初の名前)
+            var nameById = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var n in stale) nameById.TryAdd(idByName[n], n);
+            var byName = new Dictionary<string, ChBrowser.Services.Bbs.AuthorProfile>(StringComparer.Ordinal);
+            foreach (var (id, prof) in fetched.Found) if (nameById.TryGetValue(id, out var n)) byName[n] = prof;
+            // 問い合わせた ID のうち返ってこなかったものは「無い」と覚える。予算の都合で問い合わせなかった分は覚えない
+            var askedNames = fetched.Asked.Where(nameById.ContainsKey).Select(id => nameById[id]).ToList();
+            cache.Put(provider, byName, askedNames, DateTimeOffset.UtcNow);
+            tab.AddAuthorProfiles(byName);
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[authors] {provider.Id} {tab.Board.DirectoryName}/{tab.ThreadKey}: {ex.Message}");
         }
     }
 

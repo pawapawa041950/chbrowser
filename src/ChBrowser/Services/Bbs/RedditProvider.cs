@@ -479,7 +479,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 EditedEpoch: Edited(d),
                 Permalink:   permalink,
                 Attachments: attachments.Count > 0 ? attachments : null,
-                MyVote:      LikesOf(d)));
+                MyVote:      LikesOf(d),
+                AuthorId:    Str(d, "author_fullname")));
     }
 
     private static SnapshotPost ToComment(JsonElement d)
@@ -509,7 +510,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 Score:       ScoreOf(d),
                 EditedEpoch: Edited(d),
                 Permalink:   permalink,
-                MyVote:      LikesOf(d)));
+                MyVote:      LikesOf(d),
+                AuthorId:    Str(d, "author_fullname")));
     }
 
     /// <summary>評価値。<c>score_hidden</c> (投稿直後は隠す subreddit がある) なら null (偽の 1 を出さない)。</summary>
@@ -675,6 +677,71 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         }
         if (status is >= 200 and < 300) return VoteResult.Success;
         return new VoteResult(false, reason is { Length: > 0 } ? $"{reason} (HTTP {status})" : $"HTTP {status}");
+    }
+
+    // -----------------------------------------------------------------
+    // 投稿者情報 (アイコン・プロフィール)
+    // -----------------------------------------------------------------
+
+    public bool SupportsAuthorProfiles => true;
+
+    /// <summary>1 回の取得で問い合わせる上限 (100 人 × 3 回)。残りは次にスレを開いた / 更新したときに取る。</summary>
+    public const int AuthorBatchSize = 100, MaxAuthorBatches = 3;
+
+    /// <summary><c>/api/user_data_by_account_ids</c> (1 回 100 人まで。見つからない ID は無視され、全部見つからなければ 404)。
+    /// レート制限の残りが少なければ打ち切る (スレを開く操作に予算を残す)。</summary>
+    public async Task<AuthorProfileFetch> FetchAuthorProfilesAsync(
+        HttpClient http, IReadOnlyCollection<string> authorIds, CancellationToken ct)
+    {
+        var result = new Dictionary<string, AuthorProfile>(StringComparer.Ordinal);
+        var asked  = new List<string>();
+        var ids = authorIds.Where(i => i.StartsWith("t2_", StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList();
+        for (var b = 0; b < ids.Count && b / AuthorBatchSize < MaxAuthorBatches; b += AuthorBatchSize)
+        {
+            var batch = ids.Skip(b).Take(AuthorBatchSize).ToList();
+            var url = $"{Origin}/api/user_data_by_account_ids.json?ids={string.Join(",", batch)}&raw_json=1";
+            using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
+            if ((int)resp.StatusCode == 404) { asked.AddRange(batch); continue; }   // 1 人も見つからない (退会済み等)
+            resp.EnsureSuccessStatusCode();
+            asked.AddRange(batch);
+            foreach (var (id, p) in ParseUserData(await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false))) result[id] = p;
+            if (resp.Headers.TryGetValues("x-ratelimit-remaining", out var v)
+                && double.TryParse(v.FirstOrDefault(), NumberStyles.Float, CultureInfo.InvariantCulture, out var rem) && rem < ReserveRequests)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 投稿者情報の取得を打ち切り (ratelimit remaining={rem})");
+                break;
+            }
+        }
+        return new AuthorProfileFetch(result, asked);
+    }
+
+    /// <summary><c>user_data_by_account_ids</c> の応答 (アカウント ID → name / created_utc / link_karma / comment_karma / profile_img / profile_over_18)。</summary>
+    public static IReadOnlyDictionary<string, AuthorProfile> ParseUserData(byte[] bytes)
+    {
+        var result = new Dictionary<string, AuthorProfile>(StringComparer.Ordinal);
+        if (!TryParse(bytes, out var doc)) return result;
+        using (doc)
+        {
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return result;
+            foreach (var u in doc.RootElement.EnumerateObject())
+            {
+                if (u.Value.ValueKind != JsonValueKind.Object || Str(u.Value, "name") is not { Length: > 0 } name) continue;
+                var stats   = new List<AuthorStat>();
+                var link    = Long(u.Value, "link_karma");
+                var comment = Long(u.Value, "comment_karma");
+                if (link is not null)    stats.Add(new AuthorStat("投稿カルマ",     link.Value.ToString("N0", CultureInfo.InvariantCulture)));
+                if (comment is not null) stats.Add(new AuthorStat("コメントカルマ", comment.Value.ToString("N0", CultureInfo.InvariantCulture)));
+                result[u.Name] = new AuthorProfile(
+                    Name:         name,
+                    DisplayName:  "u/" + name,
+                    IconUrl:      Str(u.Value, "profile_img") is { Length: > 0 } img ? img : null,
+                    ProfileUrl:   $"{Origin}/user/{name}/",
+                    CreatedEpoch: Epoch(u.Value, "created_utc"),
+                    Stats:        stats,
+                    Nsfw:         Bool(u.Value, "profile_over_18"));
+            }
+        }
+        return result;
     }
 
     // このアプリから書き込んだコメント (スレ key → 書き込み応答のコメント)。次のスレ取得で確実に取り込むために持っておく。

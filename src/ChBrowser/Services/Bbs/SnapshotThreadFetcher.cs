@@ -22,6 +22,9 @@ public sealed class ThreadMeta
     public long   LastFetchedEpoch { get; set; }
     /// <summary>直近の取得で取り切れなかった分 (reddit の more) が残ったか。</summary>
     public bool   Truncated { get; set; }
+    /// <summary>投稿者名 → アカウント ID (投稿者情報の取得用)。取得のたびにスナップショットの全投稿から更新する
+    /// (= この仕組みより前に保存したレスも、次の取得で分かるようになる)。</summary>
+    public Dictionary<string, string> AuthorIds { get; set; } = new(StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -37,6 +40,7 @@ public sealed class ThreadMeta
             var meta = JsonSerializer.Deserialize<ThreadMeta>(File.ReadAllBytes(path), Options);
             if (meta is null) return null;
             meta.IdToNumber = new Dictionary<string, long>(meta.IdToNumber ?? new(), StringComparer.Ordinal);
+            meta.AuthorIds  = new Dictionary<string, string>(meta.AuthorIds ?? new(), StringComparer.Ordinal);
             return meta;
         }
         catch (Exception ex) when (ex is JsonException or IOException)
@@ -185,6 +189,8 @@ internal static class SnapshotThreadFetcher
 
         meta.LastFetchedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         meta.Truncated        = snapshot.Truncated;
+        foreach (var sp in snapshot.Posts)
+            if (sp.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(sp.Name)) meta.AuthorIds[sp.Name] = aid;
         if (File.Exists(logPath)) meta.Save(metaPath);
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[snapshotFetch]   snapshot={snapshot.Posts.Count} posts, new={fresh.Count}, truncated={snapshot.Truncated}");

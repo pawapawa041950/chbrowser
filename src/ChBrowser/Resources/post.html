@@ -18,6 +18,8 @@
     {{hasManyReplies}} 返信 3 件以上のときだけ true。post-no を赤にするのに使う
     {{isOwn}}          「自分の書き込み」マーク対象なら true。post-name の直前に <span class="post-own">自分</span> を出す
     {{isReplyToOwn}}   このレスが「自分の書き込み」へ返信していれば true。post-own の直後に <span class="post-reply-to-own">返信</span> を出す
+    {{avatar}}         投稿者のアイコン (reddit 等。▸ の右に置く)。クリックでプロフィールのカード。無い掲示板では空  ※ raw 挿入
+                       ({{avatar}} を書かない旧テンプレでは、名前の前に自動で差し込まれる)
     {{score}}          評価値 / 評価ボタン (reddit の score 等)。無い掲示板では空                  ※ raw 挿入
                        評価できる掲示板では押せるボタン <span class="post-vote"><span class="vote-btn vote-up">👍123</span>
                        <span class="vote-btn vote-down">👎</span></span> (評価値は符号の側に付く。負なら 👍 / 👎2)。
@@ -53,7 +55,7 @@
     既定テンプレが再展開される (削除してから起動するだけでよい)。
 -->
 <div class="post{{#if isEmbedded}} embedded{{/if}}"{{#if domId}} id="r{{number}}"{{/if}}>
-<div class="post-header"><span class="post-no {{#if hasFewReplies}}has-replies-few{{/if}}{{#if hasManyReplies}}has-replies-many{{/if}}" data-number="{{number}}" role="button" tabindex="0">{{number}}</span>: <span class="post-reply-count" data-count="{{replyCount}}" data-replies="{{replyNumbers}}">返<span class="reply-num">{{replyCount}}</span> </span>{{#if isOwn}}<span class="post-own">自分</span> {{/if}}{{#if isReplyToOwn}}<span class="post-reply-to-own">返信</span> {{/if}}<span class="post-name">{{name}} </span>{{#if mail}}<span class="post-mail">[{{mail}}]</span> {{/if}}<span class="post-meta">{{date}} {{#if id}}ID:{{id}}{{/if}}</span>{{#if score}} <span class="post-score">{{score}}</span>{{/if}}{{#if parentRef}} {{parentRef}}{{/if}}</div>
+<div class="post-header"><span class="post-no {{#if hasFewReplies}}has-replies-few{{/if}}{{#if hasManyReplies}}has-replies-many{{/if}}" data-number="{{number}}" role="button" tabindex="0">{{number}}</span>{{avatar}}: <span class="post-reply-count" data-count="{{replyCount}}" data-replies="{{replyNumbers}}">返<span class="reply-num">{{replyCount}}</span> </span>{{#if isOwn}}<span class="post-own">自分</span> {{/if}}{{#if isReplyToOwn}}<span class="post-reply-to-own">返信</span> {{/if}}<span class="post-name">{{name}} </span>{{#if mail}}<span class="post-mail">[{{mail}}]</span> {{/if}}<span class="post-meta">{{date}} {{#if id}}ID:{{id}}{{/if}}</span>{{#if score}} <span class="post-score">{{score}}</span>{{/if}}{{#if parentRef}} {{parentRef}}{{/if}}</div>
 <div class="post-body">{{body}}</div>
 <div class="post-media">{{media}}</div>
 {{children}}

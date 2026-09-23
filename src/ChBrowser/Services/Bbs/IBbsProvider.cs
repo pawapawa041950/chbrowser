@@ -245,7 +245,37 @@ public interface IBbsProvider
     /// <see cref="Voting"/> が null なら <see cref="NotSupportedException"/>。</summary>
     Task<VoteResult> VoteAsync(HttpClient http, Board board, string threadKey, Post post, int direction, CancellationToken ct)
         => throw new NotSupportedException($"{DisplayName} はレスの評価に対応していません。");
+
+    /// <summary>投稿者ごとの情報 (アイコン・プロフィール) を持つか。true ならスレ表示で名前の前にアイコンを出し、
+    /// クリックでプロフィールのカードを出す。投稿者は名前で識別し、取得にはアカウント ID (<see cref="PostExtra.AuthorId"/>) を使う。</summary>
+    bool SupportsAuthorProfiles => false;
+
+    /// <summary>アカウント ID の集合から投稿者情報を取る。要求回数の予算に配慮して一部だけ問い合わせてよい
+    /// (<see cref="AuthorProfileFetch.Asked"/> に実際に問い合わせた ID を入れる。残りは次の機会に取る)。</summary>
+    Task<AuthorProfileFetch> FetchAuthorProfilesAsync(HttpClient http, IReadOnlyCollection<string> authorIds, CancellationToken ct)
+        => Task.FromResult(AuthorProfileFetch.Empty);
 }
+
+/// <summary>投稿者情報の取得結果。<see cref="Found"/> はアカウント ID → 情報、<see cref="Asked"/> は問い合わせた ID
+/// (問い合わせたのに <see cref="Found"/> に無い = 退会・凍結等で見つからない)。</summary>
+public sealed record AuthorProfileFetch(IReadOnlyDictionary<string, AuthorProfile> Found, IReadOnlyCollection<string> Asked)
+{
+    public static AuthorProfileFetch Empty { get; } = new(new Dictionary<string, AuthorProfile>(), Array.Empty<string>());
+}
+
+/// <summary>投稿者 1 人分の情報 (スレ表示のアイコンとプロフィールのカード)。<see cref="DisplayName"/> は表示用 (reddit: <c>u/name</c>)、
+/// <see cref="Stats"/> はカードに並べる項目 (reddit: 投稿カルマ / コメントカルマ)、<see cref="CreatedEpoch"/> はアカウント作成日時。</summary>
+public sealed record AuthorProfile(
+    string                     Name,
+    string                     DisplayName,
+    string?                    IconUrl,
+    string?                    ProfileUrl,
+    long?                      CreatedEpoch,
+    IReadOnlyList<AuthorStat>  Stats,
+    bool                       Nsfw = false);
+
+/// <summary>プロフィールのカードの 1 項目 (例: 「投稿カルマ」「1,234」)。</summary>
+public sealed record AuthorStat(string Label, string Value);
 
 /// <summary>評価の種類。</summary>
 public enum VoteMode

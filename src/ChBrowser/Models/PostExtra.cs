@@ -17,6 +17,7 @@ namespace ChBrowser.Models;
 /// <param name="Attachments">添付ファイル (画像・動画・ギャラリー)。</param>
 /// <param name="MyVote">取得時点での自分の評価 (1 = 賛成、-1 = 反対、0 / null = なし。reddit の <c>likes</c>)。<see cref="Score"/> はこれを含んだ値。
 /// アプリから評価した後の状態は idx.json (<see cref="ThreadIndex.MyVotes"/>) が持ち、表示はそちらを優先する。</param>
+/// <param name="AuthorId">投稿者の掲示板側アカウント ID (reddit: <c>t2_xxx</c>)。投稿者情報 (アイコン等) の取得に使う。</param>
 public sealed record PostExtra(
     string?  ExternalId   = null,
     long?    ParentNumber = null,
@@ -27,7 +28,8 @@ public sealed record PostExtra(
     long?    EditedEpoch  = null,
     string?  Permalink    = null,
     IReadOnlyList<PostAttachment>? Attachments = null,
-    int?     MyVote       = null);
+    int?     MyVote       = null,
+    string?  AuthorId     = null);
 
 /// <summary>レスの添付ファイル 1 件。<see cref="FileName"/> はアンカー規則の attachment 種別 (ふたばの <c>&gt;xxx.png</c>) の解決にも使う。</summary>
 /// <param name="Url">本体の URL。</param>

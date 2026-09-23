@@ -39,6 +39,13 @@ public sealed class VotesUpdateData
     public VotesUpdateData(IReadOnlyList<VoteChange> changes) => Changes = changes;
 }
 
+/// <summary>JS の <c>updateAuthorProfiles</c> に渡すペイロード (投稿者名 → 情報)。届いた分だけアイコンを差し込む。</summary>
+public sealed class AuthorProfilesMessage
+{
+    public IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> Profiles { get; }
+    public AuthorProfilesMessage(IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> profiles) => Profiles = profiles;
+}
+
 /// <summary>1 件分の評価の状態。<see cref="Dir"/> は 1 / -1 / 0、<see cref="Ok"/> = false は送信失敗 (表示を元に戻す)。</summary>
 public sealed record VoteChange(long Number, int Dir, bool Ok = true);
 
@@ -89,6 +96,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
             showPostNumbers  = provider.ShowsPostNumbers,
             watchoi          = provider.UsesWatchoi,
             postNumberDigits = provider.PostNumberDigits,
+            // 投稿者のアイコン (名前の前) とプロフィールのカード
+            authorProfiles   = provider.SupportsAuthorProfiles,
             // レスの評価ボタン (null = 評価できない。評価値があれば表示だけ)
             voting           = provider.Voting is { } v
                 ? new { mode = v.Mode == ChBrowser.Services.Bbs.VoteMode.UpDown ? "updown" : "up", upLabel = v.UpLabel, downLabel = v.DownLabel, canUndo = v.CanUndo }
@@ -277,6 +286,21 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>WebView2 への増分通知 — 評価の確定 / 巻き戻しを JS 側に push するチャネル (VotesUpdate 添付プロパティが観測)。</summary>
     [ObservableProperty]
     private VotesUpdateData? _votesUpdate;
+
+    /// <summary>このスレの投稿者情報 (投稿者名 → アイコン・プロフィール)。届いたものを貯め、resync に同梱する。</summary>
+    public Dictionary<string, ChBrowser.Services.Bbs.AuthorProfile> AuthorProfiles { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>投稿者情報の送信チャネル (AuthorProfilesUpdate 添付プロパティが観測して updateAuthorProfiles を送る)。</summary>
+    [ObservableProperty]
+    private AuthorProfilesMessage? _authorProfilesUpdate;
+
+    /// <summary>投稿者情報を足して JS へ送る。</summary>
+    public void AddAuthorProfiles(IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> profiles)
+    {
+        if (profiles.Count == 0) return;
+        foreach (var (n, p) in profiles) AuthorProfiles[n] = p;
+        AuthorProfilesUpdate = new AuthorProfilesMessage(profiles);
+    }
 
     /// <summary>絞り込みのテキストボックス (= スレッドペイン ヘッダ左) にバインドされる文字列。
     /// 変更で <see cref="Filter"/> が再構築される (= JS への push 経由で表示が即時更新される)。</summary>
