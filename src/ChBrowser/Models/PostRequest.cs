@@ -47,7 +47,10 @@ public sealed record PostRequest(
     string? ThreadTitle = null,
     /// <summary>掲示板側の認証トークン (設定 <see cref="AppConfig.PostAuthTokens"/>、任意)。エッヂではメール欄に <c>#トークン</c> として付ける。
     /// 提供者の認証 Cookie (<see cref="Services.Bbs.PostFormSpec.AuthCookieName"/>) を既に持っていれば PostClient が外す。null / 空なら未使用。</summary>
-    string? AuthToken = null)
+    string? AuthToken = null,
+    /// <summary>返信先の投稿 ID (reddit: <c>t1_xxx</c>。null ならスレ本体への返信)。
+    /// <see cref="Services.Bbs.PostFormSpec.SupportsReplyTarget"/> の提供者だけが使う。</summary>
+    string? ReplyTargetExternalId = null)
 {
     public bool IsNewThread => !string.IsNullOrEmpty(Subject) && string.IsNullOrEmpty(ThreadKey);
     public bool IsReply     =>  string.IsNullOrEmpty(Subject) && !string.IsNullOrEmpty(ThreadKey);

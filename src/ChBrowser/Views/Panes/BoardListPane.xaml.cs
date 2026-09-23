@@ -37,6 +37,15 @@ public partial class BoardListPane : UserControl
                 await main.OpenBoardFromHtmlListAsync(host, dir, name ?? "");
                 break;
             }
+            case "providerAction":
+            {
+                // 板一覧を持たない掲示板 (したらば / reddit) の「検索」「表示済み板」
+                var pid    = payload.TryGetProperty("providerId", out var pp) ? pp.GetString() : null;
+                var action = payload.TryGetProperty("action",     out var ap) ? ap.GetString() : null;
+                if (string.IsNullOrEmpty(pid) || string.IsNullOrEmpty(action)) return;
+                await main.RunProviderActionAsync(pid, action, Window.GetWindow(this));
+                break;
+            }
             case "setCategoryExpanded":
             {
                 var cat = payload.TryGetProperty("categoryName", out var cp) ? cp.GetString() : null;

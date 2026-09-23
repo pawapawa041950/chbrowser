@@ -71,6 +71,8 @@ public sealed class DataPaths
         return Path.Combine(EnsureDir(Path.Combine(Root, root)), "boardlist." + extension.TrimStart('.'));
     }
     public string LayoutJsonPath    => Path.Combine(AppDir, "layout.json");
+    /// <summary>板一覧ペインのツリーの開閉状態 (起動時に前回の状態を再現する)。</summary>
+    public string BoardTreeJsonPath => Path.Combine(AppDir, "board_tree.json");
     public string FavoritesJsonPath => Path.Combine(AppDir, "favorites.json");
 
     /// <summary>アプリ全体設定 (Phase 11)。<see cref="ChBrowser.Models.AppConfig"/> の保存先。</summary>
@@ -102,6 +104,13 @@ public sealed class DataPaths
         return Path.Combine(EnsureDir(Path.Combine(Root, root)), "cookies.txt");
     }
 
+    /// <summary>reddit のログイン状態の表示用メモ (<c>data/reddit.com/auth.json</c>、ユーザー名と最終ログイン時刻だけ)。
+    /// ログインの Cookie 自体は WebView2 の reddit 用プロファイルが持つ。</summary>
+    public string RedditAuthPath => Path.Combine(EnsureDir(Path.Combine(Root, "reddit.com")), "auth.json");
+
+    /// <summary>reddit の接続テスト (設定 → 認証) の結果を書き出すファイル。</summary>
+    public string RedditProbeReportPath => Path.Combine(EnsureDir(Path.Combine(Root, "reddit.com")), "probe.txt");
+
     /// <summary>書き込み記録 (kakikomi.txt)。Jane Xeno フォーマット互換、UTF-8 (BOM なし) + CRLF、append-only。
     /// ユーザがメモ帳等で同時編集できるよう、書込時のみ open → 即 close する運用。</summary>
     public string KakikomiTxtPath => Path.Combine(Root, "kakikomi.txt");
@@ -126,6 +135,10 @@ public sealed class DataPaths
 
     public string IdxJsonPath(string host, string directoryName, string threadKey)
         => Path.Combine(BoardDir(host, directoryName), threadKey + ".idx.json");
+
+    /// <summary>スナップショット方式 (reddit 等) のスレの補助情報 (外部 ID → アプリ内番号の対応表)。<c>doc/reddit-design.md</c> §3 B3。</summary>
+    public string ThreadMetaPath(string host, string directoryName, string threadKey)
+        => Path.Combine(BoardDir(host, directoryName), threadKey + ".meta.json");
 
     /// <summary>AI による NG 判定スコア (レス番号 → 1..5) の per-thread 保存先。</summary>
     public string AiNgScoresPath(string host, string directoryName, string threadKey)

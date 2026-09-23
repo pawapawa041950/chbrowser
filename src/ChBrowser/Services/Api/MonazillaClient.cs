@@ -23,7 +23,8 @@ public sealed class MonazillaClient : IDisposable
             UseCookies = false, // Cookie はサービス側で個別管理 (どんぐり等)
         };
 
-        Http = new HttpClient(handler, disposeHandler: true)
+        // 提供者専用の通信経路 (reddit の WebView2 セッション等) に回す段を 1 つ挟む。経路が登録されていないホストは素通し。
+        Http = new HttpClient(new ChBrowser.Services.Bbs.ProviderTransportHandler(handler), disposeHandler: true)
         {
             Timeout = TimeSpan.FromSeconds(30),
         };

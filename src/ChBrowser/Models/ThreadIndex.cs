@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace ChBrowser.Models;
 
 /// <summary>
@@ -22,8 +24,11 @@ namespace ChBrowser.Models;
 /// <param name="LastFetchedPostNumber">前回取得完了時の最大レス番号 (= 掲示板の実番号)。番号が疎な掲示板 (欠番あり /
 /// 板全体で一意な番号) では件数と一致しないため、「番号以降」で差分取得する提供者はこれを境界に使う。
 /// 5ch は件数 == 最大番号なので <see cref="LastFetchedPostCount"/> と同じ値になる。無ければ null (旧 idx.json)。</param>
+/// <param name="MyVotes">アプリから送ったレスの評価 (レス番号 → 1 = 賛成 / -1 = 反対 / 0 = 取り消し)。
+/// 取得時点の評価 (<see cref="PostExtra.MyVote"/>) より優先して表示に使う。null は空と同義。</param>
 public sealed record ThreadIndex(
     long?  LastReadPostNumber,
     int?   LastFetchedPostCount,
     long[]? OwnPostNumbers = null,
-    long?  LastFetchedPostNumber = null);
+    long?  LastFetchedPostNumber = null,
+    Dictionary<long, int>? MyVotes = null);

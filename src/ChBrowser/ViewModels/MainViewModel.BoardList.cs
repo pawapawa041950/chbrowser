@@ -9,27 +9,20 @@ namespace ChBrowser.ViewModels;
 /// <summary>板一覧 (bbsmenu) の取得・WebView 用 HTML 生成・選択処理。</summary>
 public sealed partial class MainViewModel
 {
-    /// <summary>「5ch板一覧更新」。</summary>
+    /// <summary>「○○板一覧更新」(提供者 Id 指定)。メニュー「板一覧」は板一覧を持つ提供者からこの項目を自動で組む
+    /// (MainWindow.BuildBoardMenu)。新しい掲示板も <see cref="ChBrowser.Services.Bbs.BbsCapabilities.BoardList"/> を宣言すれば並ぶ。</summary>
     [RelayCommand]
-    private Task RefreshBoardListAsync() => RefreshProviderBoardListAsync(ChBrowser.Services.Bbs.BbsRegistry.FiveCh);
-
-    /// <summary>「まちBBS板一覧更新」。</summary>
-    [RelayCommand]
-    private Task RefreshMachiBoardListAsync()
+    private Task RefreshBoardListOfAsync(string? providerId)
     {
-        var p = ChBrowser.Services.Bbs.BbsRegistry.FindById("machi");
-        if (p is null) { StatusMessage = "まちBBS の提供者が登録されていません"; return Task.CompletedTask; }
+        var p = string.IsNullOrEmpty(providerId) ? null : ChBrowser.Services.Bbs.BbsRegistry.FindById(providerId);
+        if (p is null) { StatusMessage = $"掲示板 '{providerId}' の提供者が登録されていません"; return Task.CompletedTask; }
         return RefreshProviderBoardListAsync(p);
     }
 
-    /// <summary>「エッヂ板一覧更新」。</summary>
-    [RelayCommand]
-    private Task RefreshEddiBoardListAsync()
-    {
-        var p = ChBrowser.Services.Bbs.BbsRegistry.FindById("eddi");
-        if (p is null) { StatusMessage = "エッヂの提供者が登録されていません"; return Task.CompletedTask; }
-        return RefreshProviderBoardListAsync(p);
-    }
+    // ショートカット (main.refresh_*_board_list) 用の個別コマンド。中身は上と同じ。
+    [RelayCommand] private Task RefreshBoardListAsync()      => RefreshBoardListOfAsync("5ch");
+    [RelayCommand] private Task RefreshMachiBoardListAsync() => RefreshBoardListOfAsync("machi");
+    [RelayCommand] private Task RefreshEddiBoardListAsync()  => RefreshBoardListOfAsync("eddi");
 
     /// <summary>提供者 1 つ分の板一覧を取得して差し替える。他の提供者の分は保持する。</summary>
     private async Task RefreshProviderBoardListAsync(ChBrowser.Services.Bbs.IBbsProvider provider)
@@ -56,8 +49,36 @@ public sealed partial class MainViewModel
     /// <summary>提供者 Id → その板一覧。板一覧ペインは提供者ごとのトップノード配下にカテゴリを並べる。</summary>
     private readonly Dictionary<string, IReadOnlyList<BoardCategory>> _categoriesByProvider = new(System.StringComparer.Ordinal);
 
-    /// <summary>提供者ノードの開閉状態 (既定: 開)。</summary>
-    private readonly Dictionary<string, bool> _providerExpanded = new(System.StringComparer.Ordinal);
+    /// <summary>提供者ノードの開閉状態 (既定: 開)。起動時に board_tree.json から復元する。</summary>
+    private Dictionary<string, bool>? _providerExpandedStore;
+    private Dictionary<string, bool> _providerExpanded
+    {
+        get
+        {
+            if (_providerExpandedStore is null)
+            {
+                _providerExpandedStore = new(System.StringComparer.Ordinal);
+                foreach (var id in BoardTreeState.CollapsedProviders) _providerExpandedStore[id] = false;
+            }
+            return _providerExpandedStore;
+        }
+    }
+
+    // 板一覧ツリーの開閉状態 (data/app/board_tree.json)。トグルのたびに保存し、起動時・板一覧の再取得時に当てる。
+    private ChBrowser.Services.Storage.BoardTreeStateStorage? _boardTreeStorage;
+    private ChBrowser.Services.Storage.BoardTreeState? _boardTreeState;
+    private ChBrowser.Services.Storage.BoardTreeStateStorage BoardTreeStorage => _boardTreeStorage ??= new(_paths);
+    private ChBrowser.Services.Storage.BoardTreeState BoardTreeState => _boardTreeState ??= BoardTreeStorage.Load();
+    private HashSet<string>? _expandedCategoryKeys;
+    private HashSet<string> ExpandedCategoryKeys => _expandedCategoryKeys ??= new(BoardTreeState.ExpandedCategories, System.StringComparer.Ordinal);
+
+    private void SaveBoardTreeState()
+    {
+        var state = BoardTreeState;
+        state.CollapsedProviders = _providerExpanded.Where(kv => !kv.Value).Select(kv => kv.Key).OrderBy(x => x, System.StringComparer.Ordinal).ToList();
+        state.ExpandedCategories = ExpandedCategoryKeys.OrderBy(x => x, System.StringComparer.Ordinal).ToList();
+        BoardTreeStorage.Save(state);
+    }
 
     /// <summary>5ch の板一覧を差し替える (互換 API)。</summary>
     private void ApplyCategories(IReadOnlyList<BoardCategory> cats) => ApplyCategories("5ch", cats);
@@ -71,7 +92,14 @@ public sealed partial class MainViewModel
         foreach (var provider in ChBrowser.Services.Bbs.BbsRegistry.All)
         {
             if (!_categoriesByProvider.TryGetValue(provider.Id, out var list)) continue;
-            foreach (var c in list) BoardCategories.Add(new BoardCategoryViewModel(c));
+            foreach (var c in list)
+            {
+                BoardCategories.Add(new BoardCategoryViewModel(c)
+                {
+                    // 前回終了時 (または再取得前) に開いていたカテゴリは開いたまま
+                    IsExpanded = ExpandedCategoryKeys.Contains(ChBrowser.Services.Storage.BoardTreeState.CategoryKey(c.ProviderId, c.CategoryName)),
+                });
+            }
         }
         RefreshBoardListHtml();
     }
@@ -80,16 +108,23 @@ public sealed partial class MainViewModel
     /// 板一覧を持つ提供者はカテゴリが無くてもトップノードを出す (= 「未取得」を見せる)。</summary>
     public void RefreshBoardListHtml()
     {
+        // 板一覧を持つ掲示板は従来どおり。持たない掲示板 (したらば / reddit) も「検索」「表示済み板」を出すためにノードを作る。
         var providers = ChBrowser.Services.Bbs.BbsRegistry.All
-            .Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0)
             .Select(p => new ChBrowser.Services.Render.BoardListProviderNode(
-                p.Id, p.DisplayName, !_providerExpanded.TryGetValue(p.Id, out var ex) || ex))
+                p.Id, p.DisplayName, !_providerExpanded.TryGetValue(p.Id, out var ex) || ex,
+                HasBoardList:   (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0,
+                SupportsSearch: p.SupportsBoardSearch))
             .ToList();
         BoardListHtml = ChBrowser.Services.Render.BoardListHtmlBuilder.Build(providers, BoardCategories);
     }
 
     /// <summary>JS 側 setProviderExpanded メッセージから呼ばれる (HTML は再生成しない)。</summary>
-    public void SetProviderExpanded(string providerId, bool expanded) => _providerExpanded[providerId] = expanded;
+    public void SetProviderExpanded(string providerId, bool expanded)
+    {
+        if (_providerExpanded.TryGetValue(providerId, out var cur) ? cur == expanded : expanded) return;
+        _providerExpanded[providerId] = expanded;
+        SaveBoardTreeState();
+    }
 
     /// <summary>JS 側 setCategoryExpanded メッセージから呼ばれる。
     /// ViewModel の IsExpanded を更新 (HTML は再生成しない — トグルは DOM 上で既に反映されているため)。
@@ -101,6 +136,8 @@ public sealed partial class MainViewModel
             if (c.CategoryName == categoryName && (string.IsNullOrEmpty(providerId) || c.ProviderId == providerId))
             {
                 c.IsExpanded = expanded;
+                var key = ChBrowser.Services.Storage.BoardTreeState.CategoryKey(c.ProviderId, c.CategoryName);
+                if (expanded ? ExpandedCategoryKeys.Add(key) : ExpandedCategoryKeys.Remove(key)) SaveBoardTreeState();
                 return;
             }
         }

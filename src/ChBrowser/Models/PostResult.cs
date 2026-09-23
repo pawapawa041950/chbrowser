@@ -35,9 +35,11 @@ public enum PostOutcome
 /// <param name="RawHtmlSnippet">デバッグ表示用の HTML 抜粋 (先頭 N 文字)。空でも可。</param>
 /// <param name="AuthUrl"><see cref="PostOutcome.AuthRequired"/> のとき、ブラウザで開く認証ページ URL。</param>
 /// <param name="AuthCode"><see cref="PostOutcome.AuthRequired"/> のとき、認証ページに入力するコード (エッヂは 6 桁)。無ければ空。</param>
+/// <param name="NewPostExternalId">成功時、掲示板が返した新規投稿の ID (reddit: <c>t1_xxx</c>)。自分マークの自動付与に使う。無ければ null。</param>
 public sealed record PostResult(
     PostOutcome Outcome,
     string      Message,
     string      RawHtmlSnippet,
     string?     AuthUrl  = null,
-    string?     AuthCode = null);
+    string?     AuthCode = null,
+    string?     NewPostExternalId = null);

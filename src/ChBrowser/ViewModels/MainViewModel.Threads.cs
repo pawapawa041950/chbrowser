@@ -77,6 +77,8 @@ public sealed partial class MainViewModel
             if (p.Body is null) continue;
             // 自分のレス自身は除外 (= 自分が自分宛にアンカーしていても「返信あり」扱いしない)。
             if (tab.OwnPostNumbers.Contains(p.Number)) continue;
+            // 構造上の返信先 (reddit の親コメント) が自分のレスなら返信あり
+            if (p.Ext?.ParentNumber is long parent && tab.OwnPostNumbers.Contains(parent)) return true;
             foreach (var r in rules.ExtractRanges(p.Body))
             {
                 // range が極端に広いケース (荒らし対策) は判定スキップ
@@ -197,6 +199,10 @@ public sealed partial class MainViewModel
         if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
         {
             foreach (var n in savedOwn) tab.OwnPostNumbers.Add(n);
+        }
+        if (savedIndex?.MyVotes is { Count: > 0 } savedVotes)
+        {
+            foreach (var (n, dir) in savedVotes) tab.MyVotes[n] = dir;
         }
 
         tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
@@ -402,7 +408,25 @@ public sealed partial class MainViewModel
     /// 投稿ダイアログを「&gt;&gt;N\n」プリフィル状態で開く。</summary>
     public void OpenReplyDialog(ThreadTabViewModel tab, long postNumber)
     {
-        OpenPostDialogInternal(tab, $">>{postNumber}\n");
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host);
+        if (!provider.PostForm.SupportsReplyTarget)
+        {
+            OpenPostDialogInternal(tab, $">>{postNumber}\n");
+            return;
+        }
+
+        // 返信先を ID で指定する掲示板 (reddit): 本文に >>N は入れず、返信先のコメント ID をダイアログに持たせる。
+        // スレ本体 (レス 1) への返信は「返信先なし」と同じ (= t3_<key>)。
+        var post = tab.Posts.FirstOrDefault(p => p.Number == postNumber);
+        OpenPostDialogInternal(tab, "", vm =>
+        {
+            if (post?.Ext?.ExternalId is { } id && !id.StartsWith("t3_", StringComparison.Ordinal))
+            {
+                var snippet = (post.Body ?? "").Replace('\n', ' ').Trim();
+                if (snippet.Length > 40) snippet = snippet[..40] + "…";
+                vm.SetReplyTarget(id, $"{post.Name} のコメント「{snippet}」");
+            }
+        });
     }
 
     // ---- AI チャット (LLM 連携) ----
@@ -719,12 +743,13 @@ public sealed partial class MainViewModel
         return new Guid(guid);
     }
 
-    private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage)
+    private void OpenPostDialogInternal(ThreadTabViewModel tab, string initialMessage, Action<PostFormViewModel>? configure = null)
     {
         var vm = new PostFormViewModel(_postClient, tab.Board, tab.ThreadKey, tab.Title, DefaultPostAuthMode(tab.Board), PostAuthTokenFor(tab.Board));
         // どんぐりを使わない提供者では AuthMode は None 固定なので、保存値 (LastPostAuthMode) を上書きしない
         if (vm.PostForm.UsesDonguriAuth) HookPersistAuthMode(vm);
         if (!string.IsNullOrEmpty(initialMessage)) vm.Message = initialMessage;
+        configure?.Invoke(vm);
         _ = ApplyLineLimitFromSettingAsync(vm, tab.Board);
         var cfg = CurrentConfig;
         var dlg = new ChBrowser.Views.PostDialog(vm, System.Windows.Application.Current?.MainWindow,
@@ -743,7 +768,17 @@ public sealed partial class MainViewModel
             var submittedMessage = vm.Message ?? "";
             UpdateDonguriStatus();
             await RefreshThreadAsync(tab).ConfigureAwait(true);
-            AutoMarkSubmittedPostAsOwn(tab, prevCount, submittedMessage);
+            // 掲示板が新しい投稿の ID を返す場合 (reddit) はそれで自分の書き込みを特定する。無ければ本文の類似度で推定 (5ch 等)
+            if (vm.LastResult?.NewPostExternalId is { Length: > 0 } newId
+                && _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.NumberOf(newId) is long ownNumber)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[autoOwn] {tab.Header}: 投稿 ID {newId} → r{ownNumber} を自動 own にマーク");
+                ToggleOwnPost(tab, ownNumber, isOwn: true);
+            }
+            else
+            {
+                AutoMarkSubmittedPostAsOwn(tab, prevCount, submittedMessage);
+            }
         };
         dlg.Show();
     }
@@ -1000,6 +1035,10 @@ public sealed partial class MainViewModel
             UpdateDonguriStatus();
             StatusMessage = $"スレ立て成功 — {board.BoardName} の一覧を更新中...";
             await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
+            // 掲示板が新しいスレの ID を返す場合 (reddit: t3_xxx) はそのスレをそのまま開く
+            // (reddit の既定の並び順 hot では、立てたばかりのスレは一覧に出ないことが多いため)
+            if (vm.LastResult?.NewPostExternalId is { } newId && newId.StartsWith("t3_", StringComparison.Ordinal) && newId.Length > 3)
+                await OpenThreadAsync(board, new ThreadInfo(newId[3..], vm.Subject ?? "", 1, 0)).ConfigureAwait(true);
         };
         dlg.Show();
     }
@@ -1142,6 +1181,9 @@ public sealed partial class MainViewModel
     /// 設定 <see cref="AppConfig.RestoreOpenTabsOnStartup"/> による on/off は呼び出し側 (App) で判定する。</summary>
     public void RestoreOpenTabs()
     {
+        // 起動時の一括復元は自動処理扱い: reddit のログインが切れていてもログイン窓は出さない
+        // (ここで始めた各タブの取得にも AsyncLocal で伝わる。doc/reddit-design.md D37)
+        using var background = ChBrowser.Services.Bbs.ProviderRequestContext.Background();
         var saved         = _openTabsStorage.Load();
         var hasPanes      = saved.ThreadPanes is { Count: > 0 };
         var hasListPanes  = saved.ThreadListPanes is { Count: > 0 };
@@ -1308,6 +1350,53 @@ public sealed partial class MainViewModel
 
         // 仕様: own のトグルは「直前の差分取得」イベントではないので、ここで HasReplyToOwn は触らない。
         // 次の差分取得 (Refresh / OpenThread の HTTP fetch) で新着 + own 参照が見つかったときに赤化する。
+    }
+
+    /// <summary>レスの評価ボタン (JS の <c>vote</c> メッセージ) から呼ばれる。JS は押した時点で表示を先に変えているので、
+    /// 成功なら idx.json に記録して確定を、失敗なら元の状態 (<paramref name="previousDir"/>) への巻き戻しを JS に送る。
+    /// 評価の送り方は掲示板ごと (<see cref="ChBrowser.Services.Bbs.IBbsProvider.VoteAsync"/>)。</summary>
+    public async Task VoteAsync(ThreadTabViewModel tab, long postNumber, int direction, int previousDir)
+    {
+        direction = Math.Sign(direction);
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host);
+        var post     = tab.Posts.FirstOrDefault(p => p.Number == postNumber);
+        void Revert(string message)
+        {
+            tab.VotesUpdate   = new VotesUpdateData(new[] { new VoteChange(postNumber, previousDir, Ok: false) });
+            tab.StatusMessage = message;
+            StatusMessage     = message;
+        }
+        if (provider.Voting is not { } spec || post is null)
+        {
+            Revert("このレスは評価できません");
+            return;
+        }
+        if (direction < 0 && spec.Mode == ChBrowser.Services.Bbs.VoteMode.UpOnly) { Revert("この掲示板は反対の評価に対応していません"); return; }
+        if (direction == 0 && !spec.CanUndo)                                    { Revert("この掲示板は評価を取り消せません"); return; }
+
+        ChBrowser.Services.Bbs.VoteResult result;
+        try
+        {
+            result = await provider.VoteAsync(_subjectClient.Http, tab.Board, tab.ThreadKey, post, direction, default).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[vote] {provider.Id} #{postNumber} dir={direction} failed: {ex.Message}");
+            result = new ChBrowser.Services.Bbs.VoteResult(false, ex.Message);
+        }
+        if (!result.Ok)
+        {
+            Revert(result.AuthRequired
+                ? $"評価できませんでした: {provider.DisplayName} へのログインが必要です"
+                : $"評価できませんでした: {result.Message}");
+            return;
+        }
+
+        tab.MyVotes[postNumber] = direction;
+        var existing = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
+        var updated  = (existing ?? new ThreadIndex(null, null)) with { MyVotes = new Dictionary<long, int>(tab.MyVotes) };
+        _threadIndex.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey, updated);
+        tab.VotesUpdate = new VotesUpdateData(new[] { new VoteChange(postNumber, direction) });
     }
 
     /// <summary>JS の openThread メッセージ (host/dir/key/title 同梱) からスレを開く。

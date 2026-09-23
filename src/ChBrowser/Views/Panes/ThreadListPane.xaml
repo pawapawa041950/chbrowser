@@ -19,6 +19,10 @@
                      Opened="ThreadListTabContextMenu_Opened">
             <MenuItem Tag="fav" Header="お気に入りに追加" Click="ThreadListTabFav_Click" />
             <Separator />
+            <!-- 並び順とページングを持つ掲示板 (reddit) だけ表示。並び順の子項目は Opened で提供者の ListingSorts から組み立てる -->
+            <MenuItem Tag="listingSort" Header="並び順" />
+            <MenuItem Tag="listingMore" Header="続きを読み込む" Click="ThreadListTabLoadMore_Click" />
+            <Separator Tag="listingSep" />
             <MenuItem Tag="needsBoard" Header="本板をブラウザで開く"
                       Click="ThreadListTabOpenBoardInBrowser_Click" />
             <MenuItem Tag="openSetting" Header="SETTING.TXTをブラウザで開く"

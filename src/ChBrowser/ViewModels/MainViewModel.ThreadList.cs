@@ -57,12 +57,19 @@ public sealed partial class MainViewModel
             tab.Header        = $"{board.BoardName} (取得中)";
             tab.StatusMessage = $"{board.BoardName} のスレ一覧を取得中...";
 
-            var subjectThreads = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(true);
+            var provider       = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+            var page           = await _subjectClient.FetchPageAsync(
+                                     board, new ChBrowser.Services.Bbs.ThreadListQuery(tab.Sort), default).ConfigureAwait(true);
+            var subjectThreads = page.Items;
+            tab.NextCursor     = page.NextCursor;
 
-            // ローカル dat があるが subject.txt にもう無いスレ (= dat 落ち) も一覧に含める
+            // ローカル dat があるが subject.txt にもう無いスレ (= dat 落ち) も一覧に含める。
+            // 一覧が常に部分集合の掲示板 (reddit) では「一覧に無い = 落ちた」ではないので行わない。
             var subjectKeys  = new HashSet<string>(subjectThreads.Select(t => t.Key));
             var localKeys    = _datClient.EnumerateExistingThreadKeys(board);
-            var droppedKeys  = localKeys.Where(k => !subjectKeys.Contains(k)).ToList();
+            var droppedKeys  = provider.ThreadListIsComplete
+                ? localKeys.Where(k => !subjectKeys.Contains(k)).ToList()
+                : new List<string>();
             var droppedList  = new List<ThreadInfo>(droppedKeys.Count);
             foreach (var key in droppedKeys)
             {
@@ -93,10 +100,15 @@ public sealed partial class MainViewModel
                 threadTab.State = states.TryGetValue(threadTab.ThreadKey, out var s) ? s : LogMarkState.None;
             }
 
-            tab.Header        = $"{board.BoardName} ({allThreads.Count})";
+            tab.Header        = $"{board.BoardName}{SortSuffix(tab)} ({allThreads.Count})";
             tab.StatusMessage = droppedList.Count > 0
                 ? $"{board.BoardName}: {subjectThreads.Count} スレ (+ dat 落ち {droppedList.Count})"
-                : $"{board.BoardName}: {subjectThreads.Count} スレを表示";
+                : $"{board.BoardName}: {subjectThreads.Count} スレを表示"
+                  + (tab.NextCursor is not null ? " (右クリック → 続きを読み込む で次の 100 件)" : "");
+
+            // 板一覧を持たない掲示板 (したらば / reddit) の板名は、ローカルの板情報 (_SETTING.TXT の BBS_TITLE) が唯一の出どころ
+            // (「表示済み板」はそこから名前を読む)。アドレスバー以外 (検索結果など) から開いた板は未取得なので、ここで 1 回だけ取っておく。
+            _ = EnsureBoardInfoCachedAsync(board);
         }
         catch (Exception ex)
         {
@@ -106,6 +118,100 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsBusy = false;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 並び順とページング (reddit。doc/reddit-design.md §3 B5 / A4)
+    // -----------------------------------------------------------------
+
+    /// <summary>タブの実効の並び順 (未指定なら提供者の既定)。並び順を持たない掲示板では null。</summary>
+    public string? EffectiveListingSort(ThreadListTabViewModel tab)
+    {
+        if (tab.Board is not { } board) return null;
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+        if (provider.ListingSorts.Count == 0) return null;
+        if (!string.IsNullOrEmpty(tab.Sort)) return tab.Sort;
+        return ChBrowser.Services.Bbs.ListingSortDefaults.For(provider);
+    }
+
+    /// <summary>設定の「掲示板ごとの既定の並び順」。旧設定 (<see cref="AppConfig.RedditDefaultSort"/>) があれば reddit 分として引き継ぐ。</summary>
+    internal static Dictionary<string, string> EffectiveListingSortDefaults(AppConfig config)
+    {
+        var map = new Dictionary<string, string>(config.ListingSortDefaults ?? new(), StringComparer.Ordinal);
+        if (!map.ContainsKey("reddit") && !string.IsNullOrWhiteSpace(config.RedditDefaultSort)) map["reddit"] = config.RedditDefaultSort;
+        return map;
+    }
+
+    /// <summary>タブ見出しに付ける並び順 (例: " [hot]")。並び順を持たない掲示板では空。</summary>
+    private string SortSuffix(ThreadListTabViewModel tab)
+        => EffectiveListingSort(tab) is { } s ? $" [{s.Replace(':', ' ')}]" : "";
+
+    /// <summary>並び順を変えて 1 ページ目から取り直す。</summary>
+    public Task ChangeThreadListSortAsync(ThreadListTabViewModel tab, string sort)
+    {
+        if (tab.Board is not { } board) return Task.CompletedTask;
+        tab.Sort       = sort;
+        tab.NextCursor = null;
+        return LoadThreadListAsync(new BoardViewModel(board));
+    }
+
+    /// <summary>「続きを読み込む」: 次のページを取得して一覧の末尾に足す (取得分はセッション限り。決定 D29)。</summary>
+    public async Task LoadMoreThreadsAsync(ThreadListTabViewModel tab)
+    {
+        if (tab.Board is not { } board || string.IsNullOrEmpty(tab.NextCursor) || tab.IsBusy) return;
+        var header = tab.Header;
+        try
+        {
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"{board.BoardName}: 続きを取得中...";
+            var page = await _subjectClient.FetchPageAsync(
+                board, new ChBrowser.Services.Bbs.ThreadListQuery(tab.Sort, tab.NextCursor), default).ConfigureAwait(true);
+
+            // 既に並んでいるスレは足さない (reddit はページ間で順位が動くので重複しうる)。No は通し番号
+            var existing = tab.Items.Where(i => i.Kind == ThreadListItemKind.Thread).Select(i => i.Info).ToList();
+            var known    = new HashSet<string>(existing.Select(i => i.Key), StringComparer.Ordinal);
+            var added    = page.Items.Where(t => known.Add(t.Key)).ToList();
+            var all      = existing.Concat(added).Select((t, i) => t with { Order = i + 1 }).ToList();
+
+            var states  = BuildLogStates(board, all);
+            var favKeys = new HashSet<string>(
+                Favorites.CollectFavoriteThreadKeys()
+                         .Where(k => k.Host == board.Host && k.Dir == board.DirectoryName)
+                         .Select(k => k.Key));
+            tab.SetThreads(all, DateTimeOffset.UtcNow, states, favKeys);
+            tab.NextCursor    = page.NextCursor;
+            tab.Header        = $"{board.BoardName}{SortSuffix(tab)} ({all.Count})";
+            tab.StatusMessage = $"{board.BoardName}: {added.Count} スレを追加 (合計 {all.Count})"
+                                + (page.NextCursor is null ? " — これ以上はありません" : "");
+        }
+        catch (Exception ex)
+        {
+            tab.Header        = header;
+            tab.StatusMessage = $"続きの取得に失敗: {ex.Message}";
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
+    }
+
+    /// <summary>板情報 (SETTING.TXT 相当) をまだローカルに持っていなければ取得して保存する。板一覧を持たない掲示板だけが対象
+    /// (板一覧のある掲示板は板名を板一覧から得るので不要)。失敗しても何もしない (板名は dir 名のまま)。</summary>
+    private async Task EnsureBoardInfoCachedAsync(Board board)
+    {
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+        if ((provider.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0) return;
+        if ((provider.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardInfo) == 0) return;
+        if (System.IO.File.Exists(_paths.SettingTxtPath(board.Host, board.DirectoryName))) return;
+        try
+        {
+            await _settingClient.GetOrFetchAsync(board).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[boardInfo] {board.Host}/{board.DirectoryName} の板情報を取得できませんでした: {ex.Message}");
         }
     }
 
@@ -174,6 +280,9 @@ public sealed partial class MainViewModel
             RefreshUnlistedBoardsTab(tab);
             return Task.CompletedTask;
         }
+
+        // 板一覧の無い掲示板の「検索」結果 / 「表示済み板」タブ
+        if (TryRefreshBoardRowsTab(tab, out var boardRowsTask)) return boardRowsTask;
 
         if (tab.FavoritesFolderId is Guid id)
         {
@@ -449,7 +558,9 @@ public sealed partial class MainViewModel
                         var idx          = _threadIndex.Load(board.Host, dirName, key);
                         var fetchedCount = idx?.LastFetchedPostCount ?? 0;
                         info  = new ThreadInfo(key, title, fetchedCount, 0);
-                        state = LogMarkState.Dropped;
+                        // 一覧が常に部分集合の掲示板 (reddit) では「一覧に無い = 落ちた」ではない
+                        state = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadListIsComplete
+                            ? LogMarkState.Dropped : LogMarkState.Cached;
                     }
 
                     var fav = favSet.Contains((board.Host, dirName, key));

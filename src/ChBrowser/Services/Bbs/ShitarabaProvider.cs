@@ -65,6 +65,55 @@ public sealed class ShitarabaProvider : IBbsProvider
     public string? BoardListUrl => null;
     public string  BoardListCacheExtension => "";
     public IReadOnlyList<BoardCategory> ParseBoardList(byte[] bytes) => Array.Empty<BoardCategory>();
+
+    // -----------------------------------------------------------------
+    // 板検索 (板一覧が無いので、ポータルのキーワード検索を使う)
+    // -----------------------------------------------------------------
+
+    /// <summary>ポータル (rentalbbs.shitaraba.com) の掲示板検索。<c>query</c> は UTF-8、1 ページ 20 件、成人向けは除外。
+    /// (2026-09-23 実測。フォームの <c>word</c> パラメータは文字コードの扱いが壊れているので、結果ページのリンクが使う <c>query</c> を使う。)</summary>
+    public const string SearchUrl = "https://rentalbbs.shitaraba.com/jbbs/search/";
+    private const int SearchMaxPages = 3;
+
+    private static readonly Regex SearchHitRegex = new(
+        @"<a href=""https?://jbbs\.shitaraba\.net/(?<cat>[a-z]+)/(?<num>[0-9]+)/?"">(?<name>[^<]*)</a>(?:(?!<li\b)[\s\S])*?<p>(?<desc>[\s\S]*?)</p>",
+        RegexOptions.Compiled);
+
+    public bool SupportsBoardSearch => true;
+
+    public async System.Threading.Tasks.Task<IReadOnlyList<BoardSearchHit>> SearchBoardsAsync(
+        System.Net.Http.HttpClient http, string keyword, System.Threading.CancellationToken ct)
+    {
+        var hits = new List<BoardSearchHit>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var page = 1; page <= SearchMaxPages; page++)
+        {
+            var url = $"{SearchUrl}?filter=exclude_adult&query={Uri.EscapeDataString(keyword)}" + (page > 1 ? $"&page={page}" : "");
+            using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            var html  = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var found = ParseSearchResults(html);
+            foreach (var h in found)
+                if (seen.Add(h.Board.DirectoryName)) hits.Add(h);
+            if (found.Count < 20) break;   // 最終ページ
+        }
+        return hits;
+    }
+
+    /// <summary>検索結果ページ (UTF-8 HTML) から板を取り出す。</summary>
+    public IReadOnlyList<BoardSearchHit> ParseSearchResults(string html)
+    {
+        var list = new List<BoardSearchHit>();
+        foreach (Match m in SearchHitRegex.Matches(html))
+        {
+            var dir  = m.Groups["cat"].Value + "/" + m.Groups["num"].Value;
+            var name = System.Net.WebUtility.HtmlDecode(m.Groups["name"].Value).Trim();
+            var desc = System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups["desc"].Value, "<[^>]+>", "")).Trim();
+            if (name.Length == 0) name = dir;
+            list.Add(new BoardSearchHit(new Board(dir, name, BoardUrl(CanonicalHost, dir), "", 0), desc));
+        }
+        return list;
+    }
     public bool    UsesNativeDat => false;
 
     public bool OwnsHost(string host)

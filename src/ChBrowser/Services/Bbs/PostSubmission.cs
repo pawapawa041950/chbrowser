@@ -18,13 +18,26 @@ namespace ChBrowser.Services.Bbs;
 /// 持ち、次の投稿から送る (エッヂの edge-token / tinker-token)。どんぐりとは独立。</param>
 /// <param name="AuthCookieName">「認証済み」を表す Cookie 名 (エッヂ: <c>edge-token</c>)。保管にこれがあれば
 /// 手入力の認証トークン (<see cref="PostRequest.AuthToken"/>) は送らない。null なら判定しない。</param>
+/// <param name="BodyFormat">本文の書式 (reddit は Markdown。ダイアログの注記に使う)。</param>
+/// <param name="RequiresLogin">書き込みに掲示板へのログインが必須 (reddit)。</param>
+/// <param name="SupportsReplyTarget">返信先を本文のアンカーではなく投稿 ID で指定する (reddit。<see cref="PostRequest.ReplyTargetExternalId"/>)。</param>
 public sealed record PostFormSpec(
     bool SupportsName,
     bool SupportsMail,
     bool SupportsNewThread,
     bool UsesDonguriAuth,
     bool PersistsCookies = false,
-    string? AuthCookieName = null);
+    string? AuthCookieName = null,
+    PostBodyFormat BodyFormat = PostBodyFormat.Plain,
+    bool RequiresLogin = false,
+    bool SupportsReplyTarget = false);
+
+/// <summary>投稿本文の書式。</summary>
+public enum PostBodyFormat
+{
+    Plain,
+    Markdown,
+}
 
 /// <summary>1 段目 POST の内容。提供者が <see cref="IBbsProvider.BuildPostSubmission"/> で組み立て、
 /// <see cref="Api.PostClient"/> はこれを <c>application/x-www-form-urlencoded</c> に符号化して送るだけ。</summary>

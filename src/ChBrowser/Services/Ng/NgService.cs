@@ -105,7 +105,13 @@ public sealed class NgService
         // アンカー判定は掲示板ごとの規則 (設定で上書き可) に従う。5ch の既定は従来の >>N と同じ。
         var anchorRules = ChBrowser.Services.Bbs.AnchorRuleRegistry.ForHost(host);
         var anchorMap = new Dictionary<long, long[]>(posts.Count);
-        foreach (var p in posts) anchorMap[p.Number] = anchorRules.ExtractNumbers(p.Body).ToArray();
+        foreach (var p in posts)
+        {
+            // 本文のアンカーに加え、構造上の返信先 (reddit の親コメント = Ext.ParentNumber) も連鎖の辺にする
+            var refs = anchorRules.ExtractNumbers(p.Body);
+            if (p.Ext?.ParentNumber is long parent) refs.Add(parent);
+            anchorMap[p.Number] = refs.ToArray();
+        }
 
         bool changed;
         do

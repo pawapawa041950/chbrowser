@@ -5,6 +5,7 @@
 // JS → C# メッセージ:
 //   { type: 'openBoard', host, directoryName, name }       — 板クリック or ダブルクリック (設定による)
 //   { type: 'setCategoryExpanded', categoryName, expanded } — カテゴリの開閉トグル
+//   { type: 'providerAction', providerId, action }         — 板一覧の無い掲示板の「検索」(search) /「表示済み板」(shown)
 //   { type: 'contextMenu', target: 'board', host, directoryName, name } — 板右クリック
 //   { type: 'shortcut'|'gesture', descriptor }              — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
@@ -41,10 +42,21 @@
         });
     }
 
+    // 板一覧を持たない掲示板 (したらば / reddit) の「検索」「表示済み板」項目 → C# に処理を依頼 (1 クリックで動く)
+    root.addEventListener('click', function (e) {
+        var act = e.target.closest && e.target.closest('li.provider-action');
+        if (!act) return;
+        e.stopImmediatePropagation();
+        if (selected) selected.classList.remove('selected');
+        act.classList.add('selected');
+        selected = act;
+        post({ type: 'providerAction', providerId: act.dataset.provider, action: act.dataset.action });
+    }, true);
+
     // 板クリック → ハイライト + (1 クリック設定 ON なら) 開く
     root.addEventListener('click', function (e) {
         var li = e.target.closest && e.target.closest('li.board');
-        if (!li) return;
+        if (!li || li.classList.contains('provider-action')) return;
         if (selected) selected.classList.remove('selected');
         li.classList.add('selected');
         selected = li;
@@ -54,7 +66,7 @@
     // 板ダブルクリック → 1 クリック設定 OFF のときだけ開く
     root.addEventListener('dblclick', function (e) {
         var li = e.target.closest && e.target.closest('li.board');
-        if (!li) return;
+        if (!li || li.classList.contains('provider-action')) return;
         if (!openOnSingleClick) openLi(li);
     });
 
@@ -122,7 +134,7 @@
         var qLow = (query || '').toLowerCase();
         clearHighlights();
 
-        var boards     = root.querySelectorAll('li.board');
+        var boards     = root.querySelectorAll('li.board:not(.provider-action)');
         var categories = root.querySelectorAll('details.category, details.provider');
 
         if (!qLow) {
@@ -178,7 +190,7 @@
     // 板を右クリック → ブラウザ既定メニューを抑制して C# に通知 (WPF ContextMenu を popup させる)
     root.addEventListener('contextmenu', function (e) {
         var li = e.target.closest && e.target.closest('li.board');
-        if (!li) return;
+        if (!li || li.classList.contains('provider-action')) return;
         e.preventDefault();
         // 選択ハイライトも合わせる
         if (selected) selected.classList.remove('selected');

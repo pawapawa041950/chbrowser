@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
@@ -48,6 +50,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        BuildBoardMenu();
         DataContextChanged += MainWindow_DataContextChanged;
         Loaded             += MainWindow_Loaded;
     }
@@ -173,7 +176,44 @@ public partial class MainWindow : Window
 
     private void ExitMenu_Click(object sender, RoutedEventArgs e) => Close();
 
+    /// <summary>メニュー「板一覧」の中身を、登録されている掲示板から組む。板一覧を持つ掲示板 → 「○○板一覧更新」、
+    /// 板を検索できる掲示板 → 「○○板の検索...」(板一覧ペインの「🔍 検索」と同じ処理)。掲示板を足せば自動で並ぶ。</summary>
+    private void BuildBoardMenu()
+    {
+        // 既存の掲示板のアクセスキー (以前の固定メニューと同じ)。無い掲示板はアクセスキー無し
+        var keys = new Dictionary<string, (string Refresh, string Search)>(StringComparer.Ordinal)
+        {
+            ["5ch"] = ("U", ""), ["machi"] = ("M", ""), ["eddi"] = ("E", ""), ["shitaraba"] = ("", "S"), ["reddit"] = ("", "R"),
+        };
+        string Label(string text, string key) => key.Length > 0 ? $"{text}(_{key})" : text;
+
+        BoardMenu.Items.Clear();
+        var providers = ChBrowser.Services.Bbs.BbsRegistry.All;
+        foreach (var p in providers.Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0))
+        {
+            var item = new MenuItem { Header = Label($"{p.DisplayName}板一覧更新", keys.TryGetValue(p.Id, out var k) ? k.Refresh : ""), CommandParameter = p.Id };
+            item.SetBinding(MenuItem.CommandProperty, new System.Windows.Data.Binding(nameof(MainViewModel.RefreshBoardListOfCommand)));
+            BoardMenu.Items.Add(item);
+        }
+        var searchable = providers.Where(p => p.SupportsBoardSearch).ToList();
+        if (searchable.Count > 0 && BoardMenu.Items.Count > 0) BoardMenu.Items.Add(new Separator());
+        foreach (var p in searchable)
+        {
+            var item = new MenuItem { Header = Label($"{p.DisplayName}板の検索", keys.TryGetValue(p.Id, out var k) ? k.Search : "") + "...", Tag = p.Id };
+            item.Click += MenuBoardSearch_Click;
+            BoardMenu.Items.Add(item);
+        }
+    }
+
+    /// <summary>メニュー「板一覧 → ○○板の検索」。Tag の提供者 Id で、板一覧ペインの「🔍 検索」と同じ処理を呼ぶ。</summary>
+    private async void MenuBoardSearch_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || sender is not MenuItem { Tag: string providerId }) return;
+        await vm.RunProviderActionAsync(providerId, "search", this);
+    }
+
     /// <summary>ファイルメニュー → 「お気に入りチェック」。<see cref="MainViewModel.CheckFavoritesAsync"/> を fire-and-forget。</summary>
+
     private void MenuFavCheckUpdates_Click(object sender, RoutedEventArgs e)
     {
         _ = (DataContext as MainViewModel)?.CheckFavoritesAsync();
@@ -256,6 +296,12 @@ public partial class MainWindow : Window
     /// 現在の選択タブで「どのルールが何件あぼーんしたか」を ContextMenu で出し、
     /// 各ルール項目をクリックすると NG 設定ウィンドウを該当ルール選択状態で開く。
     /// 件数 0 や選択タブ無しなら何もしない。</summary>
+    /// <summary>ステータスバーの掲示板ログイン状態のクリック: 未ログイン / 確認待ちならログイン窓を出す。</summary>
+    private void ProviderAuthStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ProviderAuthStatusItem item }) item.Activate();
+    }
+
     private void AboneStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement el) return;

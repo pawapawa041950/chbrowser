@@ -38,11 +38,30 @@ public static class BoardListHtmlBuilder
             if (pv.IsExpanded) sb.Append(@" open");
             sb.Append(@" data-provider=""").Append(HtmlEscape.Attr(pv.Id)).Append('"').Append('>');
             sb.Append(@"<summary class=""provider-name"">").Append(HtmlEscape.Text(pv.DisplayName));
-            sb.Append(@" <span class=""provider-count"">").Append(CountBoards(own)).Append("</span>");
+            if (pv.HasBoardList) sb.Append(@" <span class=""provider-count"">").Append(CountBoards(own)).Append("</span>");
             sb.Append("</summary>");
-            if (own.Count == 0)
-                sb.Append(@"<div class=""provider-empty"">未取得 (ファイル → ")
-                  .Append(HtmlEscape.Text(pv.DisplayName)).Append("板一覧更新)</div>");
+            if (!pv.HasBoardList)
+            {
+                // 板一覧を持たない掲示板 (したらば / reddit): 「検索」と「表示済み板」の 2 項目。
+                // li.board と同じ見た目にするため board クラスも付け、JS は provider-action で見分ける。
+                sb.Append(@"<ul class=""boards provider-actions"">");
+                if (pv.SupportsSearch)
+                    sb.Append(@"<li class=""board provider-action"" data-provider=""").Append(HtmlEscape.Attr(pv.Id))
+                      .Append(@""" data-action=""search"">🔍 検索</li>");
+                sb.Append(@"<li class=""board provider-action"" data-provider=""").Append(HtmlEscape.Attr(pv.Id))
+                  .Append(@""" data-action=""shown"">📁 表示済み板</li>");
+                sb.Append("</ul>");
+            }
+            else if (own.Count == 0)
+            {
+                // 提供者固有の案内 (reddit の「ログインすると購読一覧を取得できます」等) があればそれを出す
+                var hint = ChBrowser.Services.Bbs.BbsRegistry.FindById(pv.Id)?.BoardListEmptyHint;
+                if (!string.IsNullOrEmpty(hint))
+                    sb.Append(@"<div class=""provider-empty"">").Append(HtmlEscape.Text(hint)).Append("</div>");
+                else
+                    sb.Append(@"<div class=""provider-empty"">未取得 (メニューの 板一覧 → ")
+                      .Append(HtmlEscape.Text(pv.DisplayName)).Append("板一覧更新)</div>");
+            }
             else
                 sb.Append(BuildCategories(own));
             sb.Append("</details>");
@@ -116,4 +135,5 @@ public static class BoardListHtmlBuilder
 }
 
 /// <summary>板一覧ペインのトップノード 1 つ (= 掲示板提供者)。</summary>
-public sealed record BoardListProviderNode(string Id, string DisplayName, bool IsExpanded);
+/// <param name="HasBoardList">板一覧を取得できる掲示板か。false (したらば / reddit) なら「検索」「表示済み板」の項目を出す。</param>
+public sealed record BoardListProviderNode(string Id, string DisplayName, bool IsExpanded, bool HasBoardList = true, bool SupportsSearch = false);

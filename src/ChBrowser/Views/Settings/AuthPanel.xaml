@@ -88,5 +88,53 @@
                 Margin="0,0,0,12"
                 Command="{Binding ClearEddiCookiesCommand}" />
 
+        <!-- reddit: アプリ内ブラウザ (WebView2 の reddit 用プロファイル) でログインし、そのセッションで読み書きする。
+             doc/reddit-design.md §5。ログインの Cookie は exe の隣の ChBrowser.exe.WebView2 フォルダに保存され、再起動後も残る。 -->
+        <Separator Margin="0,4,0,12" />
+        <TextBlock Text="reddit" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,8">
+            reddit は閲覧にもログインが必要です。「ログイン」でアプリ内のブラウザ窓が開くので、reddit のページでログインしてください
+            (パスワード等はアプリには渡りません)。ログイン状態はアプリ内ブラウザに保存され、次回起動後もそのまま使えます。
+            ログインが切れた場合は、reddit を開いたときに自動でログイン窓が開きます。
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#A07020" FontSize="11"
+                   Margin="0,0,0,8">
+            ※ 公式 API の登録ではなく、ログイン済みブラウザと同じ経路で通信します。要求は 1 秒以上の間隔を空けて送りますが、
+            reddit 側で自動アクセスと判断されるとアカウントが制限される可能性はゼロではありません。
+        </TextBlock>
+
+        <TextBlock Text="ログイン状態" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <DockPanel HorizontalAlignment="Left" Margin="0,0,0,8">
+            <Button DockPanel.Dock="Right" Content="ログアウト" Padding="10,4" Margin="8,0,0,0"
+                    Command="{Binding RedditLogoutCommand}" />
+            <Button DockPanel.Dock="Right" Content="ログイン" Padding="10,4" Margin="8,0,0,0"
+                    Command="{Binding RedditLoginCommand}" />
+            <Border Background="#F8F8F8" BorderBrush="#DDD" BorderThickness="1" Padding="10,6" MinWidth="320">
+                <TextBlock Text="{Binding RedditLoginStatus}" TextWrapping="Wrap" />
+            </Border>
+        </DockPanel>
+
+        <TextBlock Text="接続テスト" FontWeight="SemiBold" Margin="0,4,0,4" />
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="#666"
+                   Margin="0,0,0,4">
+            ログイン状態・一覧・スレ・続き (more)・購読一覧などを実際に取得して、応答の状態を確かめます
+            (結果は data/reddit.com/probe.txt にも保存されます)。
+        </TextBlock>
+        <Button Content="接続テスト" Width="120" HorizontalAlignment="Left" Padding="8,4" Margin="0,0,0,6"
+                Command="{Binding RedditProbeCommand}" />
+        <TextBox Text="{Binding RedditProbeResult, Mode=OneWay}"
+                 IsReadOnly="True"
+                 TextWrapping="Wrap"
+                 FontFamily="Consolas, MS Gothic"
+                 FontSize="11"
+                 MinHeight="60"
+                 MaxHeight="260"
+                 VerticalScrollBarVisibility="Auto"
+                 Margin="0,0,0,12" />
+
     </StackPanel>
 </UserControl>

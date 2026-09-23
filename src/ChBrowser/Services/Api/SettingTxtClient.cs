@@ -45,7 +45,7 @@ public sealed class SettingTxtClient
         var path = _paths.SettingTxtPath(board.Host, board.DirectoryName);
         await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
 
-        return Parse(bytes, provider.TextEncoding);
+        return provider.ParseBoardInfo(bytes);
     }
 
     /// <summary>ローカル保存済みの SETTING.TXT があれば読み込んでパースする。なければ null。</summary>
@@ -54,7 +54,7 @@ public sealed class SettingTxtClient
         var path = _paths.SettingTxtPath(board.Host, board.DirectoryName);
         if (!File.Exists(path)) return null;
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        return Parse(bytes, ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).TextEncoding);
+        return ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ParseBoardInfo(bytes);
     }
 
     /// <summary>ローカルに無ければ取得して保存、有ればそのまま読む。
@@ -85,7 +85,8 @@ public sealed class SettingTxtClient
         return int.TryParse(v.Trim(), out var n) ? n * 2 : null;
     }
 
-    private static IReadOnlyDictionary<string, string> Parse(byte[] bytes, Encoding encoding)
+    /// <summary>SETTING.TXT 形式 (<c>KEY=VALUE</c> 行) のパース。提供者の <see cref="ChBrowser.Services.Bbs.IBbsProvider.ParseBoardInfo"/> の既定実装。</summary>
+    public static IReadOnlyDictionary<string, string> ParseKeyValue(byte[] bytes, Encoding encoding)
     {
         var text  = encoding.GetString(bytes);
         var lines = text.Split('\n');

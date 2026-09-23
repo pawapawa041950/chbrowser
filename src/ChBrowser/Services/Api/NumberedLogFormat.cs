@@ -78,17 +78,36 @@ public static class NumberedLogFormat
             DateText:    WebUtility.HtmlDecode(f[3]),
             Id:          f.Length >= 7 ? WebUtility.HtmlDecode(f[6]) : "",
             Body:        DecodeBody(f[4]),
-            ThreadTitle: title.Length > 0 ? title : null);
+            ThreadTitle: title.Length > 0 ? title : null,
+            Ext:         f.Length >= 8 ? ParseExtra(WebUtility.HtmlDecode(f[7])) : null);
     }
 
-    /// <summary>1 レスを 1 行に。<paramref name="extraJson"/> は拡張 JSON (無ければ空)。</summary>
+    /// <summary>1 レスを 1 行に。拡張 JSON は <paramref name="extraJson"/> が指定されればそれを、無ければ <see cref="Post.Ext"/> を直列化する。</summary>
     public static string FormatLine(Post p, string? extraJson = null)
         => string.Join("<>", new[]
         {
             p.Number.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Esc(p.Name), Esc(p.Mail), Esc(p.DateText), EncodeBody(p.Body),
-            Esc(p.ThreadTitle ?? ""), Esc(p.Id), Esc(extraJson ?? ""),
+            Esc(p.ThreadTitle ?? ""), Esc(p.Id), Esc(extraJson ?? SerializeExtra(p.Ext)),
         });
+
+    private static readonly System.Text.Json.JsonSerializerOptions ExtraJsonOptions = new()
+    {
+        PropertyNamingPolicy   = System.Text.Json.JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>拡張情報を 8 列目用の JSON にする (null なら空文字 = 従来と同じ行)。</summary>
+    public static string SerializeExtra(PostExtra? ext)
+        => ext is null ? "" : System.Text.Json.JsonSerializer.Serialize(ext, ExtraJsonOptions);
+
+    /// <summary>8 列目の JSON を拡張情報に。空 / 壊れた JSON は null (= 読み飛ばし。ログ全体は読める)。</summary>
+    public static PostExtra? ParseExtra(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<PostExtra>(json, ExtraJsonOptions); }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
 
     /// <summary>マーカー行 + 全レスを UTF-8 バイト列にする (末尾 LF あり)。</summary>
     public static byte[] Serialize(string providerId, IEnumerable<Post> posts)

@@ -75,6 +75,14 @@ public static partial class WebView2Helper
         _environmentTask ??= CoreWebView2Environment.CreateAsync();
     }
 
+    /// <summary>アプリ共通の CoreWebView2Environment (user data folder = exe の隣の <c>ChBrowser.exe.WebView2</c>)。
+    /// reddit のログインセッション用 WebView はこれに別プロファイル (<c>ProfileName = "reddit"</c>) で載せる。</summary>
+    internal static Task<CoreWebView2Environment> GetEnvironmentAsync()
+    {
+        StartWarmup();
+        return _environmentTask!;
+    }
+
     /// <summary>warmup 済み environment を使って <see cref="WebView2.EnsureCoreWebView2Async"/> を呼ぶ。
     /// 失敗したら通常パスに fallback。完了後に <see cref="InstallWebResourceHandlers"/> を呼ぶ。
     /// PostDialog のプレビューペインなど、添付プロパティ経由を通らない WebView2 を初期化したいケースでも

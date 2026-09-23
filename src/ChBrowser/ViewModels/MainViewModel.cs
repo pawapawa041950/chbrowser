@@ -208,6 +208,20 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// 設定でメアドが空なら "" (= ステータスバーに表示しない)。</summary>
     [ObservableProperty] private string _donguriLoginStatus = "";
 
+    /// <summary>ステータスバーの掲示板ログイン状態 (ログインを持つ掲示板ごとに 1 項目。「reddit: u/xxx」「reddit: 未ログイン」等)。
+    /// App が <see cref="RegisterProviderAuth"/> で登録し、状態の変化で文言が変わる。クリックでログイン / 確認。</summary>
+    public ObservableCollection<ProviderAuthStatusItem> ProviderAuthStatuses { get; } = new();
+
+    /// <summary>掲示板のログイン (<see cref="ChBrowser.Services.Bbs.IProviderAuth"/>) をステータスバーに載せる。
+    /// <paramref name="uiInvoke"/> は状態変化 (別スレッドから来うる) を UI スレッドで反映するためのもの。</summary>
+    public ProviderAuthStatusItem RegisterProviderAuth(ChBrowser.Services.Bbs.IProviderAuth auth, Action<Action> uiInvoke)
+    {
+        var item = new ProviderAuthStatusItem(auth);
+        auth.StateChanged += (_, _) => uiInvoke(item.Refresh);
+        ProviderAuthStatuses.Add(item);
+        return item;
+    }
+
     /// <summary>マウスジェスチャー入力中のリアルタイム表示 (Phase 16+)。</summary>
     [ObservableProperty] private string _gestureStatus = "";
 
@@ -469,7 +483,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 break;
             case AddressBarTargetKind.Thread:
                 AddressBarHasError = false;
-                await OpenThreadByUrlAsync(target.Host, target.Directory, target.ThreadKey, target.PostNumber).ConfigureAwait(true);
+                await OpenThreadByUrlAsync(target.Host, target.Directory, target.ThreadKey, target.PostNumber, target.PostId).ConfigureAwait(true);
                 break;
             default:
                 AddressBarHasError = true;
@@ -528,7 +542,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// <summary>スレ URL を開く: 既存 ThreadTab があればアクティブ化、無ければ新規。
     /// <paramref name="scrollToPostNumber"/> > 0 のとき、開いた直後に JS へ scrollToPost を push する
     /// (= 5ch.io URL に「/&lt;dir&gt;/&lt;key&gt;/&lt;N&gt;」のレス番号が含まれているクリック経路用)。</summary>
-    public async Task OpenThreadByUrlAsync(string host, string dir, string key, long scrollToPostNumber = 0)
+    public async Task OpenThreadByUrlAsync(string host, string dir, string key, long scrollToPostNumber = 0, string? postId = null)
     {
         var rootIn = DataPaths.ExtractRootDomain(host);
         foreach (var tab in AllThreadTabs)
@@ -538,6 +552,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 string.Equals(tab.ThreadKey,           key, StringComparison.Ordinal))
             {
                 MaybeActivateThreadTab(tab, activate: true); // 所属ペインをアクティブにして選択
+                if (scrollToPostNumber <= 0) scrollToPostNumber = ResolvePostIdToNumber(tab.Board, key, postId);
                 if (scrollToPostNumber > 0)
                     tab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
                 return;
@@ -548,6 +563,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         var board = ResolveBoard(host, dir, "");
         board = await EnrichUnknownBoardNameAsync(board).ConfigureAwait(true);
         await OpenThreadAsync(board, new ThreadInfo(key, "", 0, 0)).ConfigureAwait(true);
+        // 投稿 ID でレスを指す URL (reddit のコメント付き URL) は、取得後の meta.json で番号に直す
+        if (scrollToPostNumber <= 0) scrollToPostNumber = ResolvePostIdToNumber(board, key, postId);
         if (scrollToPostNumber > 0)
         {
             // 新タブ生成パス: 上の OpenThreadFromListAsync が OpenThreadAsync を await しているので、
@@ -562,6 +579,14 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 newTab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
             }
         }
+    }
+
+    /// <summary>掲示板側の投稿 ID (reddit のコメント id) をアプリ内のレス番号に直す (スナップショット方式の <c>meta.json</c> を引く)。
+    /// 解決できなければ 0 (= スクロールしない)。</summary>
+    private long ResolvePostIdToNumber(Board board, string key, string? postId)
+    {
+        if (string.IsNullOrEmpty(postId)) return 0;
+        return _datClient.LoadThreadMeta(board, key)?.NumberOf(postId) ?? 0;
     }
 
     // -----------------------------------------------------------------
@@ -636,7 +661,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 total += TotalBoards(cats);
             }
             StatusMessage = total == 0
-                ? "板一覧未取得 - ファイル → 5ch板一覧更新 を実行してください"
+                ? "板一覧未取得 - メニューの 板一覧 → 5ch板一覧更新 を実行してください"
                 : $"板一覧 (キャッシュ): {total} 板";
         }
         catch (Exception ex)
@@ -791,10 +816,15 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         // JS 側 (下の anchorRules) が同じ規則を見る。
         ChBrowser.Services.Bbs.AnchorRuleRegistry.Configure(config.AnchorRules);
 
+        // スレ一覧の既定の並び順 (並び順を持つ掲示板ごと)、スナップショット方式の続き (more) の展開回数
+        ChBrowser.Services.Bbs.ListingSortDefaults.Apply(EffectiveListingSortDefaults(config));
+        _datClient.SnapshotMaxExpansions = Math.Clamp(config.RedditMaxExpansions, 0, 50);
+
         // スレ表示 (thread.js) 向け。
-        // 提供者依存の項目 (レス番号ジャンプ桁数 / スレリンク判定 / アンカー規則) は現状 5ch のものを全タブ共通で送る。
-        // 段階 2 (他掲示板) でタブ単位の提供者に応じて送り分ける (doc/multi-bbs-design.md §8.1)。
-        var primary = ChBrowser.Services.Bbs.BbsRegistry.FiveCh;
+        // 提供者依存の項目 (レス番号の表示可否 / 番号ジャンプ桁数 / アンカー規則) はタブごとに送り分ける
+        // (ThreadTabViewModel.ProviderConfig。appendPosts に同梱 + setProviderConfig で即時反映)。
+        // ここは全タブ共通の項目と、全提供者ぶんのスレリンク判定だけ。
+        foreach (var openTab in AllThreadTabs) openTab.RefreshProviderConfig();
         ThreadConfigJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             type                  = "setConfig",
@@ -803,13 +833,9 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             idHighlightThreshold  = config.IdHighlightThreshold,
             metaPopupClickOnly    = config.MetaPopupClickOnly,
             debug                 = config.DebugDisableRecovery,
-            postNumberDigits      = primary.PostNumberDigits,
             // 登録済み全提供者のスレ URL を本文中リンクとして認識させる (= 他掲示板の URL も提供者追加で自動追従)。
             threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
                                         .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
-                                        .ToArray(),
-            anchorRules           = ChBrowser.Services.Bbs.AnchorRuleRegistry.For(primary).Rules
-                                        .Select(r => new { name = r.Name, pattern = r.Pattern, kind = r.Kind, ranges = r.Ranges, enabled = r.Enabled })
                                         .ToArray(),
         });
 
@@ -865,3 +891,23 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
 /// <para><see cref="IsChain"/> = true は「連鎖あぼーん」項目 (= 特定ルールに帰属しない、無効化メニュー項目)。</para>
 /// <para><see cref="Rule"/> = null は対象ルールが既に削除された状態 (= ルールへ飛ぶ操作も無効、件数のみ表示)。</para></summary>
 public sealed record AboneBreakdownItem(System.Guid? RuleId, ChBrowser.Models.NgRule? Rule, int Count, bool IsChain);
+
+/// <summary>ステータスバーの掲示板ログイン状態 1 項目。</summary>
+public sealed partial class ProviderAuthStatusItem : ObservableObject
+{
+    public ChBrowser.Services.Bbs.IProviderAuth Auth { get; }
+    [ObservableProperty] private string _text = "";
+
+    public ProviderAuthStatusItem(ChBrowser.Services.Bbs.IProviderAuth auth)
+    {
+        Auth = auth;
+        Refresh();
+    }
+
+    public string ToolTip => $"{ChBrowser.Services.Bbs.BbsRegistry.FindById(Auth.ProviderId)?.DisplayName ?? Auth.ProviderId} のログイン状態 (クリックでログイン / 確認。設定 → 認証 でも操作できます)";
+
+    public void Refresh() => Text = ChBrowser.Services.Bbs.ProviderAuthDisplay.StatusBarText(Auth);
+
+    /// <summary>クリック: ログイン中なら状態を確かめ直し、そうでなければログイン窓を出す。</summary>
+    public void Activate() => _ = ChBrowser.Services.Bbs.ProviderAuthDisplay.ActivateAsync(Auth);
+}

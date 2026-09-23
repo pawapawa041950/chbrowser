@@ -13,6 +13,7 @@
 //   { type: 'paneActivated' }               — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
 //   { type: 'shortcut', descriptor }        — Phase 16: ショートカット/マウス操作のディスパッチ要求
 //   { type: 'gesture',  descriptor }        — Phase 16: マウスジェスチャー認識結果のディスパッチ要求
+//   { type: 'vote', number, dir, prev }     — レスの評価ボタン (dir: 1 / -1 / 0、prev: 押す前)。結果は updateVotes で返る
 //
 // 各タブが専属 WebView2 を持つので、タブ切替で DOM が再構築されることはない。
 // scroll target の同梱と tryScrollToTarget は「初回ロード時 (idx.json からの位置復元)」用。
@@ -66,6 +67,11 @@
      *  appendPosts のペイロード ownPostNumbers で初期化 / 上書き、
      *  updateOwnPosts メッセージで増分更新される。renderPost のレンダ判定に使う。 */
     let ownPostNumbers = new Set();
+    /** アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。appendPosts / resync の myVotes で上書き、updateVotes で更新。
+     *  取得時点の評価 (ext.myVote) より優先する。 */
+    let myVotes = new Map();
+    /** 評価を送信中のレス番号 (結果が返るまで同じレスのボタンは押せない)。 */
+    const votePending = new Set();
     /** num → 当該レスを >>参照しているレス番号配列。renderCurrentViewMode で全再構築、
      *  appendPosts (flat) で増分更新。返信数バッジ生成のために常に最新を保つ。 */
     let currentReverseIndex = new Map();
@@ -466,14 +472,81 @@
     }
     var anchorRules = compileAnchorRules(DEFAULT_ANCHOR_RULES);
 
-    // 添付ファイル名 → レス番号 (attachment 規則の解決用)。レスの attachments[].filename から組む。
+    // ---- 掲示板提供者ごとのスレ表示設定 (doc/reddit-design.md §3 B11) ----
+    //   C# がタブごとに appendPosts / resyncThreadState の provider として同梱し、設定変更時は setProviderConfig で送る。
+    //   { providerId, showPostNumbers: bool, postNumberDigits: number (0 = 番号ジャンプ無効), anchorRules: [...] }
+    var SHOW_POST_NUMBERS = true;
+    // 名前欄の「ワッチョイ」(xxxx-yyyy) を検出して装飾するか。5ch 系の慣習なので reddit では切る (名前に xxxx-xxxx を含みうる)。
+    var USE_WATCHOI = true;
+    // レスの評価ボタン。null なら評価できない (評価値 ext.score があれば表示だけ)。
+    //   { mode: 'updown' | 'up', upLabel: '👍', downLabel: '👎', canUndo: bool }
+    var VOTING = null;
+    var lastProviderConfigKey = '';
+    function applyProviderConfig(cfg) {
+        if (!cfg || typeof cfg !== 'object') return;
+        const key = JSON.stringify(cfg);
+        if (key === lastProviderConfigKey) return;     // 毎バッチ同じものが来るので変化が無ければ何もしない
+        lastProviderConfigKey = key;
+        if (typeof cfg.postNumberDigits === 'number') NUM_JUMP_MAX_DIGITS = Math.max(0, Math.min(12, cfg.postNumberDigits));
+        if (typeof cfg.watchoi === 'boolean') USE_WATCHOI = cfg.watchoi;
+        if ('voting' in cfg) VOTING = (cfg.voting && typeof cfg.voting === 'object') ? cfg.voting : null;
+        if (typeof cfg.showPostNumbers === 'boolean') {
+            SHOW_POST_NUMBERS = cfg.showPostNumbers;
+            document.documentElement.classList.toggle('hide-post-numbers', !SHOW_POST_NUMBERS);
+        }
+        if (Array.isArray(cfg.anchorRules)) {
+            // 規則が変わるとアンカー抽出結果 (= 返信ツリー / 逆引き) が変わる。通常はレス到着前に届くので
+            // 再描画はしないが、既にレスがある場合は逆引きだけ最新化しておく (表示はタブ再オープンで揃う)。
+            anchorRules = compileAnchorRules(cfg.anchorRules);
+            if (allPosts.length > 0) currentReverseIndex = buildReverseIndex();
+        }
+    }
+
+    // レス番号を見せない掲示板 (reddit) 用の見た目と、拡張情報 (返信先 / 評価値) の見た目。
+    // テーマ CSS (ユーザ編集可) に依存しないよう JS から注入する。番号の文字は 1em 幅の外へ押し出して隠し、
+    // 代わりに ▸ を出す (色は post-no の返信数による色分けをそのまま継ぐ)。クリックでのメニューは従来どおり。
+    (function injectProviderStyles() {
+        const css =
+            'html.hide-post-numbers .post-no{display:inline-block;position:relative;width:1em;overflow:hidden;white-space:nowrap;text-indent:2em;vertical-align:text-bottom}' +
+            'html.hide-post-numbers .post-no::before{content:"\\25B8";position:absolute;left:0;top:0;text-indent:0}' +
+            '.post-parent-ref{margin-right:.2em}' +
+            '.post-score{color:#b06000;margin-right:.4em;font-size:.9em}' +
+            '.vote-btn{cursor:pointer;border-radius:3px;padding:0 .2em;user-select:none}' +
+            '.vote-btn:hover{background:rgba(176,96,0,.15)}' +
+            '.vote-btn.active{background:rgba(176,96,0,.25);font-weight:bold}' +
+            '.vote-btn.vote-down.active{background:rgba(80,100,200,.25)}' +
+            '.vote-btn.disabled{cursor:default}' +
+            '.post-vote.pending{opacity:.5}';
+        const el = document.createElement('style');
+        el.id = 'chb-provider-styles';
+        el.textContent = css;
+        (document.head || document.documentElement).appendChild(el);
+    })();
+
+    /** レス p が参照しているレス番号範囲の一覧 = 本文のアンカー ∪ 構造上の返信先 (reddit の親コメント = ext.parentNumber)。
+     *  ツリー・返信数・返信ポップアップ・祖先チェーンはすべてこれで辿る。親番号を持たない掲示板 (5ch 等) では
+     *  extractAnchorRefs と同じ結果になる。C# 側 (連鎖 NG / 自分への返信検知) も同じく両方を見る。 */
+    function postRefs(p) {
+        if (!p) return [];
+        const refs = extractAnchorRefs(p.body || '');
+        const parent = p.ext && typeof p.ext.parentNumber === 'number' ? p.ext.parentNumber : 0;
+        if (parent > 0) refs.unshift({ from: parent, to: parent });
+        return refs;
+    }
+
+    // 添付ファイル名 → レス番号 (attachment 規則の解決用)。レスの attachments[].filename / ext.attachments[].fileName から組む。
     let attachmentIndex = new Map();
     function normalizeAttachmentName(name) { return String(name || '').trim().toLowerCase(); }
     function registerAttachments(p) {
-        if (!p || !Array.isArray(p.attachments)) return;
-        for (const a of p.attachments) {
-            const key = normalizeAttachmentName(a && a.filename);
-            if (key && !attachmentIndex.has(key)) attachmentIndex.set(key, p.number);
+        if (!p) return;
+        const lists = [];
+        if (Array.isArray(p.attachments)) lists.push(p.attachments);
+        if (p.ext && Array.isArray(p.ext.attachments)) lists.push(p.ext.attachments);
+        for (const list of lists) {
+            for (const a of list) {
+                const key = normalizeAttachmentName(a && (a.filename || a.fileName));
+                if (key && !attachmentIndex.has(key)) attachmentIndex.set(key, p.number);
+            }
         }
     }
     /** 規則の正規表現マッチ結果から {spec, rule} を取り出す。attachment 規則は番号へ解決する (解決不能なら null)。 */
@@ -916,7 +989,7 @@
     // ---- テンプレートエンジン (post.html を読んで {{var}} / {{#if}}{{/if}} を解釈) ----
 
     // raw 挿入する変数名 (HTML 既処理済)。それ以外は HTML エスケープして挿入。
-    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children']);
+    const RAW_TEMPLATE_VARS = new Set(['name', 'body', 'media', 'children', 'parentRef', 'score']);
 
     function _isTemplateTruthy(v) {
         if (v === undefined || v === null) return false;
@@ -1000,6 +1073,7 @@
     }
 
     let _postTemplateChunks = null;
+    let _templateHasExtVars = false;
     function _ensurePostTemplate() {
         if (_postTemplateChunks !== null) return;
         const el = document.getElementById('post-template');
@@ -1009,6 +1083,9 @@
             _postTemplateChunks = [];
             return;
         }
+        // 拡張情報 (返信先 / 評価値) の変数を持たない旧テンプレ (ユーザが編集して保存したもの) では、
+        // postDataFor が名前欄の後ろに差し込む (= 旧テンプレでも reddit の返信先が見えるように)。
+        _templateHasExtVars = raw.indexOf('{{score}}') >= 0;
         try { _postTemplateChunks = _parseTemplate(raw); }
         catch (e) {
             console.error('[chbrowser] post template parse error:', e);
@@ -1039,6 +1116,121 @@
         return false;
     }
 
+    /** 拡張情報 (post.ext) から見出しに出す部品を作る。
+     *  parentRef: 構造上の返信先 (reddit の親コメント) を "↳ 投稿者" のアンカー要素にする。既存のアンカーと同じ
+     *             a.anchor[data-from] なので、ホバーで親レスのポップアップ、クリックで親へスクロールがそのまま効く。
+     *  score    : 評価値 (reddit の score) を "👍123" に (賛成 − 反対。負なら "👎2" のように絶対値)。 */
+    function buildExtHeaderParts(p) {
+        const ext = p && p.ext;
+        let parentLine = '';
+        let score = '';
+        // 構造上の返信先 (reddit の親コメント) は、レス順表示のときだけ本文 1 行目に ">>返信先" として出す。
+        // ツリー表示では親子関係が木そのもので見えるので出さない (ユーザ要望 2026-09-23)。
+        // 既存のアンカーと同じ a.anchor[data-from] なので、ホバーで親レスのポップアップ、クリックで親へスクロールが効く。
+        if (viewMode === 'flat' && ext && typeof ext.parentNumber === 'number' && ext.parentNumber > 0) {
+            const n = ext.parentNumber;
+            const parentPost = postsByNumber.get(n);
+            const who = (ext.parentName || (parentPost && parentPost.name) || '').trim();
+            const label = '>>' + (SHOW_POST_NUMBERS ? String(n) : (who || '返信先'));
+            parentLine = '<a class="anchor post-parent-ref" data-from="' + n + '" data-to="' + n
+                       + '" data-spec="' + n + '">' + escapeHtml(label) + '</a>';
+        }
+        score = buildScoreHtml(p);
+        return { parentLine: parentLine, score: score };
+    }
+
+    /** レス p に対する自分の評価 (1 / -1 / 0)。アプリから送ったもの (myVotes) を優先し、無ければ取得時点の ext.myVote。 */
+    function effectiveVote(p) {
+        if (!p) return 0;
+        if (myVotes.has(p.number)) return myVotes.get(p.number) | 0;
+        return (p.ext && typeof p.ext.myVote === 'number') ? p.ext.myVote : 0;
+    }
+
+    /** 表示する評価値 = 取得時点の値から取得時点の自分の評価を引き、今の自分の評価を足す (ext.score が無ければ null)。 */
+    function displayScore(p) {
+        const ext = p && p.ext;
+        if (!ext || typeof ext.score !== 'number') return null;
+        const base = (typeof ext.myVote === 'number') ? ext.myVote : 0;
+        return ext.score - base + effectiveVote(p);
+    }
+
+    /** 評価値 / 評価ボタンの HTML (テンプレの {{score}}。生 HTML)。
+     *  評価できない掲示板: 評価値だけ ("👍123"、負なら "👎2")。
+     *  賛否 (reddit): [👍123][👎] — 評価値は符号の側のボタンに付ける (負なら [👍][👎2])。押し済みは .active。
+     *  いいねのみ (ふたばの「そうだね」等): [👍3]。 */
+    function buildScoreHtml(p) {
+        const score = displayScore(p);
+        const up    = VOTING && VOTING.upLabel   ? VOTING.upLabel   : '\u{1F44D}';
+        const down  = VOTING && VOTING.downLabel ? VOTING.downLabel : '\u{1F44E}';
+        const canVote = !!VOTING && !!(p && p.ext && p.ext.externalId);
+        if (!canVote) {
+            if (score === null) return '';
+            return escapeHtml(score < 0 ? down + (-score) : up + score);
+        }
+        const mine = effectiveVote(p);
+        const n    = p.number;
+        const pend = votePending.has(n) ? ' pending' : '';
+        const upCount   = score === null ? '' : (VOTING.mode === 'updown' ? (score >= 0 ? String(score) : '') : String(score));
+        const downCount = score === null ? '' : (score < 0 ? String(-score) : '');
+        // 取り消せない掲示板では押し済みのボタンは押せない
+        const upDisabled = mine === 1 && VOTING.canUndo === false;
+        let html = '<span class="post-vote' + pend + '" data-number="' + n + '">'
+                 + '<span class="vote-btn vote-up' + (mine === 1 ? ' active' : '') + (upDisabled ? ' disabled' : '')
+                 + '" data-dir="1" title="' + (mine === 1 ? '評価を取り消す' : 'いいね') + '">' + escapeHtml(up + upCount) + '</span>';
+        if (VOTING.mode === 'updown') {
+            html += '<span class="vote-btn vote-down' + (mine === -1 ? ' active' : '')
+                  + '" data-dir="-1" title="' + (mine === -1 ? '評価を取り消す' : 'よくない') + '">' + escapeHtml(down + downCount) + '</span>';
+        }
+        return html + '</span>';
+    }
+
+    /** レス n の評価表示を DOM 上の全箇所 (本体 / ツリーの重複表示 / ポップアップ) で描き直す。 */
+    function refreshVoteDom(n) {
+        const p = postsByNumber.get(n);
+        if (!p) return;
+        const html = buildScoreHtml(p);
+        for (const el of document.querySelectorAll('.post-vote[data-number="' + n + '"]')) el.outerHTML = html;
+    }
+
+    /** 評価ボタンのクリック: 押した時点で表示を変え (楽観更新)、C# に送る。結果は updateVotes で確定 / 巻き戻し。 */
+    function onVoteClick(btn) {
+        const box = btn.closest('.post-vote');
+        if (!box || !VOTING) return;
+        const n = parseInt(box.dataset.number, 10);
+        const p = postsByNumber.get(n);
+        if (!p || votePending.has(n)) return;
+        const dir  = parseInt(btn.dataset.dir, 10) || 0;
+        const prev = effectiveVote(p);
+        const next = prev === dir ? 0 : dir;                 // 同じボタンをもう一度 = 取り消し
+        if (next === 0 && VOTING.canUndo === false) return;  // 取り消せない掲示板
+        if (dir < 0 && VOTING.mode !== 'updown') return;
+        myVotes.set(n, next);
+        votePending.add(n);
+        refreshVoteDom(n);
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage({ type: 'vote', number: n, dir: next, prev: prev });
+        }
+    }
+
+    /** updateVotes: C# からの評価の確定 (ok) / 巻き戻し (!ok、dir は押す前の状態)。 */
+    function applyVoteChanges(changes) {
+        for (const c of changes || []) {
+            if (!c || typeof c.number !== 'number') continue;
+            votePending.delete(c.number);
+            myVotes.set(c.number, c.dir | 0);
+            refreshVoteDom(c.number);
+        }
+    }
+
+    function loadMyVotes(obj) {
+        myVotes = new Map();
+        if (!obj || typeof obj !== 'object') return;
+        for (const k of Object.keys(obj)) {
+            const n = parseInt(k, 10);
+            if (!isNaN(n)) myVotes.set(n, obj[k] | 0);
+        }
+    }
+
     /** post 1 件の view-data を作る (テンプレに渡す変数たち)。 */
     function postDataFor(p, isEmbedded, omitId, children) {
         const num     = p.number;
@@ -1046,13 +1238,23 @@
         const count   = replies.length;
         // body は文字本文、media は末尾に並べる画像/動画/YouTube スロット HTML。
         const built = buildBodyAndMedia(p.body || '');
+        const ext   = buildExtHeaderParts(p);
+        _ensurePostTemplate();
+        let nameHtml = buildBodyHtml(p.name || '');
+        if (!_templateHasExtVars && ext.score) {
+            nameHtml += ' <span class="post-score">' + ext.score + '</span>';
+        }
+        const bodyHtml = ext.parentLine ? ext.parentLine + (built.body ? '<br>' + built.body : '') : built.body;
         return {
             number:         num,
-            name:           buildBodyHtml(p.name || ''),
+            name:           nameHtml,
+            parentRef:      '',                      // 旧: 見出しの返信先。本文 1 行目 (レス順表示のみ) に移したので常に空 (テンプレ互換のため変数は残す)
+            score:          ext.score,               // 評価値 / 評価ボタンの HTML (reddit 等)。無ければ空
+            showNumber:     SHOW_POST_NUMBERS,
             mail:           p.mail || '',            // メール欄 (sage 等)。RAW_TEMPLATE_VARS に含めないので escape 適用。
             date:           p.dateText || '',
             id:             p.id || '',
-            body:           built.body,
+            body:           bodyHtml,
             media:          built.media,
             replyCount:     count,
             replyNumbers:   replies.join(','),       // バッジの data-replies 用 (ホバーポップアップで使う)
@@ -1109,7 +1311,7 @@
         const rev = new Map();
         for (const post of posts) {
             const seen = new Set();
-            for (const r of extractAnchorRefs(post.body || '')) {
+            for (const r of postRefs(post)) {
                 const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
                 if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
                 for (const n of inRange) {
@@ -1132,7 +1334,7 @@
         if (!p) return [];
         const seen = new Set();
         const result = [];
-        for (const r of extractAnchorRefs(p.body || '')) {
+        for (const r of postRefs(p)) {
             const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
             if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
             for (const n of inRange) {
@@ -1159,7 +1361,7 @@
             const post = postsByNumber.get(cur);
             if (!post) break;
             let next = null;
-            for (const r of extractAnchorRefs(post.body || '')) {
+            for (const r of postRefs(post)) {
                 const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
                 if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
                 for (const n of inRange) {
@@ -1332,7 +1534,7 @@
         let children = '';
         if (!isEmbedded) {
             const emitted = new Set();
-            for (const r of extractAnchorRefs(p.body || '')) {
+            for (const r of postRefs(p)) {
                 const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
                 if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
                 for (const n of inRange) {
@@ -1412,7 +1614,7 @@
      *  reverseIndex を p の挿入「前」に加算しておくのは embedUnderParentReverse の overflow 計算の母数として参照されるため。 */
     function replayPostIntoDom(p) {
         const seen = new Set();
-        for (const r of extractAnchorRefs(p.body || '')) {
+        for (const r of postRefs(p)) {
             const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
             if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
             for (const n of inRange) {
@@ -1478,7 +1680,7 @@
 
     /** name HTML から最初の `xxxx-yyyy` 形式部分を抽出 (タグは事前ストリップ)。無ければ null。 */
     function extractWatchoi(nameHtml) {
-        if (!nameHtml) return null;
+        if (!nameHtml || !USE_WATCHOI) return null;   // ワッチョイの無い掲示板 (reddit: 名前が xxxx-xxxx を含みうる)
         const text = String(nameHtml).replace(STRIP_TAGS_RE, '');
         const m = text.match(WATCHOI_RE);
         return m ? m[0] : null;
@@ -3107,7 +3309,7 @@
     // ペイロードに必要な値 (name / id / watchoi / isOwn) は JS 側で post から抽出して渡す。
 
     function extractWatchoiFromName(name) {
-        if (!name) return '';
+        if (!name || !USE_WATCHOI) return '';
         // post.name は HTML を含むことがあるのでタグを剥がしてから検索
         const stripped = String(name).replace(/<[^>]+>/g, '');
         const m = stripped.match(/[A-Za-z0-9]{4}-[A-Za-z0-9]{4}/);
@@ -3307,6 +3509,7 @@
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
         if (e.key >= '0' && e.key <= '9') {
+            if (NUM_JUMP_MAX_DIGITS <= 0) return;       // 番号ジャンプの無い掲示板 (reddit: レス番号を見せない)
             e.preventDefault();
             if (numJumpBuf.length >= NUM_JUMP_MAX_DIGITS) numJumpBuf = ''; // 保険 (通常は最大桁で即確定済み)
             numJumpBuf += e.key;
@@ -3438,6 +3641,14 @@
     }, true);
 
     document.addEventListener('click', function (e) {
+        // 評価ボタン (👍 / 👎)
+        const voteBtn = e.target.closest && e.target.closest('.vote-btn');
+        if (voteBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!voteBtn.classList.contains('disabled')) onVoteClick(voteBtn);
+            return;
+        }
         // .post-no 左クリック → C# にコンテキストメニュー表示要求。anchor/URL ロジックより先に拾って早期 return。
         // 右クリックは別 listener (contextmenu) で同じ要求を出している (= どちらでもメニューが出る)。
         const postNo = e.target.closest && e.target.closest('.post-no');
@@ -4390,7 +4601,7 @@
                 // dedupTree-delta: DOM は batch 末の rebuildSectionB が一括描画する。
                 // reverseIndex は section A 既存 primary の返信バッジを最新化するためここで更新する。
                 const seen = new Set();
-                for (const r of extractAnchorRefs(p.body || '')) {
+                for (const r of postRefs(p)) {
                     const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
                     if (inRange.length > INLINE_EXPAND_RANGE_LIMIT) continue;
                     for (const n of inRange) {
@@ -4512,12 +4723,18 @@
             const msg = e.data;
             if (!msg || typeof msg !== 'object' || !msg.type) return;
             switch (msg.type) {
+                case 'setProviderConfig':
+                    applyProviderConfig(msg.config);
+                    break;
                 case 'appendPosts':
+                    // 提供者依存の設定 (レス番号の表示可否 / アンカー規則) はレス描画より前に適用する。
+                    if (msg.provider) applyProviderConfig(msg.provider);
                     // 「自分の書き込み」集合を上書き (= 毎バッチ送られてくる)。先に Set を更新してから
                     // appendPosts を呼ぶことで、レンダ時に postDataFor が正しい isOwn を読める。
                     if (Array.isArray(msg.ownPostNumbers)) {
                         ownPostNumbers = new Set(msg.ownPostNumbers);
                     }
+                    if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
                     window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental);
                     break;
                 case 'updateOwnPosts':
@@ -4526,6 +4743,9 @@
                     if (msg.value && Array.isArray(msg.value.changes)) {
                         applyOwnPostsChanges(msg.value.changes);
                     }
+                    break;
+                case 'updateVotes':
+                    applyVoteChanges(msg.changes);
                     break;
                 case 'setViewMode': window.setViewMode(msg.mode); break;
                 case 'setPreview':  window.setPreviewPost(msg.post); break;
@@ -4537,6 +4757,8 @@
                     // 全リセットしてから再初期化する。冪等。
                     (function () {
                         closeFrom(0);
+                        lastProviderConfigKey = '';
+                        if (msg.provider) applyProviderConfig(msg.provider);
                         const root = document.getElementById('posts');
                         if (root) root.innerHTML = '';
                         allPosts            = [];
@@ -4556,6 +4778,8 @@
                         if (Array.isArray(msg.ownPostNumbers)) {
                             ownPostNumbers = new Set(msg.ownPostNumbers);
                         }
+                        loadMyVotes(msg.myVotes);
+                        votePending.clear();
                         if (msg.filter && typeof msg.filter === 'object') {
                             currentFilter = {
                                 textQuery:   typeof msg.filter.textQuery === 'string' ? msg.filter.textQuery : '',

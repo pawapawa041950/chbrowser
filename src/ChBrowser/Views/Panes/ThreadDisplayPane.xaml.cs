@@ -120,6 +120,7 @@ public partial class ThreadDisplayPane : UserControl
             case "replyToPost":        HandleReplyToPost(sender, payload); break;
             case "ngAdd":              HandleNgAdd(sender, payload); break;
             case "toggleOwnPost":      HandleToggleOwnPost(sender, payload); break;
+            case "vote":               HandleVote(sender, payload); break;
             case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
             case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
             case "threadPreviewRequest": HandleThreadPreviewRequest(sender, payload); break;
@@ -905,6 +906,19 @@ public partial class ThreadDisplayPane : UserControl
         main.ToggleOwnPost(tab, num, isOwn);
     }
 
+    /// <summary>JS のレス評価ボタン (👍 / 👎) が押されたとき。number / dir (新しい状態 1・-1・0) / prev (押す前の状態) を受け取る。
+    /// 表示は JS が先に変えているので、結果 (確定 / 巻き戻し) は VotesUpdate で返る。</summary>
+    private void HandleVote(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (wv.DataContext is not ThreadTabViewModel tab) return;
+        if (Vm is not { } main) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
+        if (!payload.TryGetProperty("dir",    out var dProp) || !dProp.TryGetInt32(out var dir)) return;
+        var prev = payload.TryGetProperty("prev", out var pProp) && pProp.TryGetInt32(out var pv) ? pv : 0;
+        _ = main.VoteAsync(tab, num, dir, prev);
+    }
+
     /// <summary>JS の post-no クリックメニューで「返信」を選んだとき。
     /// 元レス番号を受け取り、書き込みダイアログを「&gt;&gt;N\n」入りで開く。</summary>
     private void HandleReplyToPost(object sender, JsonElement payload)
@@ -1024,7 +1038,7 @@ public partial class ThreadDisplayPane : UserControl
             // parsed.PostNumber に拾ってくれる (= アドレスバー入力経路と JS クリック経路で同じ抽出)。
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[openUrl] → OpenThreadByUrlAsync(host='{parsed.Host}', dir='{parsed.Directory}', key='{parsed.ThreadKey}', scrollToPost={parsed.PostNumber})");
-            _ = main.OpenThreadByUrlAsync(parsed.Host, parsed.Directory, parsed.ThreadKey, parsed.PostNumber);
+            _ = main.OpenThreadByUrlAsync(parsed.Host, parsed.Directory, parsed.ThreadKey, parsed.PostNumber, parsed.PostId);
             return;
         }
 

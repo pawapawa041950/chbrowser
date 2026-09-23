@@ -41,13 +41,16 @@ public enum AddressBarTargetKind
 
 /// <summary>パース結果。Kind=Invalid のときは他フィールドは空。
 /// <see cref="PostNumber"/> は Kind=Thread のときに URL 末尾のレス番号 (例: /1234567890/100) を入れる。
-/// レス番号指定なし、または Kind!=Thread のときは 0。</summary>
+/// レス番号指定なし、または Kind!=Thread のときは 0。
+/// <see cref="PostId"/> は番号ではなく掲示板側の投稿 ID でレスを指す URL (reddit のコメント付き URL) のときの ID。
+/// スレ取得後に <c>meta.json</c> の対応表で番号に直してスクロールする (<c>doc/reddit-design.md</c> §3 B6)。</summary>
 public sealed record AddressBarTarget(
     AddressBarTargetKind Kind,
     string               Host,
     string               Directory,
     string               ThreadKey,
-    long                 PostNumber = 0)
+    long                 PostNumber = 0,
+    string?              PostId     = null)
 {
     public static AddressBarTarget Invalid { get; } = new(AddressBarTargetKind.Invalid, "", "", "", 0);
 

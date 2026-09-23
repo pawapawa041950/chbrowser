@@ -30,6 +30,13 @@ public sealed class DatClient
     private readonly MonazillaClient _client;
     private readonly DataPaths       _paths;
 
+    /// <summary>スナップショット方式 (reddit) で 1 回の取得あたりに展開する「続き」(more) の上限。既定 10 (要求の予算が 10 分 100 件のため。doc/reddit-design.md D38)。</summary>
+    public int SnapshotMaxExpansions { get; set; } = 10;
+
+    /// <summary>スナップショット方式のスレの外部 ID → 番号の対応表 (<c>meta.json</c>)。無ければ null。</summary>
+    public ChBrowser.Services.Bbs.ThreadMeta? LoadThreadMeta(Board board, string threadKey)
+        => ChBrowser.Services.Bbs.ThreadMeta.Load(_paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey));
+
     public DatClient(MonazillaClient client, DataPaths paths)
     {
         _client = client;
@@ -53,11 +60,18 @@ public sealed class DatClient
         var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
         var path     = _paths.DatPath(board.Host, board.DirectoryName, threadKey);
 
-        if (!provider.UsesNativeDat)
+        switch (provider.FetchStrategy)
         {
-            return await ChBrowser.Services.Bbs.NumberedThreadFetcher
-                .FetchAsync(_client.Http, provider, board, threadKey, path, progress, ct)
-                .ConfigureAwait(false);
+            case ChBrowser.Services.Bbs.ThreadFetchStrategy.Snapshot:
+                return await ChBrowser.Services.Bbs.SnapshotThreadFetcher
+                    .FetchAsync(_client.Http, provider, board, threadKey, path,
+                                _paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey), progress, ct,
+                                SnapshotMaxExpansions)
+                    .ConfigureAwait(false);
+            case ChBrowser.Services.Bbs.ThreadFetchStrategy.NumberedDelta:
+                return await ChBrowser.Services.Bbs.NumberedThreadFetcher
+                    .FetchAsync(_client.Http, provider, board, threadKey, path, progress, ct)
+                    .ConfigureAwait(false);
         }
 
         var url = provider.ThreadFetchUrl(board, threadKey);
@@ -210,6 +224,8 @@ public sealed class DatClient
         var any = false;
         if (File.Exists(datPath)) { File.Delete(datPath); any = true; }
         if (File.Exists(idxPath)) { File.Delete(idxPath); }
+        var metaPath = _paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey);
+        if (File.Exists(metaPath)) { File.Delete(metaPath); }
         return any;
     }
 

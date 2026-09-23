@@ -79,6 +79,25 @@ public sealed partial class PostFormViewModel : ObservableObject
     /// <summary>認証コードをクリップボードへコピーし、<see cref="AuthUrl"/> を既定ブラウザで開く。</summary>
     public IRelayCommand OpenAuthPageCommand { get; }
 
+    /// <summary>返信先の投稿 ID (reddit: <c>t1_xxx</c>)。<see cref="PostFormSpec.SupportsReplyTarget"/> の掲示板でだけ使い、
+    /// 本文に <c>&gt;&gt;N</c> を入れる代わりにこれで返信先を指定する。null ならスレ本体への返信。</summary>
+    [ObservableProperty]
+    private string? _replyTargetExternalId;
+
+    /// <summary>ダイアログに出す返信先の説明 (例「u/alice のコメント: 本文の冒頭…」)。空なら返信先の行を出さない。</summary>
+    [ObservableProperty]
+    private string _replyTargetLabel = "";
+
+    /// <summary>返信先を外す (= スレ本体への返信にする)。</summary>
+    public IRelayCommand ClearReplyTargetCommand { get; }
+
+    /// <summary>返信先をセットする (<paramref name="externalId"/> が null なら外す)。</summary>
+    public void SetReplyTarget(string? externalId, string label)
+    {
+        ReplyTargetExternalId = externalId;
+        ReplyTargetLabel      = externalId is null ? "" : label;
+    }
+
     /// <summary>板の SETTING.TXT で指定された 1 投稿あたりの行数上限 (= <c>BBS_LINE_NUMBER</c>)。
     /// 取得失敗 / SETTING.TXT に該当キーが無い場合は null。表示時は「上限不明」扱いになる。</summary>
     [ObservableProperty]
@@ -137,6 +156,7 @@ public sealed partial class PostFormViewModel : ObservableObject
         AuthMode     = PostForm.UsesDonguriAuth ? defaultAuthMode : PostAuthMode.None;
         SubmitCommand = new AsyncRelayCommand(SubmitAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(Message));
         OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
+        ClearReplyTargetCommand = new RelayCommand(() => SetReplyTarget(null, ""));
     }
 
     /// <summary>スレ立て用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
@@ -154,6 +174,7 @@ public sealed partial class PostFormViewModel : ObservableObject
         SubmitCommand = new AsyncRelayCommand(SubmitAsync,
             () => !IsBusy && !string.IsNullOrWhiteSpace(Message) && !string.IsNullOrWhiteSpace(Subject));
         OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
+        ClearReplyTargetCommand = new RelayCommand(() => SetReplyTarget(null, ""));
     }
 
     partial void OnAuthUrlChanged(string value) => OpenAuthPageCommand.NotifyCanExecuteChanged();
@@ -252,7 +273,8 @@ public sealed partial class PostFormViewModel : ObservableObject
                 Message:     Message,
                 AuthMode:    AuthMode,
                 ThreadTitle: IsNewThread ? null : _threadTitle,
-                AuthToken:   _authToken);
+                AuthToken:   _authToken,
+                ReplyTargetExternalId: IsNewThread ? null : ReplyTargetExternalId);
 
             var result = await _postClient.PostAsync(req, ct).ConfigureAwait(true);
             LastResult = result;
@@ -279,6 +301,11 @@ public sealed partial class PostFormViewModel : ObservableObject
                     break;
                 case PostOutcome.BrokenAcorn:
                     ErrorMessage  = "どんぐり Cookie が破損しています。再取得しました — もう一度送信してみてください。";
+                    StatusMessage = "";
+                    break;
+                case PostOutcome.AuthRequired when string.IsNullOrEmpty(result.AuthUrl) && !string.IsNullOrEmpty(result.Message):
+                    // 認証ページを持たない掲示板 (reddit: アプリ内でログイン) は提供者の案内文をそのまま出す
+                    ErrorMessage  = result.Message;
                     StatusMessage = "";
                     break;
                 case PostOutcome.AuthRequired:

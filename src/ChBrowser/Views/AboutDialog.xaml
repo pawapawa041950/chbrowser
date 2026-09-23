@@ -46,7 +46,7 @@
                 <TextBlock Margin="0,10,0,0"
                            Foreground="#666"
                            TextWrapping="Wrap"
-                           Text="WPF + .NET 8 + WebView2 の掲示板ブラウザ (5ch.io / bbspink.com、したらば、まちBBS、エッヂ)" />
+                           Text="WPF + .NET 8 + WebView2 の掲示板ブラウザ (5ch.io / bbspink.com、したらば、まちBBS、エッヂ、reddit)" />
             </StackPanel>
         </DockPanel>
     </DockPanel>

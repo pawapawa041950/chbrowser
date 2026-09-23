@@ -13,5 +13,35 @@
         <TextBlock Text="OFF にするとダブルクリックで開く動作になります。"
                    Foreground="#666"
                    TextWrapping="Wrap" />
+
+        <!-- 掲示板ごとのスレ一覧の既定の並び順 (並び順を持つ掲示板だけ。今は reddit) -->
+        <Separator Margin="0,12,0,12" />
+        <TextBlock Text="スレ一覧の既定の並び順" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="板タブの右クリック → 並び順 で、タブごとにも変えられます"
+                   Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,4" />
+        <ItemsControl ItemsSource="{Binding ListingSortSettings}" Margin="0,0,0,12">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="{Binding DisplayName}" Width="100" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{Binding Options}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding SelectedValue, Mode=TwoWay}"
+                                  Width="220" />
+                    </StackPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- reddit (doc/reddit-design.md §6) -->
+        <TextBlock Text="reddit" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="スレ取得 1 回あたりの「続き」の読み込み回数 (0〜50)" Margin="0,0,0,4" />
+        <TextBox Text="{Binding RedditMaxExpansions, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, Delay=400}"
+                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,4" />
+        <TextBlock Foreground="#666" TextWrapping="Wrap">
+            コメントの多いスレでは、最初の取得で約 500 件までしか取れず、残りは「続き」として 1 回 100 件ずつ取ります。
+            reddit の要求は 10 分あたり 100 回までなので、既定は 10 回です。取りきれなかった分は、スレの更新のたびに少しずつ末尾に追加されます。
+        </TextBlock>
     </StackPanel>
 </UserControl>

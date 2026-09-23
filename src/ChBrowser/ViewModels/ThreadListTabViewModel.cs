@@ -111,6 +111,15 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     [ObservableProperty]
     private string _statusMessage = "";
 
+    /// <summary>スレ一覧の並び順 (提供者の <see cref="ChBrowser.Services.Bbs.IBbsProvider.ListingSorts"/> の Value)。
+    /// null は提供者の既定。並び順を持たない掲示板では常に null (<c>doc/reddit-design.md</c> §3 B5)。</summary>
+    [ObservableProperty]
+    private string? _sort;
+
+    /// <summary>「続きを読み込む」用の次ページのカーソル。null なら続きは無い (= ページングしない掲示板も null)。セッション限り。</summary>
+    [ObservableProperty]
+    private string? _nextCursor;
+
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)
     {

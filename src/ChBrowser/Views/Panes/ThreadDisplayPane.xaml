@@ -401,6 +401,7 @@
                 <DataTemplate DataType="{x:Type vm:ThreadTabViewModel}">
                     <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
                                   ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
+                                  ctrl:WebView2Helper.VotesUpdate="{Binding VotesUpdate}"
                                   ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
                                   ctrl:WebView2Helper.FilterPush="{Binding Filter}"
                                   ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
@@ -408,6 +409,7 @@
                                   ctrl:WebView2Helper.AiHiddenPush="{Binding AiHiddenPostNumbers}"
                                   ctrl:WebView2Helper.ScrollToPostPush="{Binding PendingScrollToPost}"
                                   ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.Main.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  ctrl:WebView2Helper.ThreadProviderConfigJson="{Binding ProviderConfigJson}"
                                   ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.Main.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   WebMessageReceived="ThreadViewWebView_WebMessageReceived"
                                   CoreWebView2InitializationCompleted="ThreadViewWebView_CoreInitialized"

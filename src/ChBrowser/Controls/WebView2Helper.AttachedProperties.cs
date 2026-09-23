@@ -183,6 +183,10 @@ public static partial class WebView2Helper
             markPostNumber,
             incremental      = data.IsIncremental,
             ownPostNumbers   = ownPosts,
+            // アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。取得時点の評価より優先して表示する
+            myVotes          = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.MyVotes,
+            // 提供者依存のスレ表示設定 (レス番号の表示可否 / アンカー規則等)。JS はレス描画の前に適用する。
+            provider         = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.ProviderConfig,
         }, PostJsonOptions);
 
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
@@ -207,11 +211,13 @@ public static partial class WebView2Helper
         var json = JsonSerializer.Serialize(new
         {
             type           = "resyncThreadState",
+            provider       = tab.ProviderConfig,
             viewMode       = tab.ViewMode,
             posts          = tab.Posts,
             scrollTarget   = (long?)tab.ScrollTargetPostNumber,
             markPostNumber = (long?)tab.MarkPostNumber,
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
+            myVotes        = tab.MyVotes,
             filter = new
             {
                 textQuery   = filter?.TextQuery ?? "",
@@ -245,6 +251,27 @@ public static partial class WebView2Helper
     {
         if (d is not WebView2 wv || e.NewValue is null) return;
         var json = JsonSerializer.Serialize(new { type = "updateOwnPosts", value = e.NewValue }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // VotesUpdate (スレ表示: レスの評価の確定 / 巻き戻しの増分通知)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty VotesUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "VotesUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnVotesUpdateChanged));
+
+    public static object? GetVotesUpdate(DependencyObject d) => d.GetValue(VotesUpdateProperty);
+    public static void    SetVotesUpdate(DependencyObject d, object? value) => d.SetValue(VotesUpdateProperty, value);
+
+    private static void OnVotesUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.VotesUpdateData data) return;
+        var json = JsonSerializer.Serialize(new { type = "updateVotes", changes = data.Changes }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 
@@ -438,6 +465,28 @@ public static partial class WebView2Helper
     public static void    SetThreadConfigJson(DependencyObject d, string? value) => d.SetValue(ThreadConfigJsonProperty, value);
 
     private static void OnThreadConfigJsonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv) return;
+        if (e.NewValue is not string json || string.IsNullOrEmpty(json)) return;
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
+    // ThreadProviderConfigJson: タブの掲示板提供者に依存するスレ表示設定 (setProviderConfig)。
+    // 通常は appendPosts に同梱されて届くので、ここは設定変更 (アンカー規則の編集等) の即時反映用。
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ThreadProviderConfigJsonProperty =
+        DependencyProperty.RegisterAttached(
+            "ThreadProviderConfigJson",
+            typeof(string),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnThreadProviderConfigJsonChanged));
+
+    public static string? GetThreadProviderConfigJson(DependencyObject d) => (string?)d.GetValue(ThreadProviderConfigJsonProperty);
+    public static void    SetThreadProviderConfigJson(DependencyObject d, string? value) => d.SetValue(ThreadProviderConfigJsonProperty, value);
+
+    private static void OnThreadProviderConfigJsonChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv) return;
         if (e.NewValue is not string json || string.IsNullOrEmpty(json)) return;

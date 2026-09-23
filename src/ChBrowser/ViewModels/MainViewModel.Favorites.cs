@@ -413,6 +413,8 @@ public sealed partial class MainViewModel
     /// subject.txt 取得 / dat 取得の通信本数は合算で <see cref="AppConfig.BatchConcurrency"/> までに制限する。</summary>
     public async Task CheckFavoritesAsync()
     {
+        // 多数の要求をまとめて投げる自動処理: reddit のログインが切れていてもログイン窓は出さない (doc/reddit-design.md D37)
+        using var background = ChBrowser.Services.Bbs.ProviderRequestContext.Background();
         var boards  = new List<FavoriteBoard>();
         var threads = new List<FavoriteThread>();
         foreach (var topVm in Favorites.Items)
@@ -596,6 +598,10 @@ public sealed partial class MainViewModel
         if (savedIndex?.OwnPostNumbers is { Length: > 0 } savedOwn)
         {
             foreach (var n in savedOwn) tab.OwnPostNumbers.Add(n);
+        }
+        if (savedIndex?.MyVotes is { Count: > 0 } savedVotes)
+        {
+            foreach (var (n, dir) in savedVotes) tab.MyVotes[n] = dir;
         }
         var prevFetchedCount = savedIndex?.LastFetchedPostCount ?? 0;
 

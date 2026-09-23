@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ChBrowser.Controls;
 using ChBrowser.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,6 +31,17 @@ public sealed record OwnPostsUpdateData(IReadOnlyList<OwnPostChange> Changes);
 /// <summary>1 件分の自分マークトグル結果。</summary>
 public sealed record OwnPostChange(long Number, bool IsOwn);
 
+/// <summary>JS の <c>updateVotes</c> に渡すペイロード — レスの評価の確定 (成功) / 巻き戻し (失敗) を通知する。
+/// class (参照同一性) にして、同じ内容を続けて送っても PropertyChanged が出るようにする。</summary>
+public sealed class VotesUpdateData
+{
+    public IReadOnlyList<VoteChange> Changes { get; }
+    public VotesUpdateData(IReadOnlyList<VoteChange> changes) => Changes = changes;
+}
+
+/// <summary>1 件分の評価の状態。<see cref="Dir"/> は 1 / -1 / 0、<see cref="Ok"/> = false は送信失敗 (表示を元に戻す)。</summary>
+public sealed record VoteChange(long Number, int Dir, bool Ok = true);
+
 /// <summary>「指定レス番号までスクロール」要求のラッパー。
 /// <see cref="ThreadTabViewModel.PendingScrollToPost"/> に新インスタンスを setter することで、
 /// 同 number を立て続けに 2 回投げても (= 同じスレ URL を 2 回連続でクリック等) PropertyChanged が発火し、
@@ -56,6 +68,37 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// アドレスバー表示やコンテキストメニューの「URLコピー」で使う。</summary>
     public string Url => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host)
         .ThreadUrl(Board.Host, Board.DirectoryName, ThreadKey);
+
+    /// <summary>このスレの掲示板提供者に依存するスレ表示設定 (レス番号の表示可否 / 番号ジャンプ桁数 / アンカー規則)。
+    /// appendPosts / resyncThreadState の各メッセージに <c>provider</c> として同梱し、JS はレス描画の前に適用する
+    /// (= 送信順に依存しない。<c>doc/reddit-design.md</c> §3 B11)。<see cref="RefreshProviderConfig"/> で作り直す。</summary>
+    public object ProviderConfig { get; private set; } = new { };
+
+    /// <summary>設定変更 (アンカー規則の編集等) を開いているスレ表示へ即時に届けるための <c>setProviderConfig</c> メッセージ JSON。</summary>
+    [ObservableProperty]
+    private string? _providerConfigJson;
+
+    /// <summary><see cref="ProviderConfig"/> / <see cref="ProviderConfigJson"/> を現在の提供者・アンカー規則から作り直す。
+    /// タブ生成時と設定適用時 (<c>MainViewModel.ApplyConfig</c>) に呼ばれる。</summary>
+    public void RefreshProviderConfig()
+    {
+        var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host);
+        ProviderConfig = new
+        {
+            providerId       = provider.Id,
+            showPostNumbers  = provider.ShowsPostNumbers,
+            watchoi          = provider.UsesWatchoi,
+            postNumberDigits = provider.PostNumberDigits,
+            // レスの評価ボタン (null = 評価できない。評価値があれば表示だけ)
+            voting           = provider.Voting is { } v
+                ? new { mode = v.Mode == ChBrowser.Services.Bbs.VoteMode.UpDown ? "updown" : "up", upLabel = v.UpLabel, downLabel = v.DownLabel, canUndo = v.CanUndo }
+                : null,
+            anchorRules     = ChBrowser.Services.Bbs.AnchorRuleRegistry.For(provider).Rules
+                                   .Select(r => new { name = r.Name, pattern = r.Pattern, kind = r.Kind, ranges = r.Ranges, enabled = r.Enabled })
+                                   .ToArray(),
+        };
+        ProviderConfigJson = System.Text.Json.JsonSerializer.Serialize(new { type = "setProviderConfig", config = ProviderConfig });
+    }
 
     public IRelayCommand CloseCommand           { get; }
     public IRelayCommand CycleViewModeCommand  { get; }
@@ -227,6 +270,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private OwnPostsUpdateData? _ownPostsUpdate;
 
+    /// <summary>アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。idx.json から復元し、appendPosts / resync に同梱する。
+    /// 取得時点の評価 (<see cref="PostExtra.MyVote"/>) より優先される。</summary>
+    public Dictionary<long, int> MyVotes { get; } = new();
+
+    /// <summary>WebView2 への増分通知 — 評価の確定 / 巻き戻しを JS 側に push するチャネル (VotesUpdate 添付プロパティが観測)。</summary>
+    [ObservableProperty]
+    private VotesUpdateData? _votesUpdate;
+
     /// <summary>絞り込みのテキストボックス (= スレッドペイン ヘッダ左) にバインドされる文字列。
     /// 変更で <see cref="Filter"/> が再構築される (= JS への push 経由で表示が即時更新される)。</summary>
     [ObservableProperty]
@@ -304,6 +355,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         AddToFavoritesCommand  = new RelayCommand(() => addToFavoritesCallback?.Invoke(this));
         WriteCommand           = new RelayCommand(() => writeCallback?.Invoke(this));
         AiChatCommand          = new RelayCommand(() => aiChatCallback?.Invoke(this));
+        RefreshProviderConfig();
         // 表示モード切替ボタンのサイクル順で次へ進む (一周したら先頭へ)。
         // 旧 DedupTree は dedupTree2 へ置き換え中のためサイクルから除外している (ソースは残すが UI からは呼ばない)。
         CycleViewModeCommand   = new RelayCommand(() =>

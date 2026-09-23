@@ -303,6 +303,25 @@ public sealed class PostDialog : Window
             Grid.SetRow(subjectRow, 0);
             root.Children.Add(subjectRow);
         }
+        else if (_vm.PostForm.SupportsReplyTarget)
+        {
+            // 返信先を ID で指定する掲示板 (reddit): 本文に >>N を入れず、ここに「返信先: u/xxx のコメント」を出す。× で外すとスレ本体への返信。
+            var replyRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var clear = new Button { Content = "×", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(6, 0, 0, 0),
+                                     ToolTip = "返信先を外す (スレへの返信にする)", VerticalAlignment = VerticalAlignment.Center };
+            clear.SetBinding(Button.CommandProperty, new Binding(nameof(PostFormViewModel.ClearReplyTargetCommand)));
+            DockPanel.SetDock(clear, Dock.Right);
+            replyRow.Children.Add(clear);
+            var replyText = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            replyText.SetBinding(TextBlock.TextProperty, new Binding(nameof(PostFormViewModel.ReplyTargetLabel)) { StringFormat = "返信先: {0}" });
+            replyRow.Children.Add(replyText);
+            replyRow.SetBinding(VisibilityProperty, new Binding(nameof(PostFormViewModel.ReplyTargetLabel))
+            {
+                Converter = new EmptyStringToVisibilityConverter(),
+            });
+            Grid.SetRow(replyRow, 0);
+            root.Children.Add(replyRow);
+        }
 
         // (1) Name + Mail + sage
         var headerRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
@@ -332,6 +351,19 @@ public sealed class PostDialog : Window
 
         // 認証モード行 + 「Cookie 削除」ボタンは、フッターの「Cookie 設定」トグルで開閉される
         // パネル (row 4) にまとめてある。ヘッダ行は氏名 / メール / sage だけに絞ってすっきりさせる。
+        // 名前・メールを持たない掲示板 (reddit: アカウント名で投稿) では行ごと隠す
+        if (!_vm.PostForm.SupportsName)
+        {
+            nameLabel.Visibility = Visibility.Collapsed;
+            nameBox.Visibility   = Visibility.Collapsed;
+        }
+        if (!_vm.PostForm.SupportsMail)
+        {
+            mailLabel.Visibility = Visibility.Collapsed;
+            mailBox.Visibility   = Visibility.Collapsed;
+            sageCheck.Visibility = Visibility.Collapsed;
+        }
+        if (!_vm.PostForm.SupportsName && !_vm.PostForm.SupportsMail) headerRow.Visibility = Visibility.Collapsed;
         Grid.SetRow(headerRow, 1);
         root.Children.Add(headerRow);
 
@@ -345,7 +377,10 @@ public sealed class PostDialog : Window
         bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                 // (2) "どんぐり: ～"
         bodyHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                 // (3) "N / M 行"
 
-        var bodyLabel = new TextBlock { Text = "本文:" };
+        var bodyLabel = new TextBlock
+        {
+            Text = _vm.PostForm.BodyFormat == ChBrowser.Services.Bbs.PostBodyFormat.Markdown ? "本文 (Markdown 記法):" : "本文:",
+        };
         Grid.SetColumn(bodyLabel, 0);
         bodyHeader.Children.Add(bodyLabel);
 

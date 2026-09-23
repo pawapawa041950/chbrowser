@@ -79,6 +79,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>認証パネルに表示するログイン状態のテキスト ("ログイン済" / "失敗: ..." / "試行中..." / "未設定")。
     /// 設定画面オープン時に App から最新値を流し込む + ログイン試行のたびに更新する。</summary>
     [ObservableProperty] private string _donguriLoginStatus    = "未試行";
+
+    // ---- reddit (WebView2 ログインセッション、doc/reddit-design.md §5・§6) ----
+    /// <summary>reddit のログイン状態の表示 (App が RedditSessionAuth の変化で更新する)。</summary>
+    [ObservableProperty] private string _redditLoginStatus = "";
+    /// <summary>「接続テスト」の結果 (複数行)。</summary>
+    [ObservableProperty] private string _redditProbeResult = "";
+    /// <summary>reddit の操作 (ログイン / 接続テスト) の実行中。</summary>
+    [ObservableProperty] private bool   _redditBusy;
+    public IAsyncRelayCommand RedditLoginCommand  { get; }
+    public IAsyncRelayCommand RedditLogoutCommand { get; }
+    public IAsyncRelayCommand RedditProbeCommand  { get; }
+    private readonly RedditSettingsHooks? _reddit;
     [ObservableProperty] private int    _popularThreshold      = 3;
 
     // ---- アンカー判定規則 (掲示板ごと)。doc/multi-bbs-design.md §6 ----
@@ -194,6 +206,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _favoritesOpenOnSingleClick  = true;
     [ObservableProperty] private bool   _boardListOpenOnSingleClick  = true;
     [ObservableProperty] private bool   _threadListOpenOnSingleClick = true;
+    /// <summary>スレ一覧の既定の並び順 (並び順を持つ掲示板ごと。<see cref="AppConfig.ListingSortDefaults"/>)。</summary>
+    public IReadOnlyList<ListingSortSettingItem> ListingSortSettings { get; private set; } = Array.Empty<ListingSortSettingItem>();
+    /// <summary>並び順の選択変更を「設定が変わった」として保存に乗せるためのカウンタ (= OnAnyPropertyChanged が拾う)。</summary>
+    [ObservableProperty] private int _listingSortsVersion;
+    /// <summary>reddit: スレ 1 回の取得で「続き (more)」を展開する最大回数 (<see cref="AppConfig.RedditMaxExpansions"/>)。</summary>
+    [ObservableProperty] private int    _redditMaxExpansions = 10;
 
     // ---- バッチ処理の同時通信数 (お気に入りチェック等) ----
     [ObservableProperty] private int    _batchConcurrency            = 6;
@@ -369,8 +387,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action?           loginNowAction           = null,
         Action?           clearEddiCookiesAction   = null,
         Action?           openAiBoardGuideAction   = null,
-        Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null)
+        Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null,
+        RedditSettingsHooks? reddit = null)
     {
+        _reddit = reddit;
+        _redditLoginStatus = reddit?.GetStatus() ?? "";
+        RedditLoginCommand  = new AsyncRelayCommand(() => RunRedditAsync(r => r.Login()),  () => _reddit is not null);
+        RedditLogoutCommand = new AsyncRelayCommand(() => RunRedditAsync(r => r.Logout()), () => _reddit is not null);
+        RedditProbeCommand  = new AsyncRelayCommand(async () =>
+        {
+            RedditProbeResult = "テスト中… (1 分ほどかかります。未ログインならログイン窓が開きます)";
+            await RunRedditAsync(async r => RedditProbeResult = await r.RunProbe());
+        }, () => _reddit is not null);
         _storage                 = storage;
         _openAiBoardGuideAction  = openAiBoardGuideAction;
         _initialConfig           = initial;
@@ -391,12 +419,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         // カテゴリ枠。NG / ショートカット / マウスジェスチャー は別ウィンドウ管理。
         Categories.Add(new("全般",         "HiDPI モード"));
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
-        Categories.Add(new("認証",         "どんぐり (5ch) のメール認証、エッヂの認証"));
+        Categories.Add(new("認証",         "どんぐり (5ch) のメール認証、エッヂ・reddit の認証"));
         Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
         Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
-        Categories.Add(new("スレッド一覧", "クリックで開く動作"));
+        Categories.Add(new("スレッド一覧", "クリックで開く動作、掲示板ごとの既定の並び順、reddit の「続き」の読み込み回数"));
         Categories.Add(new("スレッド",     "人気レス閾値、標準表示モード、画像 HEAD しきい値"));
         Categories.Add(new("アンカー判定", "掲示板ごとのレス参照 (アンカー) の判定規則"));
         Categories.Add(new("タブ",         "タブ幅 (スレ一覧タブ / スレッドタブ)"));
@@ -453,6 +481,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         BatchConcurrency             = initial.BatchConcurrency;
         BoardListOpenOnSingleClick   = initial.BoardListOpenOnSingleClick;
         ThreadListOpenOnSingleClick  = initial.ThreadListOpenOnSingleClick;
+        var sortDefaults = MainViewModel.EffectiveListingSortDefaults(initial);
+        ListingSortSettings = ChBrowser.Services.Bbs.BbsRegistry.All
+            .Where(pv => pv.ListingSorts.Count > 1)
+            .Select(pv => new ListingSortSettingItem(pv.Id, pv.DisplayName, pv.ListingSorts,
+                sortDefaults.TryGetValue(pv.Id, out var v) && pv.ListingSorts.Any(x => x.Value == v) ? v : pv.ListingSorts[0].Value))
+            .ToList();
+        foreach (var item in ListingSortSettings) item.PropertyChanged += (_, _) => ListingSortsVersion++;
+        RedditMaxExpansions          = initial.RedditMaxExpansions;
         ThreadListTabWidthMode  = string.IsNullOrEmpty(initial.ThreadListTabWidthMode) ? "chars" : initial.ThreadListTabWidthMode;
         ThreadListTabWidthChars = initial.ThreadListTabWidthChars;
         ThreadListTabWidthPx    = initial.ThreadListTabWidthPx;
@@ -579,6 +615,19 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    private async System.Threading.Tasks.Task RunRedditAsync(Func<RedditSettingsHooks, System.Threading.Tasks.Task> action)
+    {
+        if (_reddit is null) return;
+        RedditBusy = true;
+        try { await action(_reddit); }
+        catch (Exception ex) { RedditProbeResult = $"失敗: {ex.Message}"; }
+        finally
+        {
+            RedditBusy = false;
+            RedditLoginStatus = _reddit.GetStatus();
+        }
+    }
+
     private void OnAnyPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (_suppressSave) return;
@@ -589,6 +638,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(RestartRequired):
             case nameof(CacheSizeDisplay):
             case nameof(DonguriLoginStatus):    // ログイン状態は表示専用 (ConfigStorage に書かない)
+            case nameof(RedditLoginStatus):     // reddit のログイン状態 / 接続テスト結果も表示専用
+            case nameof(RedditProbeResult):
+            case nameof(RedditBusy):
             case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
             case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
             case nameof(NgAiConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
@@ -681,6 +733,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         BatchConcurrency            = BatchConcurrency,
         BoardListOpenOnSingleClick  = BoardListOpenOnSingleClick,
         ThreadListOpenOnSingleClick = ThreadListOpenOnSingleClick,
+        ListingSortDefaults         = ListingSortSettings.ToDictionary(x => x.ProviderId, x => x.SelectedValue, StringComparer.Ordinal),
+        RedditDefaultSort           = null,   // 旧設定は ListingSortDefaults へ移した
+        RedditMaxExpansions         = Math.Clamp(RedditMaxExpansions, 0, 50),
         ThreadListTabWidthMode  = ThreadListTabWidthMode,
         ThreadListTabWidthChars = ThreadListTabWidthChars,
         ThreadListTabWidthPx    = ThreadListTabWidthPx,
@@ -719,5 +774,30 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 }
 
+/// <summary>設定ウィンドウ「スレッド一覧」の、掲示板 1 つ分の既定の並び順。</summary>
+public sealed partial class ListingSortSettingItem : ObservableObject
+{
+    public string ProviderId  { get; }
+    public string DisplayName { get; }
+    public IReadOnlyList<ChBrowser.Services.Bbs.ListingSort> Options { get; }
+    [ObservableProperty] private string _selectedValue;
+
+    public ListingSortSettingItem(string providerId, string displayName, IReadOnlyList<ChBrowser.Services.Bbs.ListingSort> options, string selectedValue)
+    {
+        ProviderId     = providerId;
+        DisplayName    = displayName;
+        Options        = options;
+        _selectedValue = selectedValue;
+    }
+}
+
 /// <summary>設定ウィンドウ「アンカー判定」の掲示板選択肢。</summary>
 public sealed record AnchorRuleProviderItem(string Id, string DisplayName);
+
+/// <summary>設定 → 認証 の reddit 節が使う操作 (App が RedditSessionAuth / RedditProbe を束ねて渡す)。</summary>
+public sealed record RedditSettingsHooks(
+    Func<string>                                  GetStatus,
+    Func<System.Threading.Tasks.Task>             Login,
+    Func<System.Threading.Tasks.Task>             Logout,
+    Func<System.Threading.Tasks.Task>             Refresh,
+    Func<System.Threading.Tasks.Task<string>>     RunProbe);

@@ -46,6 +46,10 @@ public partial class App : Application
     private DonguriService?    _donguriService;
     /// <summary>提供者ごとの Cookie 保管 (エッヂの edge-token 等)。</summary>
     private ChBrowser.Services.Bbs.ProviderCookieJars? _providerCookieJars;
+    /// <summary>reddit のログインセッション (WebView2 の reddit 用プロファイル) と、それを通す通信経路 (doc/reddit-design.md §5)。</summary>
+    private ChBrowser.Services.Reddit.RedditWebViewHost? _redditHost;
+    private ChBrowser.Services.Reddit.RedditSessionAuth? _redditAuth;
+    private ChBrowser.Services.Reddit.WebViewTransport?  _redditTransport;
     private KakikomiLog?       _kakikomiLog;
     private DataPaths?         _paths;
     private ThemeService?      _themeService;
@@ -245,6 +249,9 @@ public partial class App : Application
         };
         // 投稿ダイアログの「Cookie 削除」ボタンが叩く経路。ダイアログ自身を確認モーダルの親にする。
         mainVm.ClearDonguriCookiesCallback = owner => ClearDonguriCookiesNow(owner);
+
+        // reddit: WebView2 のログインセッション経由で www.reddit.com への要求を送る (起動時には通信しない)。
+        SetupRedditSession(paths, mainVm);
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
 
@@ -261,6 +268,9 @@ public partial class App : Application
             LayoutStorage            = layoutStorage,
         };
         MainWindow = window;
+        // アプリの終了条件は WPF 既定の「最後のウィンドウが閉じたら」なので、reddit の隠しセッション窓やログイン窓が
+        // 残っているとプロセスが終わらない。メインウィンドウが閉じたらそれらも閉じる。
+        window.Closed += (_, _) => CloseRedditWindows();
 
         // ショートカット & マウスジェスチャー (Phase 15) — MainWindow 作成後に setup
         _shortcutStorage = new ChBrowser.Services.Storage.ShortcutStorage(paths);
@@ -357,6 +367,62 @@ public partial class App : Application
         DonguriLoginOutcome.NetworkError       => $"通信失敗 ({r.Message})",
         _                                      => $"失敗 ({r.Message})",
     };
+
+    // -----------------------------------------------------------------
+    // reddit (WebView2 ログインセッション、doc/reddit-design.md §5)
+    // -----------------------------------------------------------------
+
+    private void SetupRedditSession(DataPaths paths, MainViewModel mainVm)
+    {
+        var host      = new ChBrowser.Services.Reddit.RedditWebViewHost(Dispatcher);
+        var ui        = new ChBrowser.Services.Reddit.RedditLoginUi(Dispatcher, host);
+        var auth      = new ChBrowser.Services.Reddit.RedditSessionAuth(host, ui, paths.RedditAuthPath);
+        var transport = new ChBrowser.Services.Reddit.WebViewTransport(host, auth);
+        _redditHost      = host;
+        _redditAuth      = auth;
+        _redditTransport = transport;
+        ChBrowser.Services.Bbs.ProviderTransports.RegisterHosts(
+            ChBrowser.Services.Reddit.RedditSessionAuth.RoutedHosts, transport);
+
+        // ステータスバーのログイン状態は掲示板に依存しない仕組みに載せる (MainViewModel.ProviderAuthStatuses)
+        mainVm.RegisterProviderAuth(auth, a => Dispatcher.InvokeAsync(a));
+        auth.StateChanged  += (_, _) => Dispatcher.InvokeAsync(() =>
+        {
+            if (_currentSettingsVm is { } svm) svm.RedditLoginStatus = ChBrowser.Services.Bbs.ProviderAuthDisplay.SettingsText(auth);
+        });
+        transport.Waiting  += sec => Dispatcher.InvokeAsync(() => mainVm.StatusMessage = $"reddit: 要求間隔の調整のため {sec} 秒待っています");
+    }
+
+    /// <summary>reddit の隠しセッション窓と、開いているログイン窓を閉じる (メインウィンドウ終了時)。</summary>
+    private void CloseRedditWindows()
+    {
+        foreach (var w in Windows.OfType<ChBrowser.Services.Reddit.RedditLoginWindow>().ToList())
+        {
+            try { w.Close(); } catch (InvalidOperationException) { }
+        }
+        _redditHost?.Dispose();
+        _redditHost = null;
+    }
+
+    /// <summary>設定画面から使う reddit の操作。</summary>
+    private ChBrowser.ViewModels.RedditSettingsHooks? CreateRedditSettingsHooks()
+    {
+        if (_redditAuth is not { } auth || _monazilla is null || _paths is null) return null;
+        var http = _monazilla.Http;
+        var reportPath = _paths.RedditProbeReportPath;
+        return new ChBrowser.ViewModels.RedditSettingsHooks(
+            GetStatus: () => ChBrowser.Services.Bbs.ProviderAuthDisplay.SettingsText(auth),
+            Login:     () => auth.LoginAsync(default),
+            Logout:    async () =>
+            {
+                var owner = MainWindow ?? Current.MainWindow;
+                if (MessageBox.Show(owner, "reddit からログアウトし、アプリ内ブラウザの reddit の Cookie を削除します。よろしいですか?",
+                        "reddit ログアウト", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.Cancel) != MessageBoxResult.OK) return;
+                await auth.LogoutAsync(default);
+            },
+            Refresh:   () => auth.RefreshStateAsync(default),
+            RunProbe:  () => ChBrowser.Services.Reddit.RedditProbe.RunAsync(http, reportPath, default));
+    }
 
     /// <summary>MainViewModel と (もし開いていれば) SettingsViewModel の DonguriLoginStatus を同時更新する。
     /// ステータスバーは 🌰🔑 マーク付き、設定画面は文字だけ表示。</summary>
@@ -576,6 +642,7 @@ public partial class App : Application
         _ngWindow?.Close();
         _shortcutsWindow?.Close();
         _mcpServer?.Dispose();
+        _redditHost?.Dispose();
         _urlExpander?.Dispose();
         _imageCache?.Dispose();
         _imageMeta?.Dispose();
@@ -609,6 +676,7 @@ public partial class App : Application
             extractDefaultCssAction:  ExtractDefaultThemeFiles,
             clearCookiesAction:       () => ClearDonguriCookiesNow(),
             clearEddiCookiesAction:   () => ClearProviderCookiesNow("eddi"),
+            reddit:                   CreateRedditSettingsHooks(),
             loginNowAction:           LoginDonguriNow,
             openAiBoardGuideAction:   OpenAiBoardGuideFile,
             // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。

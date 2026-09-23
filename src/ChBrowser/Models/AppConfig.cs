@@ -155,6 +155,16 @@ public sealed record AppConfig
     /// 自動保存されるので空でよい。設定ウィンドウ「認証」で編集する。</summary>
     public System.Collections.Generic.Dictionary<string, string>? PostAuthTokens { get; init; }
 
+    /// <summary>掲示板提供者 Id → スレ一覧の既定の並び順 (<c>IBbsProvider.ListingSorts</c> の Value。reddit なら "hot" / "new" / "top:day" 等)。
+    /// 並び順を持つ掲示板だけが対象。未指定の掲示板は選択肢の先頭。設定ウィンドウ「スレッド一覧」で編集する。</summary>
+    public System.Collections.Generic.Dictionary<string, string>? ListingSortDefaults { get; init; }
+
+    /// <summary>(旧設定) reddit のスレ一覧の既定の並び順。<see cref="ListingSortDefaults"/> に "reddit" が無いときだけ読む (移行用)。</summary>
+    public string? RedditDefaultSort { get; init; }
+
+    /// <summary>reddit: スレ 1 回の取得で「続き (more)」を展開する最大回数。要求の予算が 10 分 100 件なので既定 10 (D38)。</summary>
+    public int RedditMaxExpansions { get; init; } = 10;
+
     /// <summary>新規スレタブ生成時のデフォルト表示モード (Flat / Tree / DedupTree2)。
     /// 旧 config 値 "DedupTree" は読み込み時に dedupTree2 へ解決される (CreateThreadTab の switch)。</summary>
     public string DefaultThreadViewMode { get; init; } = "DedupTree2";

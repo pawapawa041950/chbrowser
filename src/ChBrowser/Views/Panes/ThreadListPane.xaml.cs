@@ -328,6 +328,36 @@ public partial class ThreadListPane : UserControl
         var hasBoard = tab.Board is not null;
         var isFav    = tab.Board is { } b && main.Favorites.FindBoard(b.Host, b.DirectoryName) is not null;
 
+        // 並び順 / 続きを読み込む: 並び順とページングを持つ掲示板 (reddit) の板タブだけ
+        var provider   = tab.Board is { } pb ? ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(pb.Host) : null;
+        var hasListing = provider is not null && (provider.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.ListingPaging) != 0
+                         && provider.ListingSorts.Count > 0;
+        foreach (var obj in cm.Items)
+        {
+            if (obj is Separator { Tag: "listingSep" } sep) sep.Visibility = hasListing ? Visibility.Visible : Visibility.Collapsed;
+            if (obj is not MenuItem mi) continue;
+            switch (mi.Tag as string)
+            {
+                case "listingSort":
+                    mi.Visibility = hasListing ? Visibility.Visible : Visibility.Collapsed;
+                    mi.Items.Clear();
+                    if (!hasListing) break;
+                    var current = main.EffectiveListingSort(tab);
+                    foreach (var s in provider!.ListingSorts)
+                    {
+                        var child = new MenuItem { Header = s.DisplayName, Tag = s.Value, IsCheckable = true, IsChecked = s.Value == current };
+                        child.Click += async (_, _) => await main.ChangeThreadListSortAsync(tab, s.Value);
+                        mi.Items.Add(child);
+                    }
+                    break;
+                case "listingMore":
+                    mi.Visibility = hasListing ? Visibility.Visible : Visibility.Collapsed;
+                    mi.IsEnabled  = hasListing && !string.IsNullOrEmpty(tab.NextCursor) && !tab.IsBusy;
+                    mi.Header     = hasListing && string.IsNullOrEmpty(tab.NextCursor) ? "続きを読み込む (これ以上ありません)" : "続きを読み込む";
+                    break;
+            }
+        }
+
         foreach (var item in TabClickHelper.EnumerateAllMenuItems(cm))
         {
             // openSetting も「Board が無いタブ (= お気に入りフォルダ等) では使えない」項目に該当。
@@ -344,6 +374,12 @@ public partial class ThreadListPane : UserControl
                     break;
             }
         }
+    }
+
+    private async void ThreadListTabLoadMore_Click(object sender, RoutedEventArgs e)
+    {
+        if (TabOf<ThreadListTabViewModel>(sender) is not { } tab || Vm is not { } main) return;
+        await main.LoadMoreThreadsAsync(tab);
     }
 
     private static T? TabOf<T>(object sender) where T : class

@@ -24,13 +24,13 @@
                    Background="{x:Static SystemColors.ControlBrush}">
             <Menu DockPanel.Dock="Left">
                 <MenuItem Header="ファイル(_F)">
-                    <MenuItem Header="5ch板一覧更新(_U)" Command="{Binding RefreshBoardListCommand}" />
-                    <MenuItem Header="まちBBS板一覧更新(_M)" Command="{Binding RefreshMachiBoardListCommand}" />
-                    <MenuItem Header="エッヂ板一覧更新(_E)" Command="{Binding RefreshEddiBoardListCommand}" />
                     <MenuItem Header="お気に入りチェック(_C)" Click="MenuFavCheckUpdates_Click" />
                     <Separator />
                     <MenuItem Header="終了(_X)" Click="ExitMenu_Click" />
                 </MenuItem>
+                <!-- 中身は登録されている掲示板から自動で組む (MainWindow.BuildBoardMenu):
+                     板一覧を持つ掲示板 → 「○○板一覧更新」、板を検索できる掲示板 → 「○○板の検索...」 -->
+                <MenuItem x:Name="BoardMenu" Header="板一覧(_B)" />
                 <MenuItem Header="表示(_V)">
                     <MenuItem Header="ログペイン(_L)" IsCheckable="True"
                               IsChecked="{Binding IsLogPaneVisible, Mode=TwoWay}" />
@@ -115,6 +115,23 @@
                     <Setter Property="Padding" Value="8,2" />
                 </Style>
             </StatusBar.Resources>
+            <!-- 掲示板のログイン状態 (ログインを持つ掲示板ごと。MainViewModel.ProviderAuthStatuses) -->
+            <StatusBarItem DockPanel.Dock="Right">
+                <ItemsControl ItemsSource="{Binding ProviderAuthStatuses}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Text}"
+                                       Margin="0,0,8,0"
+                                       Cursor="Hand"
+                                       ToolTip="{Binding ToolTip}"
+                                       MouseLeftButtonUp="ProviderAuthStatus_MouseLeftButtonUp" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StatusBarItem>
             <StatusBarItem DockPanel.Dock="Right">
                 <TextBlock Text="{Binding DonguriLoginStatus}"
                            ToolTip="どんぐりメール認証のログイン状態 (設定 → 認証 で構成)" />

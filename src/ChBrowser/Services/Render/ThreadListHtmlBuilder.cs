@@ -65,7 +65,7 @@ public static class ThreadListHtmlBuilder
                 continue;
             }
             var t        = item.Info;
-            var momentum = CalcMomentum(t.Key, now, t.PostCount);
+            var momentum = CalcMomentum(t, now);
             var state    = item.State;
             var sortVal  = (int)state; // None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
 
@@ -144,9 +144,14 @@ public static class ThreadListHtmlBuilder
         lock (Lock) _shellHtmlCache = null;
     }
 
-    private static double CalcMomentum(string key, DateTimeOffset now, int postCount)
+    /// <summary>勢い (1 日あたりのレス数)。作成時刻は <see cref="ThreadInfo.CreatedEpoch"/> (reddit 等、key が epoch でない掲示板) を優先し、
+    /// 無ければ 5ch 系の慣習どおり key を epoch とみなす。</summary>
+    private static double CalcMomentum(ThreadInfo t, DateTimeOffset now)
     {
-        if (!long.TryParse(key, out var threadUnix)) return 0;
+        var postCount = t.PostCount;
+        long threadUnix;
+        if (t.CreatedEpoch is long created && created > 0) threadUnix = created;
+        else if (!long.TryParse(t.Key, out threadUnix)) return 0;
         // 5ch お知らせスレは unixtime が 9 で始まる擬似的な将来日付 (2260 年代 = 9e9 秒以降)
         // で建てられる。勢い計算上はゼロ扱いにする。9 桁の 9xxxxxxxx (1998 年代) はここでは除外。
         if (threadUnix >= 9_000_000_000L) return 0;
