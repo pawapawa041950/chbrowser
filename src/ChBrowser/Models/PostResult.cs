@@ -27,6 +27,9 @@ public enum PostOutcome
 
     /// <summary>上記いずれにも当てはまらないサーバエラー。詳細は <see cref="PostResult.Message"/>。</summary>
     UnknownError,
+
+    /// <summary>ユーザが投稿をやめた (ブラウザの投稿窓を閉じた等)。エラーではないので入力を保持したまま何も出さない。</summary>
+    Cancelled,
 }
 
 /// <summary>投稿 1 回分の結果 (= 2 段階フロー全体の最終状態)。</summary>
@@ -36,10 +39,15 @@ public enum PostOutcome
 /// <param name="AuthUrl"><see cref="PostOutcome.AuthRequired"/> のとき、ブラウザで開く認証ページ URL。</param>
 /// <param name="AuthCode"><see cref="PostOutcome.AuthRequired"/> のとき、認証ページに入力するコード (エッヂは 6 桁)。無ければ空。</param>
 /// <param name="NewPostExternalId">成功時、掲示板が返した新規投稿の ID (reddit: <c>t1_xxx</c>)。自分マークの自動付与に使う。無ければ null。</param>
+/// <param name="NewPostNumber">成功時、掲示板が返した新規投稿のレス番号 (4chan: 投稿番号 = アプリのレス番号)。
+/// 分かれば取得を待たずに自分マークを付ける。無ければ null。</param>
+/// <param name="NewThreadKey">スレ立て成功時、新しいスレのキー (4chan: スレ本体の番号)。分かれば一覧更新後にそのスレを開く。</param>
 public sealed record PostResult(
     PostOutcome Outcome,
     string      Message,
     string      RawHtmlSnippet,
     string?     AuthUrl  = null,
     string?     AuthCode = null,
-    string?     NewPostExternalId = null);
+    string?     NewPostExternalId = null,
+    long?       NewPostNumber = null,
+    string?     NewThreadKey = null);

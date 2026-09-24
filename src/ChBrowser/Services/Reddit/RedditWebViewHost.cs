@@ -39,13 +39,8 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
     public RedditWebViewHost(Dispatcher dispatcher) => _dispatcher = dispatcher;
 
     /// <summary>reddit 用プロファイルで WebView2 を初期化する (ログイン窓の WebView もこれで同じセッションを共有する)。</summary>
-    public static async Task InitializeProfileAsync(WpfWebView2 webView)
-    {
-        var env     = await ChBrowser.Controls.WebView2Helper.GetEnvironmentAsync().ConfigureAwait(true);
-        var options = env.CreateCoreWebView2ControllerOptions();
-        options.ProfileName = ProfileName;
-        await webView.EnsureCoreWebView2Async(env, options).ConfigureAwait(true);
-    }
+    public static Task InitializeProfileAsync(WpfWebView2 webView)
+        => ChBrowser.Services.Browser.BrowserProfiles.InitializeAsync(webView, ProfileName);
 
     public Task<BrowserFetchResult> FetchAsync(BrowserFetchRequest request, CancellationToken ct)
         => _dispatcher.InvokeAsync(() => FetchOnUiAsync(request, ct)).Task.Unwrap();

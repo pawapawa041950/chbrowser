@@ -291,14 +291,15 @@ public sealed class PostDialog : Window
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (1) Name + Mail + sage
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (2) "本文:"
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // (3) message
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (4) Cookie 設定パネル (初期非表示)
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (5) error banner
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (6) status + buttons
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (4) 添付ファイル (添付できる掲示板だけ)
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (5) Cookie 設定パネル (初期非表示)
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (6) error banner
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // (7) status + buttons
 
         // (0) Subject (スレ立て時のみ)。レス書き込みなら row 0 は空 = Auto は 0 高さ。
         if (_vm.IsNewThread)
         {
-            var subjectRow = BuildLabeledTextBox("題名:", nameof(PostFormViewModel.Subject));
+            var subjectRow = BuildLabeledTextBox(_vm.PostForm.SubjectOptional ? "題名 (省略可):" : "題名:", nameof(PostFormViewModel.Subject));
             subjectRow.Margin = new Thickness(0, 0, 0, 8);
             Grid.SetRow(subjectRow, 0);
             root.Children.Add(subjectRow);
@@ -338,7 +339,7 @@ public sealed class PostDialog : Window
         nameBox.SetBinding(TextBox.TextProperty, new Binding(nameof(PostFormViewModel.Name)) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
         Grid.SetColumn(nameBox, 1); headerRow.Children.Add(nameBox);
 
-        var mailLabel = new TextBlock { Text = "メール:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        var mailLabel = new TextBlock { Text = _vm.PostForm.MailLabel ?? "メール:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         Grid.SetColumn(mailLabel, 2); headerRow.Children.Add(mailLabel);
 
         var mailBox = new TextBox { Margin = new Thickness(0, 0, 12, 0) };
@@ -439,18 +440,29 @@ public sealed class PostDialog : Window
         Grid.SetRow(msgBorder, 3);
         root.Children.Add(msgBorder);
 
-        // (4) Cookie 設定パネル — フッターの「Cookie 設定」ボタンで開閉する折り畳み領域。
+        // (4) 添付ファイル (4chan・ふたば)。ファイル選択・クリップボードの画像の貼り付け・ドラッグ (本文欄にも落とせる) で付ける
+        if (_vm.PostForm.SupportsAttachment)
+        {
+            var attachRow = BuildAttachmentRow();
+            Grid.SetRow(attachRow, 4);
+            root.Children.Add(attachRow);
+            AllowDrop = true;
+            DragOver += OnAttachmentDragOver;
+            Drop     += OnAttachmentDrop;
+        }
+
+        // (5) Cookie 設定パネル — フッターの「Cookie 設定」ボタンで開閉する折り畳み領域。
         // 中身は認証モード切替 (どんぐり: なし / 通常 / メール認証) と Cookie 削除ボタン。
         // 初期状態 Collapsed (= 高さ 0) なので、開かない限り本文 (row 3 / Star) の表示領域を奪わない。
         // どんぐりを使わない提供者では Cookie 設定パネル (認証モード切替 / Cookie 削除) 自体を作らない。
         if (_vm.PostForm.UsesDonguriAuth)
         {
             _cookieSettingsPanel = BuildCookieSettingsPanel();
-            Grid.SetRow(_cookieSettingsPanel, 4);
+            Grid.SetRow(_cookieSettingsPanel, 5);
             root.Children.Add(_cookieSettingsPanel);
         }
 
-        // (5) エラーバナー (ErrorMessage が空でないとき表示)
+        // (6) エラーバナー (ErrorMessage が空でないとき表示)
         var errorBanner = new Border
         {
             Background  = new SolidColorBrush(Color.FromRgb(0xFC, 0xE4, 0xE4)),
@@ -488,10 +500,10 @@ public sealed class PostDialog : Window
         {
             Converter = new EmptyStringToVisibilityConverter(),
         });
-        Grid.SetRow(errorBanner, 5);
+        Grid.SetRow(errorBanner, 6);
         root.Children.Add(errorBanner);
 
-        // (6) ステータス + Cookie 設定 / レビュー / 送信 / 取消
+        // (7) ステータス + Cookie 設定 / レビュー / 送信 / 取消
         var footer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -529,7 +541,7 @@ public sealed class PostDialog : Window
         Grid.SetColumn(btnPanel, 1);
         footer.Children.Add(btnPanel);
 
-        Grid.SetRow(footer, 6);
+        Grid.SetRow(footer, 7);
         root.Children.Add(footer);
 
         Loaded += (_, _) =>
@@ -697,7 +709,7 @@ public sealed class PostDialog : Window
             await WebView2Helper.EnsureCoreAsync(_messageWebView).ConfigureAwait(true);
             // 'ready' を取りこぼさないよう NavigateToString より前に購読する。
             _messageWebView.WebMessageReceived += OnEditorWebMessageReceived;
-            _messageWebView.CoreWebView2.NavigateToString(BuildMessageEditorHtml());
+            _messageWebView.CoreWebView2.NavigateToString(BuildMessageEditorHtml(_vm.PostForm.SupportsAttachment));
         }
         catch (Exception ex)
         {
@@ -706,8 +718,10 @@ public sealed class PostDialog : Window
     }
 
     /// <summary>本文 textarea を内包する最小 HTML。絵文字フォントが有効なら @font-face を注入し、
-    /// textarea の font-family に絵文字フォントを差し込んでカラー表示する (無効時は従来の WPF と同じ顔ぶれ)。</summary>
-    private static string BuildMessageEditorHtml()
+    /// textarea の font-family に絵文字フォントを差し込んでカラー表示する (無効時は従来の WPF と同じ顔ぶれ)。
+    /// <paramref name="allowAttach"/> なら、貼り付け (Ctrl+V) やドロップされたファイルを <c>attach</c> メッセージで送る (添付)。
+    /// 添付できない掲示板でも、ファイルのドロップでエディタがそのファイルを開いてしまわないよう止める。</summary>
+    private static string BuildMessageEditorHtml(bool allowAttach)
     {
         var fontFace = ChBrowser.Services.Fonts.EmojiFontService.BuildFontFaceCssOrNull() ?? "";
         var emojiFam = ChBrowser.Services.Fonts.EmojiFontService.Active
@@ -735,6 +749,13 @@ if(window.chrome&&window.chrome.webview){window.chrome.webview.addEventListener(
  if(d.type==='setText'){if(ed.value!==d.text)ed.value=(d.text||'');}
  else if(d.type==='focus'){ed.focus();}
 });}
+var ATTACH=" + (allowAttach ? "true" : "false") + @";
+function hasFiles(e){var t=e.dataTransfer;return !!(t&&t.types&&Array.prototype.indexOf.call(t.types,'Files')>=0);}
+function readFile(f){var r=new FileReader();r.onload=function(){send({type:'attach',name:f.name||'',data:r.result});};r.readAsDataURL(f);}
+if(ATTACH)ed.addEventListener('paste',function(e){var it=(e.clipboardData&&e.clipboardData.items)||[];
+ for(var i=0;i<it.length;i++){if(it[i].kind==='file'){var f=it[i].getAsFile();if(f){e.preventDefault();readFile(f);return;}}}});
+document.addEventListener('dragover',function(e){if(hasFiles(e)){e.preventDefault();e.dataTransfer.dropEffect=ATTACH?'copy':'none';}});
+document.addEventListener('drop',function(e){var fs=e.dataTransfer&&e.dataTransfer.files;if(fs&&fs.length){e.preventDefault();if(ATTACH)readFile(fs[0]);}});
 send({type:'ready'});
 </script></body></html>";
     }
@@ -765,6 +786,9 @@ send({type:'ready'});
                     break;
                 case "cancel":
                     if (!_vm.IsBusy) Close();
+                    break;
+                case "attach":
+                    if (_vm.PostForm.SupportsAttachment) AttachFromEditorMessage(root);
                     break;
             }
         }
@@ -801,6 +825,130 @@ send({type:'ready'});
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[PostDialog] editor focus failed: {ex.Message}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 添付ファイル (4chan・ふたば)
+    // -----------------------------------------------------------------
+
+    /// <summary>「添付: image.png (1.2 MB) [ファイルを選択…] [貼り付け] [×]」の行。</summary>
+    private FrameworkElement BuildAttachmentRow()
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var label = new TextBlock { Text = "添付:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        DockPanel.SetDock(label, Dock.Left);
+        row.Children.Add(label);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        var pick = new Button { Content = "ファイルを選択…", Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(6, 0, 0, 0) };
+        pick.Click += (_, _) => PickAttachmentFile();
+        var paste = new Button { Content = "貼り付け", Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(6, 0, 0, 0),
+                                 ToolTip = "クリップボードの画像 (またはコピーしたファイル) を添付します。本文欄で Ctrl+V しても添付できます" };
+        paste.Click += (_, _) => PasteAttachmentFromClipboard();
+        var clear = new Button { Content = "×", Padding = new Thickness(6, 1, 6, 1), Margin = new Thickness(6, 0, 0, 0), ToolTip = "添付を外す" };
+        clear.SetBinding(Button.CommandProperty, new Binding(nameof(PostFormViewModel.ClearAttachmentCommand)));
+        buttons.Children.Add(pick);
+        buttons.Children.Add(paste);
+        buttons.Children.Add(clear);
+        DockPanel.SetDock(buttons, Dock.Right);
+        row.Children.Add(buttons);
+
+        var text = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming      = TextTrimming.CharacterEllipsis,
+            ToolTip           = "ファイルをこの窓 (本文欄を含む) にドラッグしても添付できます",
+        };
+        text.SetBinding(TextBlock.TextProperty, new Binding(nameof(PostFormViewModel.AttachmentText)));
+        row.Children.Add(text);
+        return row;
+    }
+
+    private void PickAttachmentFile()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title  = "添付するファイル",
+            Filter = "画像・動画 (*.jpg;*.jpeg;*.png;*.gif;*.webp;*.webm;*.mp4)|*.jpg;*.jpeg;*.png;*.gif;*.webp;*.webm;*.mp4|すべてのファイル (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this) == true) AttachFromPath(dlg.FileName);
+    }
+
+    private void AttachFromPath(string path)
+    {
+        try
+        {
+            var info = new System.IO.FileInfo(path);
+            if (info.Length > PostFormViewModel.MaxAttachmentBytes)
+            {
+                _vm.ErrorMessage = $"ファイルが大きすぎます ({PostAttachmentFile.FormatSize(info.Length)})。";
+                return;
+            }
+            _vm.SetAttachment(info.Name, System.IO.File.ReadAllBytes(path));
+        }
+        catch (Exception ex)
+        {
+            _vm.ErrorMessage = $"ファイルを読み込めませんでした: {ex.Message}";
+        }
+    }
+
+    /// <summary>クリップボードの画像 (PNG にする) か、コピーしたファイル (先頭 1 つ) を添付する。</summary>
+    private void PasteAttachmentFromClipboard()
+    {
+        try
+        {
+            if (Clipboard.ContainsFileDropList() && Clipboard.GetFileDropList() is { Count: > 0 } files && files[0] is { } first)
+            {
+                AttachFromPath(first);
+                return;
+            }
+            if (Clipboard.ContainsImage() && Clipboard.GetImage() is { } image)
+            {
+                var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+                using var ms = new System.IO.MemoryStream();
+                encoder.Save(ms);
+                _vm.SetAttachment("image.png", ms.ToArray());
+                return;
+            }
+            _vm.ErrorMessage = "クリップボードに画像がありません。";
+        }
+        catch (Exception ex)
+        {
+            _vm.ErrorMessage = $"貼り付けできませんでした: {ex.Message}";
+        }
+    }
+
+    private void OnAttachmentDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnAttachmentDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths) AttachFromPath(paths[0]);
+        e.Handled = true;
+    }
+
+    /// <summary>本文欄 (WebView) に貼り付け・ドロップされたファイル (<c>attach</c> メッセージ: 名前と data URL) を添付する。</summary>
+    private void AttachFromEditorMessage(JsonElement root)
+    {
+        var name    = root.TryGetProperty("name", out var np) ? np.GetString() ?? "" : "";
+        var dataUrl = root.TryGetProperty("data", out var dp) ? dp.GetString() ?? "" : "";
+        var comma   = dataUrl.IndexOf(',');
+        if (comma < 0) return;
+        try
+        {
+            var bytes = Convert.FromBase64String(dataUrl[(comma + 1)..]);
+            if (string.IsNullOrWhiteSpace(name))
+                name = "image" + (dataUrl.StartsWith("data:image/jpeg", StringComparison.Ordinal) ? ".jpg" : ".png");
+            _vm.SetAttachment(name, bytes);
+        }
+        catch (FormatException ex)
+        {
+            _vm.ErrorMessage = $"添付できませんでした: {ex.Message}";
         }
     }
 
@@ -982,7 +1130,7 @@ send({type:'ready'});
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var lbl = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0), Width = 60 };
+        var lbl = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0), MinWidth = 60 };
         Grid.SetColumn(lbl, 0);
         grid.Children.Add(lbl);
 

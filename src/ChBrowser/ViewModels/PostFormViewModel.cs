@@ -91,6 +91,56 @@ public sealed partial class PostFormViewModel : ObservableObject
     /// <summary>返信先を外す (= スレ本体への返信にする)。</summary>
     public IRelayCommand ClearReplyTargetCommand { get; }
 
+    /// <summary>添付ファイル (<see cref="PostFormSpec.SupportsAttachment"/> の掲示板だけ)。null なら無し。</summary>
+    [ObservableProperty]
+    private PostAttachmentFile? _attachment;
+
+    /// <summary>添付の表示 (「image.png (1.2 MB)」)。無ければ「なし」。</summary>
+    public string AttachmentText => Attachment?.DisplayText ?? "なし";
+
+    public bool HasAttachment => Attachment is not null;
+
+    /// <summary>添付を外す。</summary>
+    public IRelayCommand ClearAttachmentCommand { get; }
+
+    /// <summary>添付できるファイルの大きさの上限 (4chan の最大の板の 8 MB より少し大きめ。掲示板ごとの上限は掲示板が判定する)。</summary>
+    public const long MaxAttachmentBytes = 16L * 1024 * 1024;
+
+    /// <summary>添付をセットする (ファイル選択・ドラッグ・貼り付け)。大きすぎるときはエラー欄に出して入れない。</summary>
+    public void SetAttachment(string fileName, byte[] data)
+    {
+        if (data.LongLength > MaxAttachmentBytes)
+        {
+            ErrorMessage = $"ファイルが大きすぎます ({PostAttachmentFile.FormatSize(data.LongLength)})。";
+            return;
+        }
+        ErrorMessage = "";
+        Attachment = new PostAttachmentFile(string.IsNullOrWhiteSpace(fileName) ? "image.png" : fileName, data);
+    }
+
+    partial void OnAttachmentChanged(PostAttachmentFile? value)
+    {
+        OnPropertyChanged(nameof(AttachmentText));
+        OnPropertyChanged(nameof(HasAttachment));
+        ClearAttachmentCommand.NotifyCanExecuteChanged();
+        SubmitCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>送信できる入力がそろっているか。本文は必須 (<see cref="PostFormSpec.MessageOptional"/> の掲示板は本文か添付のどちらか)、
+    /// スレ立ては題名 (<see cref="PostFormSpec.SubjectOptional"/> なら不要) と、必要なら添付。</summary>
+    private bool CanSubmit()
+    {
+        if (IsBusy) return false;
+        var hasMessage = !string.IsNullOrWhiteSpace(Message);
+        if (!hasMessage && !(PostForm.MessageOptional && Attachment is not null)) return false;
+        if (IsNewThread)
+        {
+            if (!PostForm.SubjectOptional && string.IsNullOrWhiteSpace(Subject)) return false;
+            if (PostForm.NewThreadRequiresAttachment && Attachment is null) return false;
+        }
+        return true;
+    }
+
     /// <summary>返信先をセットする (<paramref name="externalId"/> が null なら外す)。</summary>
     public void SetReplyTarget(string? externalId, string label)
     {
@@ -154,9 +204,10 @@ public sealed partial class PostFormViewModel : ObservableObject
         DialogTitle  = $"レスを書き込む: {threadTitle}";
         PostForm     = BbsRegistry.ResolveOrDefault(board.Host).PostForm;
         AuthMode     = PostForm.UsesDonguriAuth ? defaultAuthMode : PostAuthMode.None;
-        SubmitCommand = new AsyncRelayCommand(SubmitAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(Message));
+        SubmitCommand = new AsyncRelayCommand(SubmitAsync, CanSubmit);
         OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
         ClearReplyTargetCommand = new RelayCommand(() => SetReplyTarget(null, ""));
+        ClearAttachmentCommand  = new RelayCommand(() => Attachment = null, () => Attachment is not null);
     }
 
     /// <summary>スレ立て用コンストラクタ。<paramref name="defaultAuthMode"/> で初期選択する認証モードを指定する。</summary>
@@ -171,10 +222,10 @@ public sealed partial class PostFormViewModel : ObservableObject
         DialogTitle  = $"新規スレッド作成: {board.BoardName}";
         PostForm     = BbsRegistry.ResolveOrDefault(board.Host).PostForm;
         AuthMode     = PostForm.UsesDonguriAuth ? defaultAuthMode : PostAuthMode.None;
-        SubmitCommand = new AsyncRelayCommand(SubmitAsync,
-            () => !IsBusy && !string.IsNullOrWhiteSpace(Message) && !string.IsNullOrWhiteSpace(Subject));
+        SubmitCommand = new AsyncRelayCommand(SubmitAsync, CanSubmit);
         OpenAuthPageCommand = new RelayCommand(OpenAuthPage, () => !string.IsNullOrEmpty(AuthUrl));
         ClearReplyTargetCommand = new RelayCommand(() => SetReplyTarget(null, ""));
+        ClearAttachmentCommand  = new RelayCommand(() => Attachment = null, () => Attachment is not null);
     }
 
     partial void OnAuthUrlChanged(string value) => OpenAuthPageCommand.NotifyCanExecuteChanged();
@@ -260,7 +311,9 @@ public sealed partial class PostFormViewModel : ObservableObject
         ErrorMessage  = "";
         AuthUrl       = "";
         AuthCode      = "";
-        StatusMessage = "送信中…";
+        StatusMessage = BbsRegistry.ResolveOrDefault(_board.Host) is IBrowserPostProvider
+            ? "投稿窓で確認 (CAPTCHA) を済ませて「Post」を押してください…"
+            : "送信中…";
         IsBusy        = true;
         try
         {
@@ -274,7 +327,8 @@ public sealed partial class PostFormViewModel : ObservableObject
                 AuthMode:    AuthMode,
                 ThreadTitle: IsNewThread ? null : _threadTitle,
                 AuthToken:   _authToken,
-                ReplyTargetExternalId: IsNewThread ? null : ReplyTargetExternalId);
+                ReplyTargetExternalId: IsNewThread ? null : ReplyTargetExternalId,
+                Attachment:  PostForm.SupportsAttachment ? Attachment : null);
 
             var result = await _postClient.PostAsync(req, ct).ConfigureAwait(true);
             LastResult = result;
@@ -284,6 +338,9 @@ public sealed partial class PostFormViewModel : ObservableObject
                 case PostOutcome.Success:
                     StatusMessage = "書き込みました。";
                     ShouldClose   = true;
+                    break;
+                case PostOutcome.Cancelled:
+                    StatusMessage = "投稿をやめました。";
                     break;
                 case PostOutcome.NeedsConfirm:
                     ErrorMessage  = "確認画面で止まりました。Cookie を取得できなかった可能性があります。もう一度お試しください。";

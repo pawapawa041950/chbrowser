@@ -50,10 +50,14 @@ public sealed record PostRequest(
     string? AuthToken = null,
     /// <summary>返信先の投稿 ID (reddit: <c>t1_xxx</c>。null ならスレ本体への返信)。
     /// <see cref="Services.Bbs.PostFormSpec.SupportsReplyTarget"/> の提供者だけが使う。</summary>
-    string? ReplyTargetExternalId = null)
+    string? ReplyTargetExternalId = null,
+    /// <summary>添付ファイル (4chan・ふたば。<see cref="Services.Bbs.PostFormSpec.SupportsAttachment"/> の提供者だけが使う)。null なら無し。</summary>
+    PostAttachmentFile? Attachment = null)
 {
-    public bool IsNewThread => !string.IsNullOrEmpty(Subject) && string.IsNullOrEmpty(ThreadKey);
-    public bool IsReply     =>  string.IsNullOrEmpty(Subject) && !string.IsNullOrEmpty(ThreadKey);
+    /// <summary>スレ立てか (スレキーが無い)。題名は掲示板によっては省略できる (4chan) ので見ない
+    /// (題名が必須の掲示板では投稿ダイアログが空の題名で送らせない)。</summary>
+    public bool IsNewThread => string.IsNullOrEmpty(ThreadKey);
+    public bool IsReply     => !string.IsNullOrEmpty(ThreadKey);
 
     /// <summary>kakikomi.txt 等で使う「実効スレタイトル」 — 新スレなら <see cref="Subject"/>、レスなら <see cref="ThreadTitle"/>。</summary>
     public string EffectiveSubject => IsNewThread ? (Subject ?? "") : (ThreadTitle ?? "");
@@ -63,4 +67,21 @@ public sealed record PostRequest(
     public string PageUrl => IsReply
         ? Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host).ThreadUrl(Board.Host, Board.DirectoryName, ThreadKey!)
         : Board.Url;
+}
+
+/// <summary>投稿に添付するファイル 1 つ (画像・動画)。ファイル選択・貼り付け・ドラッグのどれでも中身をメモリに持つ
+/// (貼り付けた画像は元のファイルが無いため)。</summary>
+/// <param name="FileName">送信するファイル名 (拡張子で種類を判定する掲示板があるので、貼り付けた画像は <c>image.png</c>)。</param>
+/// <param name="Data">ファイルの中身。</param>
+public sealed record PostAttachmentFile(string FileName, byte[] Data)
+{
+    /// <summary>ダイアログ表示用 (「image.png (1.2 MB)」)。</summary>
+    public string DisplayText => $"{FileName} ({FormatSize(Data.LongLength)})";
+
+    public static string FormatSize(long bytes) => bytes switch
+    {
+        >= 1024 * 1024 => $"{bytes / 1024d / 1024d:0.0} MB",
+        >= 1024        => $"{bytes / 1024d:0} KB",
+        _              => $"{bytes} B",
+    };
 }

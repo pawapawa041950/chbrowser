@@ -21,6 +21,11 @@ namespace ChBrowser.Services.Bbs;
 /// <param name="BodyFormat">本文の書式 (reddit は Markdown。ダイアログの注記に使う)。</param>
 /// <param name="RequiresLogin">書き込みに掲示板へのログインが必須 (reddit)。</param>
 /// <param name="SupportsReplyTarget">返信先を本文のアンカーではなく投稿 ID で指定する (reddit。<see cref="PostRequest.ReplyTargetExternalId"/>)。</param>
+/// <param name="SupportsAttachment">ファイル (画像・動画) を 1 つ添付できる (4chan・ふたば。<see cref="PostRequest.Attachment"/>)。</param>
+/// <param name="NewThreadRequiresAttachment">スレ立てに添付ファイルが必須 (4chan・ふたばの画像板)。</param>
+/// <param name="SubjectOptional">スレ立ての題名を省略できる (4chan)。false なら題名が空では送れない。</param>
+/// <param name="MessageOptional">本文を省略できる (4chan は画像だけのレスを書ける)。false なら本文が空では送れない。</param>
+/// <param name="MailLabel">メール欄の見出し (4chan は「Options」欄なので「オプション:」)。null なら「メール:」。</param>
 public sealed record PostFormSpec(
     bool SupportsName,
     bool SupportsMail,
@@ -30,7 +35,12 @@ public sealed record PostFormSpec(
     string? AuthCookieName = null,
     PostBodyFormat BodyFormat = PostBodyFormat.Plain,
     bool RequiresLogin = false,
-    bool SupportsReplyTarget = false);
+    bool SupportsReplyTarget = false,
+    bool SupportsAttachment = false,
+    bool NewThreadRequiresAttachment = false,
+    bool SubjectOptional = false,
+    bool MessageOptional = false,
+    string? MailLabel = null);
 
 /// <summary>投稿本文の書式。</summary>
 public enum PostBodyFormat

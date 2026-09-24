@@ -46,6 +46,9 @@ public sealed class PostClient
     /// <summary>提供者ごとの Cookie 保管 (エッヂ等)。注入されていなければ Cookie を持ち回らない。</summary>
     private readonly ProviderCookieJars? _cookieJars;
 
+    /// <summary>ブラウザの投稿窓 (<see cref="IBrowserPostProvider"/> の掲示板の書き込みに使う)。App が起動時に入れる。</summary>
+    public IBrowserPoster? BrowserPoster { get; set; }
+
     public PostClient(MonazillaClient http, DonguriService donguri, KakikomiLog? kakikomi = null,
                       ProviderCookieJars? cookieJars = null)
     {
@@ -61,6 +64,15 @@ public sealed class PostClient
         var provider = BbsRegistry.ResolveOrDefault(request.Board.Host);
         if ((provider.Capabilities & BbsCapabilities.Posting) == 0)
             throw new InvalidOperationException("この掲示板は書き込みに対応していません。");
+
+        // ブラウザの投稿フォームで書き込む掲示板 (4chan): HTTP では送らず投稿窓に任せる
+        if (provider is IBrowserPostProvider browserProvider)
+        {
+            if (BrowserPoster is null) throw new InvalidOperationException("ブラウザの投稿窓を使えません。");
+            var result = await BrowserPoster.PostAsync(browserProvider, request, ct).ConfigureAwait(false);
+            if (result.Outcome == PostOutcome.Success) AppendKakikomi(request);
+            return result;
+        }
 
         // 提供者ごとの Cookie 保管 (エッヂ等)。認証 Cookie を既に持っていれば手入力の認証トークンは送らない
         // (サーバは Cookie を優先するので、メール欄に余計な "#…" を付けないため)。

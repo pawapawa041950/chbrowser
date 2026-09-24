@@ -224,7 +224,11 @@ public partial class App : Application
         // 提供者ごとの Cookie 保管 (エッヂの edge-token / tinker-token 等)。どんぐりとは別ファイル。
         var providerCookieJars = new ChBrowser.Services.Bbs.ProviderCookieJars(paths);
         _providerCookieJars    = providerCookieJars;
-        var postClient     = new PostClient(_monazilla, donguriService, kakikomiLog, providerCookieJars);
+        var postClient     = new PostClient(_monazilla, donguriService, kakikomiLog, providerCookieJars)
+        {
+            // 4chan の書き込みは投稿窓 (アプリ内ブラウザ) で行う (決定 D40)
+            BrowserPoster = new ChBrowser.Services.Browser.BrowserPostUi(Dispatcher),
+        };
 
         // NG (Phase 13)
         var ngStorage = new NgStorage(paths);

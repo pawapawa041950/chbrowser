@@ -23,9 +23,10 @@ namespace ChBrowser.Services.Bbs;
 /// <item><description>本文 (<c>com</c>) は HTML → 本文方言 (<see cref="FourChanBodyConverter"/>)。添付画像は本文末尾に URL を置いて画像スロットで出す
 ///   (<c>i.4cdn.org/&lt;板&gt;/&lt;tim&gt;&lt;ext&gt;</c>、拡張情報にも記録)。</description></item>
 /// <item><description>API へは 1 秒以上空けて要求する (4chan の API 規約)。</description></item>
-/// <item><description>書き込みは後の段階 (Cloudflare の確認と CAPTCHA があるため、アプリ内ブラウザで行う。決定 D40)。</description></item>
+/// <item><description>書き込みは投稿窓 (アプリ内ブラウザ) で 4chan の投稿フォームに入れ、ユーザが確認と CAPTCHA を済ませて送る
+///   (Cloudflare の確認と CAPTCHA があり HTTP では送れない。決定 D40、<see cref="IBrowserPostProvider"/>)。</description></item>
 /// </list></summary>
-public sealed class FourChanProvider : IBbsProvider, ISnapshotThreadProvider
+public sealed class FourChanProvider : IBbsProvider, ISnapshotThreadProvider, IBrowserPostProvider
 {
     public const string CanonicalHost = "boards.4chan.org";
     private const string Origin    = "https://" + CanonicalHost;
@@ -40,7 +41,8 @@ public sealed class FourChanProvider : IBbsProvider, ISnapshotThreadProvider
     public string DisplayName => "4chan";
 
     public BbsCapabilities Capabilities =>
-        BbsCapabilities.BoardList | BbsCapabilities.ThreadList | BbsCapabilities.ThreadFetch | BbsCapabilities.Attachments;
+        BbsCapabilities.BoardList | BbsCapabilities.ThreadList | BbsCapabilities.ThreadFetch | BbsCapabilities.Attachments
+        | BbsCapabilities.Posting | BbsCapabilities.ThreadCreation;
 
     public Encoding TextEncoding => Encoding.UTF8;
     public IReadOnlyList<string> StorageRoots { get; } = new[] { "4chan.org" };
@@ -289,16 +291,76 @@ public sealed class FourChanProvider : IBbsProvider, ISnapshotThreadProvider
     }
 
     // -----------------------------------------------------------------
-    // 書き込み (後の段階。決定 D40)
+    // 書き込み (投稿窓 = アプリ内ブラウザの 4chan の投稿フォーム。決定 D40)
     // -----------------------------------------------------------------
 
-    public PostFormSpec PostForm { get; } = new(SupportsName: false, SupportsMail: false, SupportsNewThread: false, UsesDonguriAuth: false);
+    /// <summary>名前 (<c>名前#トリップ</c> 可)・Options 欄 (<c>sage</c> 等)・本文・添付 1 つ。スレ立ては題名を省略でき、画像が必須
+    /// (板によっては不要だが、その判定は 4chan に任せず先に止める方が分かりやすい)。レスは画像だけでも書ける。</summary>
+    public PostFormSpec PostForm { get; } = new(
+        SupportsName: true, SupportsMail: true, SupportsNewThread: true, UsesDonguriAuth: false,
+        SupportsAttachment: true, NewThreadRequiresAttachment: true, SubjectOptional: true, MessageOptional: true,
+        MailLabel: "オプション:");
 
+    /// <summary>HTTP では送らない (<see cref="IBrowserPostProvider"/> の投稿窓で送る)。</summary>
     public PostSubmission BuildPostSubmission(PostRequest request)
-        => throw new NotSupportedException("4chan の書き込みはまだ対応していません。");
+        => throw new NotSupportedException("4chan の書き込みは投稿窓 (アプリ内ブラウザ) で行います。");
 
     public PostResult ClassifyPostResponse(string html, PostResponseContext context)
-        => new(PostOutcome.UnknownError, "4chan の書き込みはまだ対応していません。", "");
+        => ClassifyPostResultHtml(html) ?? new PostResult(PostOutcome.UnknownError, "4chan の応答を解釈できませんでした", "");
+
+    public string BrowserProfileName => "4chan";
+    public string BrowserPostWindowTitle => "4chan に投稿";
+
+    public Uri BrowserPostPageUrl(PostRequest request)
+        => new(request.IsReply
+            ? ThreadUrl(CanonicalHost, request.Board.DirectoryName, request.ThreadKey!)
+            : BoardUrl(CanonicalHost, request.Board.DirectoryName));
+
+    /// <summary>投稿フォーム (<c>form[name=post]</c>) の <c>name</c> / <c>email</c> / <c>com</c> (+ スレ立ては <c>sub</c>) と <c>upfile</c>。
+    /// フォームは「[Post a Reply]」を押すまで隠れていることがあるので先に出す。</summary>
+    public BrowserPostFill BuildBrowserPostFill(PostRequest request)
+    {
+        var fields = new List<KeyValuePair<string, string>>
+        {
+            new("name",  request.Name ?? ""),
+            new("email", request.Mail ?? ""),
+            new("com",   (request.Message ?? "").Replace("\r\n", "\n").Replace('\r', '\n')),
+        };
+        if (request.IsNewThread) fields.Add(new("sub", request.Subject ?? ""));
+        const string showForm =
+            "var pf = document.getElementById('postForm');" +
+            "if (pf && getComputedStyle(pf).display === 'none') { var a = document.querySelector('#togglePostFormLink a'); if (a) a.click(); }";
+        return new BrowserPostFill("form[name=\"post\"]", fields, "upfile", showForm, "#postForm");
+    }
+
+    public PostResult? ClassifyBrowserPostPage(Uri url, string html) => ClassifyPostResultHtml(html);
+
+    private static readonly Regex PostDoneRegex = new(@"<!--\s*thread:(?<thread>\d+),no:(?<no>\d+)\s*-->", RegexOptions.Compiled);
+    private static readonly Regex PostErrorRegex = new(@"<span[^>]*id=""errmsg""[^>]*>(?<msg>[\s\S]*?)</span>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>投稿の応答ページ (<c>sys.4chan.org/&lt;板&gt;/post</c>) を判定する。
+    /// 成功: <c>&lt;!-- thread:スレ番号,no:投稿番号 --&gt;</c> (スレ立てはスレ番号が 0 で、投稿番号が新しいスレの番号)。
+    /// エラー: <c>&lt;span id="errmsg"&gt;Error: …&lt;/span&gt;</c>。どちらでもなければ null (結果のページではない)。</summary>
+    public static PostResult? ClassifyPostResultHtml(string html)
+    {
+        if (string.IsNullOrEmpty(html)) return null;
+        var done = PostDoneRegex.Match(html);
+        if (done.Success && long.TryParse(done.Groups["no"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var no))
+        {
+            var thread = done.Groups["thread"].Value;
+            return new PostResult(PostOutcome.Success, "", "",
+                NewPostExternalId: no.ToString(CultureInfo.InvariantCulture),
+                NewPostNumber:     no,
+                NewThreadKey:      thread == "0" ? no.ToString(CultureInfo.InvariantCulture) : null);
+        }
+        var err = PostErrorRegex.Match(html);
+        if (err.Success)
+        {
+            var msg = WebUtility.HtmlDecode(Regex.Replace(err.Groups["msg"].Value, "<[^>]+>", "")).Trim();
+            return new PostResult(PostOutcome.UnknownError, msg.Length > 0 ? msg : "4chan がエラーを返しました", "");
+        }
+        return null;
+    }
 
     public Post? ParseThreadLine(string line) => null;
 

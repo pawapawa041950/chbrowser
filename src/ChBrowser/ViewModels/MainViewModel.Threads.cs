@@ -817,8 +817,14 @@ public sealed partial class MainViewModel
             var submittedMessage = vm.Message ?? "";
             UpdateDonguriStatus();
             await RefreshThreadAsync(tab).ConfigureAwait(true);
-            // 掲示板が新しい投稿の ID を返す場合 (reddit) はそれで自分の書き込みを特定する。無ければ本文の類似度で推定 (5ch 等)
-            if (vm.LastResult?.NewPostExternalId is { Length: > 0 } newId
+            // 掲示板が新しい投稿の番号を返す場合 (4chan) はそのまま自分の書き込みにする (取得に反映される前でも印は残る)。
+            // ID を返す場合 (reddit) は取得した対応表で番号に直す。どちらも無ければ本文の類似度で推定 (5ch 等)
+            if (vm.LastResult?.NewPostNumber is long postedNumber)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[autoOwn] {tab.Header}: 投稿番号 {postedNumber} を自動 own にマーク");
+                ToggleOwnPost(tab, postedNumber, isOwn: true);
+            }
+            else if (vm.LastResult?.NewPostExternalId is { Length: > 0 } newId
                 && _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.NumberOf(newId) is long ownNumber)
             {
                 ChBrowser.Services.Logging.LogService.Instance.Write($"[autoOwn] {tab.Header}: 投稿 ID {newId} → r{ownNumber} を自動 own にマーク");
@@ -1086,8 +1092,15 @@ public sealed partial class MainViewModel
             await LoadThreadListAsync(new BoardViewModel(board)).ConfigureAwait(true);
             // 掲示板が新しいスレの ID を返す場合 (reddit: t3_xxx) はそのスレをそのまま開く
             // (reddit の既定の並び順 hot では、立てたばかりのスレは一覧に出ないことが多いため)
+            // (4chan は新しいスレの番号 = スレキーを返すので同様に開く)
             if (vm.LastResult?.NewPostExternalId is { } newId && newId.StartsWith("t3_", StringComparison.Ordinal) && newId.Length > 3)
                 await OpenThreadAsync(board, new ThreadInfo(newId[3..], vm.Subject ?? "", 1, 0)).ConfigureAwait(true);
+            else if (vm.LastResult?.NewThreadKey is { Length: > 0 } newKey)
+            {
+                await OpenThreadAsync(board, new ThreadInfo(newKey, vm.Subject ?? "", 1, 0)).ConfigureAwait(true);
+                if (vm.LastResult.NewPostNumber is long opNumber && FindThreadTab(board, newKey) is { } newTab)
+                    ToggleOwnPost(newTab, opNumber, isOwn: true);
+            }
         };
         dlg.Show();
     }
