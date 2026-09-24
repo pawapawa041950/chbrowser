@@ -320,7 +320,8 @@ public sealed record SnapshotFetchOptions(
     IReadOnlySet<string>?                       KnownParentIds = null,
     Func<IReadOnlyList<SnapshotPost>, Task>?    OnPartial      = null);
 
-/// <summary>スナップショット中の 1 投稿 (番号はまだ無い)。<see cref="ParentExternalId"/> が null / スレ本体の ID ならトップレベル。
+/// <summary>スナップショット中の 1 投稿。<see cref="Number"/> は掲示板自身のレス番号 (4chan / ふたば。あればそのまま使う)、
+/// 無ければ (reddit) アプリが初見順に採番する。<see cref="ParentExternalId"/> が null / スレ本体の ID ならトップレベル。
 /// <see cref="Ext"/> の <c>ParentNumber</c> / <c>ExternalId</c> は <see cref="SnapshotThreadFetcher"/> が埋める。</summary>
 public sealed record SnapshotPost(
     string     ExternalId,
@@ -332,7 +333,8 @@ public sealed record SnapshotPost(
     string     Id,
     string     Body,
     string?    ThreadTitle,
-    PostExtra? Ext = null);
+    PostExtra? Ext = null,
+    long?      Number = null);
 
 /// <summary>スレ全体の取得結果。<see cref="Posts"/> の先頭がスレ本体 (レス 1 になる)。
 /// <see cref="Truncated"/> は取り切れなかった分 (reddit の more) が残っていることを示す (次回取得で埋まる)。</summary>

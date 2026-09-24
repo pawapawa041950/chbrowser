@@ -150,7 +150,8 @@ public partial class App : Application
 
         _monazilla       = new MonazillaClient();
         // Phase 11: 起動時に Timeout / User-Agent override を反映 (両方とも次回起動時反映扱い)
-        _monazilla.Http.Timeout = TimeSpan.FromSeconds(Math.Clamp(_currentConfig.TimeoutSec, 5, 600));
+        // 制限時間は通常の通信にだけ掛ける (reddit のログイン窓でユーザを待つ時間は数えない。MonazillaClient.RequestTimeout)
+        _monazilla.RequestTimeout = TimeSpan.FromSeconds(Math.Clamp(_currentConfig.TimeoutSec, 5, 600));
         if (!string.IsNullOrWhiteSpace(_currentConfig.UserAgentOverride))
         {
             try

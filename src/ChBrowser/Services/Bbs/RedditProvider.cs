@@ -41,7 +41,6 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     private static readonly Regex ThreadPathRegex = new(
         @"^/r/(?<dir>[A-Za-z0-9_]+)/comments/(?<key>[A-Za-z0-9]+)(?:/(?<slug>[^/]*)(?:/(?<cid>[A-Za-z0-9]+))?)?/?$", RegexOptions.Compiled);
 
-    private static readonly CultureInfo Ja = CultureInfo.GetCultureInfo("ja-JP");
 
     public string Id          => "reddit";
     public string DisplayName => "reddit";
@@ -531,12 +530,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     }
 
     /// <summary>5ch と同じ書式 (ローカル時刻): <c>2026/09/23(火) 12:34:56</c>。</summary>
-    public static string FormatDate(long epoch)
-    {
-        if (epoch <= 0) return "";
-        var t = DateTimeOffset.FromUnixTimeSeconds(epoch).ToLocalTime();
-        return t.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture) + "(" + t.ToString("ddd", Ja) + ") " + t.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
-    }
+    public static string FormatDate(long epoch) => BbsDate.FromEpoch(epoch);
 
     // -----------------------------------------------------------------
     // 書き込み (段階 5-B で実装)

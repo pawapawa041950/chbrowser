@@ -3197,7 +3197,9 @@
         let best = null;
         let bestY = -Infinity;
         const sy = window.scrollY || window.pageYOffset || 0;
-        for (let n = 1; n <= N; n++) {
+        // 実在するレス番号だけを昇順に辿る (4chan / ふたば等の 9 桁の疎な番号で 1 から数えると数億回になり固まる)
+        for (const n of sortedPostNumbers) {
+            if (n > N) break;
             const el = document.getElementById('r' + n);
             if (!el) continue;
             const absY = el.getBoundingClientRect().top + sy;
@@ -3316,9 +3318,9 @@
     function findReadProgressMaxNumber() {
         if (!allPosts || allPosts.length === 0) return null;
         const vh   = document.documentElement.clientHeight;
-        const maxN = allPosts[allPosts.length - 1].number;
         let lastValid = 0;
-        for (let n = 1; n <= maxN; n++) {
+        // 実在するレス番号だけを昇順に辿る (4chan / ふたば等の 9 桁の疎な番号で 1 から数えると数億回になり固まる)
+        for (const n of sortedPostNumbers) {
             const el = document.getElementById('r' + n);
             // DOM に居ない番号は防御的に飛ばす (= 何らかの理由で primary id が無いケースの保険)。
             if (!el) continue;

@@ -224,13 +224,15 @@ internal static class SnapshotThreadFetcher
             .Where(p => !string.IsNullOrEmpty(p.ExternalId) && !meta.IdToNumber.ContainsKey(p.ExternalId))
             .GroupBy(p => p.ExternalId, StringComparer.Ordinal).Select(g => g.First())      // 同じ ID の重複は最初だけ
             .OrderBy(p => string.Equals(p.ExternalId, rootId, StringComparison.Ordinal) ? 0 : 1)   // スレ本体を先頭に
+            .ThenBy(p => p.Number ?? 0)                                                                // 掲示板自身の番号があればその順
             .ThenBy(p => p.CreatedEpoch)
             .ThenBy(p => p.ExternalId, StringComparer.Ordinal)
             .ToList();
 
-        // 先に全部の番号を決めてから親を解決する (= 同じ回に来た親子の順序に依存しない)
-        var next = maxNumber;
-        foreach (var sp in unknown) meta.IdToNumber[sp.ExternalId] = ++next;
+        // 先に全部の番号を決めてから親を解決する (= 同じ回に来た親子の順序に依存しない)。
+        // 掲示板自身の番号がある投稿 (4chan / ふたば) はそれを使い、無い投稿 (reddit) は最大番号の次から採番する。
+        var next = Math.Max(maxNumber, unknown.Where(sp => sp.Number is not null).Select(sp => sp.Number!.Value).DefaultIfEmpty(0).Max());
+        foreach (var sp in unknown) meta.IdToNumber[sp.ExternalId] = sp.Number ?? ++next;
 
         // 親の投稿者名: 既存分 (呼び出し側が渡す) + この塊
         foreach (var sp in posts)
@@ -260,7 +262,7 @@ internal static class SnapshotThreadFetcher
                 DateText:    sp.DateText,
                 Id:          sp.Id,
                 Body:        sp.Body,
-                ThreadTitle: number == 1 ? sp.ThreadTitle : null,
+                ThreadTitle: string.Equals(sp.ExternalId, rootId, StringComparison.Ordinal) ? sp.ThreadTitle : null,   // スレ本体だけ (4chan はスレ本体の番号が 1 ではない)
                 Ext:         ext));
         }
         return fresh;
