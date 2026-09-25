@@ -20,6 +20,7 @@ public static class BbsRegistry
         new EddiProvider(),
         new RedditProvider(),
         new FourChanProvider(),
+        new FutabaProvider(),
     };
 
     /// <summary>5ch / bbspink の提供者。ホストが解決できない場面の既定 (= 現行動作の維持) に使う。</summary>

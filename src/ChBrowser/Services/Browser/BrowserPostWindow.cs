@@ -33,14 +33,19 @@ public sealed class BrowserPostWindow : Window
     private readonly WpfWebView2          _webView = new();
     private readonly TextBlock            _status  = new() { Margin = new Thickness(8, 4, 8, 6), TextWrapping = TextWrapping.Wrap };
     private readonly TaskCompletionSource<PostResult> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly string               _submitLabel;
     private PostResult? _lastError;
     private bool        _busy;
+
+    /// <summary>案内の「〜を済ませて」の部分 (確認のある掲示板は CAPTCHA、無ければ内容の確認)。</summary>
+    private string StepText => _provider.BrowserPostHasVerification ? "確認 (CAPTCHA) を済ませて" : "内容を確かめて";
 
     private BrowserPostWindow(IBrowserPostProvider provider, PostRequest request)
     {
         _provider = provider;
         _request  = request;
         _pageUrl  = provider.BrowserPostPageUrl(request);
+        _submitLabel = provider.BrowserPostSubmitLabel(request);
 
         Title  = provider.BrowserPostWindowTitle;
         Width  = 820;
@@ -51,7 +56,7 @@ public sealed class BrowserPostWindow : Window
         {
             Margin       = new Thickness(8, 8, 8, 4),
             TextWrapping = TextWrapping.Wrap,
-            Text = "書き込みダイアログの内容をこのページの投稿フォームに入れてあります。確認 (CAPTCHA) を済ませて、フォームの「Post」を押してください。" +
+            Text = $"書き込みダイアログの内容をこのページの投稿フォームに入れてあります。{StepText}、フォームの「{_submitLabel}」を押してください。" +
                    "投稿の結果はアプリが読み取り、この窓は自動で閉じます (やめるときは窓を閉じてください)。",
         };
         _status.Foreground = Brushes.DimGray;
@@ -90,6 +95,11 @@ public sealed class BrowserPostWindow : Window
         {
             await BrowserProfiles.InitializeAsync(_webView, _provider.BrowserProfileName);
             var core = _webView.CoreWebView2;
+            if (_provider.BrowserPostCaptureScript is { Length: > 0 } capture)
+            {
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(capture);
+                core.WebMessageReceived += (_, e) => OnCaptureMessage(e.WebMessageAsJson);
+            }
             core.NavigationCompleted += async (_, e) => await OnNavigationCompletedAsync(e);
             // 規約等のリンク (別窓) は既定のブラウザで開く (投稿窓の中を移らない)
             core.NewWindowRequested += (_, e) =>
@@ -136,7 +146,7 @@ public sealed class BrowserPostWindow : Window
                 // エラーのページ: フォームを開き直して入れ直す (窓を閉じればこのエラーが結果になる)
                 Log($"投稿エラー {url}: {result.Message}");
                 _lastError = result;
-                _status.Text = $"投稿できませんでした: {result.Message}\nフォームを開き直しました。もう一度確認を済ませて「Post」を押してください。";
+                _status.Text = $"投稿できませんでした: {result.Message}\nフォームを開き直しました。もう一度{StepText}「{_submitLabel}」を押してください。";
                 core.Navigate(_pageUrl.AbsoluteUri);
                 return;
             }
@@ -145,8 +155,8 @@ public sealed class BrowserPostWindow : Window
             _status.Text = filled switch
             {
                 "filled"  => _lastError is null
-                    ? "入力しました。確認 (CAPTCHA) を済ませて「Post」を押してください。"
-                    : $"前回のエラー: {_lastError.Message}\n入力し直しました。確認 (CAPTCHA) を済ませて「Post」を押してください。",
+                    ? $"入力しました。{StepText}「{_submitLabel}」を押してください。"
+                    : $"前回のエラー: {_lastError.Message}\n入力し直しました。{StepText}「{_submitLabel}」を押してください。",
                 "already" => _status.Text,
                 _         => "投稿フォームが見つかりません。ページの確認 (ブラウザの確認画面等) を済ませてください。",
             };
@@ -162,6 +172,27 @@ public sealed class BrowserPostWindow : Window
         {
             _busy = false;
         }
+    }
+
+    /// <summary>差し込んだ JS からの知らせ (ページの JS が XHR で送った投稿の応答等)。成功なら閉じる。
+    /// エラーでもフォームは開き直さない (送信済みかもしれないので、ページを見て確かめてもらう)。</summary>
+    private void OnCaptureMessage(string json)
+    {
+        if (_result.Task.IsCompleted) return;
+        PostResult? result;
+        try { result = _provider.ClassifyBrowserPostMessage(json); }
+        catch (Exception ex) { Log($"結果の知らせを解釈できませんでした: {ex.Message}"); return; }
+        if (result is null) return;
+        if (result.Outcome == PostOutcome.Success)
+        {
+            Log($"投稿成功 (知らせ) 番号 {result.NewPostNumber} スレ {result.NewThreadKey}");
+            _result.TrySetResult(result);
+            Close();
+            return;
+        }
+        Log($"投稿エラー (知らせ): {result.Message}");
+        _lastError = result;
+        _status.Text = $"投稿できませんでした: {result.Message}\nページの表示を確かめてください (直して送り直すか、窓を閉じてやめてください)。";
     }
 
     /// <summary>フォームに入力する。戻り値: <c>filled</c> (入れた) / <c>already</c> (このページでは入力済み) / <c>noform</c>。</summary>
@@ -193,7 +224,8 @@ public sealed class BrowserPostWindow : Window
   for (var i = 0; i < d.fields.length; i++) {
     var el = q(d.fields[i][0]);
     if (!el) continue;
-    el.value = d.fields[i][1];
+    if (el.type === 'checkbox') el.checked = d.fields[i][1] === 'on';
+    else el.value = d.fields[i][1];
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }

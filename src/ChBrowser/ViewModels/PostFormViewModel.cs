@@ -312,7 +312,7 @@ public sealed partial class PostFormViewModel : ObservableObject
         AuthUrl       = "";
         AuthCode      = "";
         StatusMessage = BbsRegistry.ResolveOrDefault(_board.Host) is IBrowserPostProvider
-            ? "投稿窓で確認 (CAPTCHA) を済ませて「Post」を押してください…"
+            ? "投稿窓で内容を確かめて、ページの送信ボタンを押してください…"
             : "送信中…";
         IsBusy        = true;
         try

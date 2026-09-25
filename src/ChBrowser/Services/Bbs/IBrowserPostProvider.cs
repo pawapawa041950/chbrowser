@@ -27,9 +27,23 @@ public interface IBrowserPostProvider
     /// <summary>フォームに入れる内容。</summary>
     BrowserPostFill BuildBrowserPostFill(PostRequest request);
 
+    /// <summary>投稿窓の案内に出す「ユーザが押すボタン」の名前 (4chan: 「Post」、ふたば: 「返信する」/「スレッドを立てる」)。</summary>
+    string BrowserPostSubmitLabel(PostRequest request) => "Post";
+
+    /// <summary>送信の前にユーザが済ませる確認があるか (4chan: CAPTCHA)。false なら案内は「内容を確かめて押す」だけ。</summary>
+    bool BrowserPostHasVerification => true;
+
     /// <summary>ページ遷移後の URL と HTML から、投稿の結果のページかを判定する。結果のページでなければ null
     /// (フォームのページ・確認のページ等。投稿窓はそのまま待つ)。</summary>
     PostResult? ClassifyBrowserPostPage(Uri url, string html);
+
+    /// <summary>投稿窓のすべてのページに読み込み前に差し込む JS (ページの JS が XHR で送る掲示板で、応答を拾って
+    /// <c>chrome.webview.postMessage</c> で知らせる。ふたば)。null (既定) なら差し込まない。</summary>
+    string? BrowserPostCaptureScript => null;
+
+    /// <summary><see cref="BrowserPostCaptureScript"/> が送ったメッセージ (JSON) から結果を判定する。結果でなければ null。
+    /// ここで得たエラーでは投稿窓はフォームを開き直さない (送信済みかもしれないので、ユーザが確かめる)。</summary>
+    PostResult? ClassifyBrowserPostMessage(string messageJson) => null;
 }
 
 /// <summary>投稿フォームへの入力内容。</summary>

@@ -263,6 +263,7 @@ public sealed partial class MainViewModel
             var finalState = ComputeMarkState(tab, stateHint);
             NotifyThreadListLogMark(board, info.Key, finalState);
             tab.State = finalState;
+            AppendThreadNotice(tab);
         }
         catch (System.Net.Http.HttpRequestException hex)
             when (hex.StatusCode == System.Net.HttpStatusCode.NotFound && tab.Posts.Count == 0)
@@ -336,6 +337,7 @@ public sealed partial class MainViewModel
             var finalState = ComputeMarkState(tab, stateHint: null);
             NotifyThreadListLogMark(tab.Board, tab.ThreadKey, finalState);
             tab.State = finalState;
+            AppendThreadNotice(tab);
         }
         catch (Exception ex)
         {
@@ -347,6 +349,13 @@ public sealed partial class MainViewModel
             _ = LoadAuthorProfilesAsync(tab);
             if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);
         }
+    }
+
+    /// <summary>スレの状態のお知らせ (ふたば: 「27年6月頃消えます」、スナップショット取得で meta.json に保存) をスレの状態表示の後ろに付ける。</summary>
+    private void AppendThreadNotice(ThreadTabViewModel tab)
+    {
+        if (_datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.Notice is { Length: > 0 } notice)
+            tab.StatusMessage = $"{tab.StatusMessage} — {notice}";
     }
 
     private ChBrowser.Services.Bbs.AuthorProfileCache? _authorProfileCache;

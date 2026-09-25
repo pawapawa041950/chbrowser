@@ -36,7 +36,7 @@ public enum BbsCapabilities
     Attachments     = 1 << 8,
     /// <summary>板の設定情報 (SETTING.TXT / setting.cgi 等) を取得できる。</summary>
     BoardInfo       = 1 << 9,
-    /// <summary>スレ一覧が並び順の選択とページング (続きを読み込む) を持つ (reddit)。<see cref="IBbsProvider.ListingSorts"/>。</summary>
+    /// <summary>スレ一覧がページング (続きを読み込む) を持つ (reddit)。並び順の選択は <see cref="IBbsProvider.ListingSorts"/> があれば出る (ふたばは並び順だけ)。</summary>
     ListingPaging   = 1 << 10,
 }
 
@@ -226,6 +226,10 @@ public interface IBbsProvider
     /// <see cref="PostExtra.ParentNumber"/> から「↳ 投稿者」として示す。番号自体は内部の鍵として使い続ける。</summary>
     bool ShowsPostNumbers => true;
 
+    /// <summary>この掲示板への要求 (スレ一覧・板一覧等、アプリ共通のクライアントが送るもの) に手を加える (ヘッダ・Cookie の追加)。
+    /// 既定は何もしない。ふたばはカタログの表示件数を Cookie で指定する。</summary>
+    void PrepareRequest(HttpRequestMessage request) { }
+
     /// <summary>名前欄の「ワッチョイ」(<c>xxxx-yyyy</c>) を検出して一覧・装飾するか。5ch 系の慣習。
     /// reddit はユーザー名に <c>xxxx-xxxx</c> を含みうる (<c>Particular-Lemon-556</c>) ので false。</summary>
     bool UsesWatchoi => true;
@@ -337,5 +341,7 @@ public sealed record SnapshotPost(
     long?      Number = null);
 
 /// <summary>スレ全体の取得結果。<see cref="Posts"/> の先頭がスレ本体 (レス 1 になる)。
-/// <see cref="Truncated"/> は取り切れなかった分 (reddit の more) が残っていることを示す (次回取得で埋まる)。</summary>
-public sealed record ThreadSnapshot(IReadOnlyList<SnapshotPost> Posts, bool Truncated = false, string? ProviderCursor = null);
+/// <see cref="Truncated"/> は取り切れなかった分 (reddit の more) が残っていることを示す (次回取得で埋まる)。
+/// <see cref="Notice"/> はスレの状態のお知らせ (ふたば: 「27年6月頃消えます」)。null なら前回のお知らせを残す。
+/// 差分だけを返す提供者 (ふたば: 既知の番号より後だけ) は、<see cref="Posts"/> が新着分だけでもよい (採番済みの投稿は飛ばされる)。</summary>
+public sealed record ThreadSnapshot(IReadOnlyList<SnapshotPost> Posts, bool Truncated = false, string? ProviderCursor = null, string? Notice = null);

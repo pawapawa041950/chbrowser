@@ -257,6 +257,9 @@ public partial class App : Application
 
         // reddit: WebView2 のログインセッション経由で www.reddit.com への要求を送る (起動時には通信しない)。
         SetupRedditSession(paths, mainVm);
+        // ふたば: そうだね はページと同じブラウザセッション (投稿窓と同じプロファイル) から送る (初期化は最初の そうだね の時)
+        _futabaSession = new ChBrowser.Services.Browser.BrowserSessionPage(Dispatcher, "futaba");
+        ChBrowser.Services.Bbs.FutabaProvider.PageRunner = _futabaSession;
         // 起動時にも 1 度 ApplyConfig を呼んで JS 側 (= スレ表示が後で開かれた時) に反映できるよう仕込む
         mainVm.ApplyConfig(_currentConfig);
 
@@ -275,7 +278,7 @@ public partial class App : Application
         MainWindow = window;
         // アプリの終了条件は WPF 既定の「最後のウィンドウが閉じたら」なので、reddit の隠しセッション窓やログイン窓が
         // 残っているとプロセスが終わらない。メインウィンドウが閉じたらそれらも閉じる。
-        window.Closed += (_, _) => CloseRedditWindows();
+        window.Closed += (_, _) => { CloseRedditWindows(); CloseBrowserSessions(); };
 
         // ショートカット & マウスジェスチャー (Phase 15) — MainWindow 作成後に setup
         _shortcutStorage = new ChBrowser.Services.Storage.ShortcutStorage(paths);
@@ -399,6 +402,17 @@ public partial class App : Application
     }
 
     /// <summary>reddit の隠しセッション窓と、開いているログイン窓を閉じる (メインウィンドウ終了時)。</summary>
+    /// <summary>ふたばのページ内で要求を送る隠しセッション窓 (そうだね。起動時には何もしない)。</summary>
+    private ChBrowser.Services.Browser.BrowserSessionPage? _futabaSession;
+
+    /// <summary>掲示板のブラウザセッションの隠し窓を閉じる (メインウィンドウ終了時)。</summary>
+    private void CloseBrowserSessions()
+    {
+        ChBrowser.Services.Bbs.FutabaProvider.PageRunner = null;
+        _futabaSession?.Dispose();
+        _futabaSession = null;
+    }
+
     private void CloseRedditWindows()
     {
         foreach (var w in Windows.OfType<ChBrowser.Services.Reddit.RedditLoginWindow>().ToList())

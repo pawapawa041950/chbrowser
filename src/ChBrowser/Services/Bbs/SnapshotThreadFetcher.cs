@@ -22,6 +22,8 @@ public sealed class ThreadMeta
     public long   LastFetchedEpoch { get; set; }
     /// <summary>直近の取得で取り切れなかった分 (reddit の more) が残ったか。</summary>
     public bool   Truncated { get; set; }
+    /// <summary>スレの状態のお知らせ (ふたば: 「27年6月頃消えます」)。取得のたびに提供者が返したもので更新する。</summary>
+    public string? Notice { get; set; }
     /// <summary>投稿者名 → アカウント ID (投稿者情報の取得用)。取得のたびにスナップショットの全投稿から更新する
     /// (= この仕組みより前に保存したレスも、次の取得で分かるようになる)。</summary>
     public Dictionary<string, string> AuthorIds { get; set; } = new(StringComparer.Ordinal);
@@ -189,6 +191,7 @@ internal static class SnapshotThreadFetcher
 
         meta.LastFetchedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         meta.Truncated        = snapshot.Truncated;
+        if (snapshot.Notice is not null) meta.Notice = snapshot.Notice;
         foreach (var sp in snapshot.Posts)
             if (sp.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(sp.Name)) meta.AuthorIds[sp.Name] = aid;
         if (File.Exists(logPath)) meta.Save(metaPath);

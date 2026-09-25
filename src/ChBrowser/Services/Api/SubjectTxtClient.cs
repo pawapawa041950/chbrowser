@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
@@ -40,7 +41,9 @@ public sealed class SubjectTxtClient
         var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
         var url      = provider.ThreadListUrl(board, query);
 
-        using var resp = await _client.Http.GetAsync(url, ct).ConfigureAwait(false);
+        using var req  = new HttpRequestMessage(HttpMethod.Get, url);
+        provider.PrepareRequest(req);
+        using var resp = await _client.Http.SendAsync(req, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
 
