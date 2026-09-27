@@ -620,6 +620,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         _datClient       = datClient;
         _threadIndex     = threadIndex;
         _postClient      = postClient;
+        // 掲示板ごとの表示の切り替え (引用文を返信として扱う / 各レスの 🌐 ボタン)。タブが作られる前に口を用意しておく
+        ThreadTabViewModel.SiteToggles = site => (IsQuoteRepliesOn(CurrentConfig, site), IsPostTranslateButtonsOn(CurrentConfig, site));
         _donguri         = donguri;
         _ng              = ng;
         _paths           = paths;
@@ -764,8 +766,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         PersistConfigCallback?.Invoke(next);
     }
 
-    /// <summary>スレ表示 (thread.js) 向けの全タブ共通の設定 (<c>setConfig</c>)。<see cref="ApplyConfig"/> と、
-    /// 🌐 メニュー「各レスごとに翻訳ボタンを表示する」の切り替えから作る。</summary>
+    /// <summary>スレ表示 (thread.js) 向けの全タブ共通の設定 (<c>setConfig</c>)。<see cref="ApplyConfig"/> から作る
+    /// (掲示板ごとの設定はタブの ProviderConfig)。</summary>
     private static string BuildThreadConfigJson(AppConfig config)
         => System.Text.Json.JsonSerializer.Serialize(new
         {
@@ -775,8 +777,6 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             idHighlightThreshold  = config.IdHighlightThreshold,
             metaPopupClickOnly    = config.MetaPopupClickOnly,
             debug                 = config.DebugDisableRecovery,
-            // 各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか (🌐 メニュー)
-            translateButtons      = config.ShowPostTranslateButtons,
             // 登録済み全提供者のスレ URL を本文中リンクとして認識させる (= 他掲示板の URL も提供者追加で自動追従)。
             threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
                                         .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
@@ -845,9 +845,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         // 提供者依存の項目 (レス番号の表示可否 / 番号ジャンプ桁数 / アンカー規則) はタブごとに送り分ける
         // (ThreadTabViewModel.ProviderConfig。appendPosts に同梱 + setProviderConfig で即時反映)。
         // ここは全タブ共通の項目と、全提供者ぶんのスレリンク判定だけ。
+        // 掲示板ごとの表示の切り替え (引用文を返信として扱う / 各レスの 🌐 ボタン) もタブごとの設定に載る
+        ThreadTabViewModel.SiteToggles = site => (IsQuoteRepliesOn(CurrentConfig, site), IsPostTranslateButtonsOn(CurrentConfig, site));
         foreach (var openTab in AllThreadTabs) openTab.RefreshProviderConfig();
         ThreadConfigJson = BuildThreadConfigJson(config);
-        ShowPostTranslateButtons = config.ShowPostTranslateButtons;
 
         // Phase 11b: 3 ペイン向け。各ペインは自分の JSON だけ受け取り、setConfig.openOnSingleClick を解釈する。
         FavoritesConfigJson  = System.Text.Json.JsonSerializer.Serialize(new

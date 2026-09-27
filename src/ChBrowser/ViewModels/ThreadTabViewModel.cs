@@ -106,13 +106,30 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private string? _providerConfigJson;
 
+    /// <summary>掲示板 (提供者 Id) ごとの表示の切り替え (引用文を返信として扱う, 各レスの 🌐 ボタン) を引く口。MainViewModel が設定から答える。</summary>
+    public static Func<string, (bool QuoteReplies, bool TranslateButtons)>? SiteToggles { get; set; }
+
+    /// <summary>このスレの掲示板で「引用文を返信として扱う」が ON か (スレッドペインのボタンの押下状態)。</summary>
+    [ObservableProperty]
+    private bool _quoteRepliesOn;
+
+    /// <summary>このスレの掲示板で各レスの 🌐 ボタンを出すか (🌐 メニューのチェック)。</summary>
+    [ObservableProperty]
+    private bool _postTranslateButtonsOn;
+
     /// <summary><see cref="ProviderConfig"/> / <see cref="ProviderConfigJson"/> を現在の提供者・アンカー規則から作り直す。
     /// タブ生成時と設定適用時 (<c>MainViewModel.ApplyConfig</c>) に呼ばれる。</summary>
     public void RefreshProviderConfig()
     {
         var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host);
+        var (quoteReplies, translateButtons) = SiteToggles?.Invoke(provider.Id) ?? (false, false);
+        QuoteRepliesOn         = quoteReplies;
+        PostTranslateButtonsOn = translateButtons;
         ProviderConfig = new
         {
+            // 引用文を返信として扱う / 各レスの 🌐 ボタン (どちらも掲示板ごとの設定)
+            quoteReplies,
+            translateButtons,
             providerId       = provider.Id,
             showPostNumbers  = provider.ShowsPostNumbers,
             watchoi          = provider.UsesWatchoi,

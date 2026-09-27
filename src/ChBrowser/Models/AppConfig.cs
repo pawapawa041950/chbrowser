@@ -119,8 +119,14 @@ public sealed record AppConfig
     public int TranslateConcurrency { get; init; } = 2;
     /// <summary>AI 翻訳のリクエストにリーズニング無効化設定一式を付加するか (<see cref="NgAiDisableReasoning"/> と同じ)。既定 true。</summary>
     public bool TranslateDisableReasoning { get; init; } = true;
-    /// <summary>各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか (スレッドペインの 🌐 メニュー「各レスごとに翻訳ボタンを表示する」)。</summary>
+    /// <summary>(旧設定) 各レスの 🌐 (翻訳) ボタンを出すか (全掲示板共通)。<see cref="PostTranslateButtonsBySite"/> に無い掲示板の既定値として読む (移行用)。</summary>
     public bool ShowPostTranslateButtons { get; init; } = false;
+    /// <summary>各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか。掲示板 (提供者 Id: "5ch" / "futaba" …) ごと
+    /// (スレッドペインの 🌐 メニュー「各レスごとに翻訳ボタンを表示する」)。無い掲示板は <see cref="ShowPostTranslateButtons"/>。</summary>
+    public System.Collections.Generic.Dictionary<string, bool>? PostTranslateButtonsBySite { get; init; }
+    /// <summary>「引用文を返信として扱う」(「&gt;引用文」の行を、その文を書いた前のレスへの返信としてツリー・返信数・ポップアップに使う)。
+    /// 掲示板 (提供者 Id) ごと (スレッドペインのボタン)。無い掲示板は既定 (ふたばだけ ON)。</summary>
+    public System.Collections.Generic.Dictionary<string, bool>? QuoteRepliesBySite { get; init; }
 
     // ---- MCP サーバ (外部公開) ----
     // ChBrowser のスレ読み取り / 横断 / 開く 系ツール (14 個) を MCP (Model Context Protocol) で

@@ -396,7 +396,7 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
 
         var lines = new List<string>();
         if (Str(p, "del") == "del") lines.Add("[削除された記事]");
-        if (Str(p, "sub") is { Length: > 0 } sub && sub != "無題") lines.Add("<b>" + WebUtility.HtmlDecode(sub).Replace("<", "＜") + "</b>");
+        if (Str(p, "sub") is { Length: > 0 } sub && !IsDefaultSubject(WebUtility.HtmlDecode(sub))) lines.Add("<b>" + WebUtility.HtmlDecode(sub).Replace("<", "＜") + "</b>");
         var body = FutabaBodyConverter.Convert(Str(p, "com"), origin);
         if (body.Length > 0) lines.Add(body);
 
@@ -466,7 +466,7 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
         long tim = 0;
         List<PostAttachment>? attachments = null;
         var lines = new List<string>();
-        if (sub.Length > 0 && sub != "無題") lines.Add("<b>" + sub.Replace("<", "＜") + "</b>");
+        if (!IsDefaultSubject(sub)) lines.Add("<b>" + sub.Replace("<", "＜") + "</b>");
         var body = QuoteRegex.Match(block) is { Success: true } qm ? FutabaBodyConverter.Convert(qm.Groups["q"].Value, origin) : "";
         if (body.Length > 0) lines.Add(body);
         if (OpSrcRegex.Match(block) is { Success: true } src)
@@ -483,7 +483,7 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
             lines.Add(url);
         }
         var epoch = tim > 0 ? tim / 1000 : ParseFutabaDate(date) ?? 0;
-        var title = sub.Length > 0 && sub != "無題" ? sub : FutabaBodyConverter.Snippet(body);
+        var title = !IsDefaultSubject(sub) ? sub : FutabaBodyConverter.Snippet(body);
         if (title.Length == 0) title = $"No.{no}";
 
         var post = new SnapshotPost(
@@ -755,6 +755,10 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
         var ip = IpRegex.Match(rest) is { Success: true } pm ? pm.Value : "";
         return (m.Groups["date"].Value, id, ip);
     }
+
+    /// <summary>題名が板の既定 (空・「無題」・二次元裏の「無念」) か。既定の題名は本文にもスレタイトルにも使わない。</summary>
+    public static bool IsDefaultSubject(string? sub)
+        => string.IsNullOrWhiteSpace(sub) || sub.Trim() is "無題" or "無念";
 
     private static string StripIdPrefix(string id) => id.StartsWith("ID:", StringComparison.Ordinal) ? id[3..] : id;
 

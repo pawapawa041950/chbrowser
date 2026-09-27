@@ -511,7 +511,21 @@
             // 規則が変わるとアンカー抽出結果 (= 返信ツリー / 逆引き) が変わる。通常はレス到着前に届くので
             // 再描画はしないが、既にレスがある場合は逆引きだけ最新化しておく (表示はタブ再オープンで揃う)。
             anchorRules = compileAnchorRules(cfg.anchorRules);
+            quoteTargetCache = new Map();   // アンカーだけの行の判定が変わる
             if (allPosts.length > 0) currentReverseIndex = buildReverseIndex();
+        }
+        // 各レスの 🌐 (翻訳) ボタンを全レスに出すか (掲示板ごとの設定)
+        if (typeof cfg.translateButtons === 'boolean')
+            document.documentElement.classList.toggle('show-tr-buttons', cfg.translateButtons);
+        // 引用文を返信として扱う (掲示板ごとの設定)。切り替えたらツリー・返信数・本文のアンカーが変わるので描き直す
+        if (typeof cfg.quoteReplies === 'boolean' && cfg.quoteReplies !== QUOTE_REPLIES) {
+            QUOTE_REPLIES = cfg.quoteReplies;
+            quoteTargetCache = new Map();
+            if (allPosts.length > 0) {
+                const y = window.scrollY || 0;
+                renderCurrentViewMode();
+                window.scrollTo(0, y);
+            }
         }
     }
 
@@ -532,6 +546,8 @@
             '.post-vote.pending{opacity:.5}' +
             '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
             '.post-avatar.empty{display:none}' +
+            // 引用文を返信として扱うときの引用行 (>>N と同じアンカー。見た目は引用の緑に点線)
+            'a.anchor.quote-anchor{color:#789922;text-decoration:none;border-bottom:1px dotted #789922;cursor:pointer}' +
             // 各レスの 🌐 ボタン (名前行の末尾)。html.show-tr-buttons (🌐 メニュー) のとき全レスに、そうでなくても
             // 訳文があるレス・翻訳中のレス (.has-tr) には出す。翻訳表示中は押下状態、訳している最中は回転表示
             '.post-tr-btn{display:none;margin-left:.4em;padding:0 .3em;border:1px solid #c8c8c8;border-radius:3px;cursor:pointer;' +
@@ -570,8 +586,100 @@
         const refs = extractAnchorRefs(p.body || '');
         const parent = p.ext && typeof p.ext.parentNumber === 'number' ? p.ext.parentNumber : 0;
         if (parent > 0) refs.unshift({ from: parent, to: parent });
+        if (QUOTE_REPLIES) {
+            for (const n of quoteTargetsOf(p).values()) refs.push({ from: n, to: n });
+        }
         return refs;
     }
+
+    // ---- 引用文を返信として扱う (掲示板ごとの設定。ProviderConfig.quoteReplies) ----
+    //   「>引用文」の行を、その文を書いた前のレスへの返信として扱う (ツリー・返信数・ホバーのポップアップ・クリックで移動)。
+    //   解決の順: (1) 行が丸ごと一致する前のレス (索引を引くだけ) → (2) 無ければ直前から最大 QUOTE_SCAN_LIMIT 件さかのぼり、
+    //   文を含む行を持つレス (自分の文として書いた行を優先、無ければ引用行)。どちらも一番近い前のレス。
+    //   ">>文" (引用の引用) は ">" を 1 つ外した ">文" を探す (= 引用行を持つレス)。短すぎる引用 (QUOTE_MIN_CHARS 未満) は対象外。
+    //   引用先は必ず前のレスなので、一度求めた結果は新着が来ても変わらない (レスごとにキャッシュ)。
+    var QUOTE_REPLIES = false;
+    const QUOTE_MIN_CHARS  = 2;
+    const QUOTE_SCAN_LIMIT = 300;
+    let quoteLineIndex = new Map();   // 正規化した行 → その行を含むレス番号 (昇順)
+    let quoteTargetCache = new Map(); // レス番号 → Map(正規化した引用文 → 引用先のレス番号)
+
+    function normalizeQuoteText(s) {
+        return String(s || '').replace(/<[^>]+>/g, '').replace(/[\s　]+/g, ' ').trim();
+    }
+    function isQuoteLineText(t) { return t.charAt(0) === '>' || t.charAt(0) === '＞'; }
+    /** 行 (正規化済み) が引用なら引用文 (先頭の > を 1 つ外したもの)、そうでなければ null。アンカーだけの行 (>>12 / >No.12) は引用ではない。 */
+    function quoteTextOfLine(norm) {
+        if (!norm || !isQuoteLineText(norm)) return null;
+        anchorRules.wholeRe.lastIndex = 0;
+        if (anchorRules.wholeRe.test(norm)) return null;
+        const q = norm.slice(1).trim();
+        return q.length >= QUOTE_MIN_CHARS ? q : null;
+    }
+    function bodyLinesOf(p) {
+        return String((p && p.body) || '').replace(/<br\s*\/?>/gi, '\n').split('\n').map(normalizeQuoteText).filter(function (l) { return l.length > 0; });
+    }
+    /** レスを追加したときに行の索引へ入れる (appendPosts の 1 件ごと。解決はそれより前のレスだけを見る)。 */
+    function registerQuoteLines(p) {
+        if (!p) return;
+        for (const line of bodyLinesOf(p)) {
+            let list = quoteLineIndex.get(line);
+            if (!list) { list = []; quoteLineIndex.set(line, list); }
+            if (list[list.length - 1] !== p.number) list.push(p.number);
+        }
+    }
+    function resetQuoteIndex() {
+        quoteLineIndex = new Map();
+        quoteTargetCache = new Map();
+        for (const p of allPosts) registerQuoteLines(p);
+    }
+    /** 番号昇順の配列から「before より小さい最大の番号」を返す (無ければ 0)。 */
+    function nearestBefore(sortedList, before) {
+        let lo = 0, hi = sortedList.length - 1, ans = 0;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (sortedList[mid] < before) { ans = sortedList[mid]; lo = mid + 1; } else hi = mid - 1;
+        }
+        return ans;
+    }
+    function resolveQuote(q, beforeNumber) {
+        const exact = quoteLineIndex.get(q);
+        if (exact) {
+            const n = nearestBefore(exact, beforeNumber);
+            if (n > 0) return n;
+        }
+        // 部分引用: 直前からさかのぼって探す (自分の文として書いた行を優先)
+        let idx = sortedPostNumbers.length - 1;
+        while (idx >= 0 && sortedPostNumbers[idx] >= beforeNumber) idx--;
+        let quoteHit = 0;
+        for (let k = 0; idx >= 0 && k < QUOTE_SCAN_LIMIT; idx--, k++) {
+            const cand = postsByNumber.get(sortedPostNumbers[idx]);
+            if (!cand) continue;
+            for (const line of bodyLinesOf(cand)) {
+                if (line.indexOf(q) < 0) continue;
+                if (!isQuoteLineText(line)) return cand.number;
+                if (!quoteHit) quoteHit = cand.number;
+            }
+        }
+        return quoteHit;
+    }
+    /** レス p の引用文 → 引用先のレス番号 (解決できたものだけ)。 */
+    function quoteTargetsOf(p) {
+        if (!p) return new Map();
+        let m = quoteTargetCache.get(p.number);
+        if (m) return m;
+        m = new Map();
+        for (const line of bodyLinesOf(p)) {
+            const q = quoteTextOfLine(line);
+            if (q == null || m.has(line)) continue;
+            const n = resolveQuote(q, p.number);
+            if (n > 0 && n !== p.number) m.set(line, n);
+        }
+        quoteTargetCache.set(p.number, m);
+        return m;
+    }
+    // 描画中のレスの引用先 (buildPostBodyParts が原文を描く間だけセットする。processPlain が引用行をアンカーにする)
+    let renderingQuoteTargets = null;
 
     // 添付ファイル名 → レス番号 (attachment 規則の解決用)。レスの attachments[].filename / ext.attachments[].fileName から組む。
     let attachmentIndex = new Map();
@@ -751,7 +859,8 @@
         let html = '';
         for (let i = 0; i < lines.length; i++) {
             if (i > 0) html += '<br>';
-            html += processLine(lines[i]);
+            const qn = renderingQuoteTargets ? renderingQuoteTargets.get(normalizeQuoteText(lines[i])) : undefined;
+            html += qn ? renderQuoteAnchor(lines[i], qn) : processLine(lines[i]);
         }
         return html;
     }
@@ -831,6 +940,12 @@
         return '<a class="anchor" data-from="' + from + '" data-to="' + to
              + '" data-spec="' + escapeHtml(norm) + '">'
              + escapeHtml(visible) + '</a>';
+    }
+
+    /** 引用文の行を、引用先レスへのアンカー (>>N と同じ a.anchor。ホバーでポップアップ・クリックで移動) にする。見た目は引用の緑。 */
+    function renderQuoteAnchor(line, n) {
+        return '<a class="anchor quote-anchor" data-from="' + n + '" data-to="' + n + '" data-spec="' + n + '">'
+             + escapeHtml(line) + '</a>';
     }
 
     // ---------- 画像 / 動画 URL 検出 + 外部サービスの展開 ----------
@@ -1374,7 +1489,12 @@
     /** 本文 HTML と媒体スロット HTML (翻訳で表示中なら訳文)。構造上の返信先 (レス順表示のときだけ) は先頭の行。
      *  翻訳中か / 訳文を表示中かは名前行の 🌐 ボタンで分かる (本文には印を付けない)。 */
     function buildPostBodyParts(p, parentLine) {
-        const built = buildBodyAndMedia(displayBodyOf(p));
+        // 引用文のアンカー化は原文を描くときだけ (訳文は行が変わるので対象外)
+        const showingOriginal = !(translatedShown.has(p.number) && translations.has(p.number));
+        renderingQuoteTargets = QUOTE_REPLIES && showingOriginal ? quoteTargetsOf(p) : null;
+        let built;
+        try { built = buildBodyAndMedia(displayBodyOf(p)); }
+        finally { renderingQuoteTargets = null; }
         let body = built.body;
         if (parentLine) body = parentLine + (body ? '<br>' + body : '');
         return { body: body, media: built.media };
@@ -4846,6 +4966,7 @@
             postsByNumber.set(p.number, p);
             registerPostNumber(p.number);
             registerAttachments(p);
+            registerQuoteLines(p);
             if (isDelta) sessionNewPostNumbers.add(p.number);
 
             if (useDedupBulkRebuild) {
@@ -4955,6 +5076,7 @@
         allPosts                = [];
         postsByNumber           = new Map();
         currentReverseIndex     = new Map();
+        resetQuoteIndex();
         pendingScrollTarget     = null;
         markPostNumber          = null;
         sessionNewPostNumbers.clear();
@@ -5022,6 +5144,7 @@
                         allPosts            = [];
                         postsByNumber       = new Map();
                         currentReverseIndex = new Map();
+                        resetQuoteIndex();
                         currentIdMap        = new Map();
                         currentWatchoiMap   = new Map();
                         sessionNewPostNumbers.clear();

@@ -166,6 +166,25 @@
                         <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </ToggleButton>
 
+                    <!-- 引用文を返信として扱う: 「>引用文」の行を、その文を書いた前のレスへの返信にする (ツリー・返信数・ポップアップ)。
+                         ON / OFF はサイト (掲示板) ごとに保存 (MainViewModel.ToggleQuoteRepliesCommand)。 -->
+                    <Button Command="{Binding Main.ToggleQuoteRepliesCommand}"
+                            CommandParameter="{Binding SelectedTab}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="ToolTip" Value="引用文を返信として扱う: OFF (押すと ON。「&gt;引用文」の行を、その文を書いたレスへの返信としてツリー・返信数・ポップアップに使う。このサイト (掲示板) 共通で保存)" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedTab.QuoteRepliesOn}" Value="True">
+                                        <Setter Property="Background"  Value="#CCE5FF" />
+                                        <Setter Property="BorderBrush" Value="#88B0DD" />
+                                        <Setter Property="ToolTip" Value="引用文を返信として扱う: ON (押すと OFF。このサイト (掲示板) 共通で保存)" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock Text="❝" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+
                     <!-- AI 翻訳: 押すとメニュー (各レスの翻訳ボタンの表示 / このスレを全て翻訳する)。
                          スレ全体の翻訳が ON の間は押下状態の色、実行中は ⏳ -->
                     <Button Click="TranslateMenuButton_Click">
@@ -185,9 +204,10 @@
                             <ContextMenu>
                                 <MenuItem Header="各レスごとに翻訳ボタンを表示する"
                                           IsCheckable="False"
-                                          IsChecked="{Binding Main.ShowPostTranslateButtons, Mode=OneWay}"
+                                          IsChecked="{Binding SelectedTab.PostTranslateButtonsOn, Mode=OneWay}"
                                           Command="{Binding Main.ToggleShowPostTranslateButtonsCommand}"
-                                          ToolTip="各レスの名前行の末尾に 🌐 ボタンを出す (押すとそのレスを翻訳 / 原文に戻す。全スレ共通)" />
+                                          CommandParameter="{Binding SelectedTab}"
+                                          ToolTip="各レスの名前行の末尾に 🌐 ボタンを出す (押すとそのレスを翻訳 / 原文に戻す。このサイト (掲示板) 共通で保存)" />
                                 <MenuItem Header="このスレを全て翻訳する"
                                           IsCheckable="False"
                                           IsChecked="{Binding SelectedTab.IsTranslationOn, Mode=OneWay}"

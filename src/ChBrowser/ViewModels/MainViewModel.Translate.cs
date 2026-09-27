@@ -50,17 +50,51 @@ public sealed partial class MainViewModel
 
     private const string NotConfiguredMessage = "AI翻訳の接続が未設定です (設定 → AI翻訳。空欄なら「AI」の設定を使います)";
 
-    /// <summary>各レスの名前行の末尾に 🌐 (翻訳) ボタンを出すか (🌐 メニュー「各レスごとに翻訳ボタンを表示する」。全スレ共通、設定に保存)。</summary>
-    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty] private bool _showPostTranslateButtons;
-
-    /// <summary>🌐 メニュー「各レスごとに翻訳ボタンを表示する」。設定に保存し、開いている全スレへ即時に反映する。</summary>
+    /// <summary>🌐 メニュー「各レスごとに翻訳ボタンを表示する」。掲示板ごとに設定へ保存し、同じ掲示板の開いているスレへ即時に反映する。</summary>
     [RelayCommand]
-    private void ToggleShowPostTranslateButtons()
+    private void ToggleShowPostTranslateButtons(ThreadTabViewModel? tab)
     {
-        var next = !ShowPostTranslateButtons;
-        ShowPostTranslateButtons = next;
-        UpdateAndPersistConfig(c => c with { ShowPostTranslateButtons = next });
-        ThreadConfigJson = BuildThreadConfigJson(CurrentConfig);
+        if (tab is null) return;
+        var site = SiteIdOf(tab);
+        var next = !IsPostTranslateButtonsOn(CurrentConfig, site);
+        UpdateAndPersistConfig(c => c with { PostTranslateButtonsBySite = WithSite(c.PostTranslateButtonsBySite, site, next) });
+        RefreshSiteTabs(site);
+    }
+
+    // ---- 掲示板ごとの表示の切り替え (各レスの 🌐 ボタン / 引用文を返信として扱う) ----
+
+    /// <summary>タブの掲示板 (提供者 Id: "5ch" / "futaba" …)。</summary>
+    private static string SiteIdOf(ThreadTabViewModel tab) => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host).Id;
+
+    /// <summary>各レスの 🌐 ボタンを出すか。掲示板ごとの設定が無ければ旧設定 (全掲示板共通) の値。</summary>
+    internal static bool IsPostTranslateButtonsOn(AppConfig config, string site)
+        => config.PostTranslateButtonsBySite is { } m && m.TryGetValue(site, out var v) ? v : config.ShowPostTranslateButtons;
+
+    /// <summary>引用文を返信として扱うか。掲示板ごとの設定が無ければ既定 (引用で返信するのが普通のふたばだけ ON)。</summary>
+    internal static bool IsQuoteRepliesOn(AppConfig config, string site)
+        => config.QuoteRepliesBySite is { } m && m.TryGetValue(site, out var v) ? v : site == "futaba";
+
+    private static Dictionary<string, bool> WithSite(Dictionary<string, bool>? map, string site, bool value)
+        => new(map ?? new Dictionary<string, bool>(), StringComparer.Ordinal) { [site] = value };
+
+    /// <summary>同じ掲示板の開いているスレへ、掲示板ごとの設定の変更を即時に反映する (setProviderConfig)。</summary>
+    private void RefreshSiteTabs(string site)
+    {
+        foreach (var t in AllThreadTabs)
+            if (SiteIdOf(t) == site) t.RefreshProviderConfig();
+    }
+
+    /// <summary>スレッドペインの「引用文を返信として扱う」ボタン。掲示板ごとに設定へ保存し、同じ掲示板の開いているスレへ即時に反映する
+    /// (スレ表示はツリー・返信数・引用行のアンカーを描き直す)。</summary>
+    [RelayCommand]
+    private void ToggleQuoteReplies(ThreadTabViewModel? tab)
+    {
+        if (tab is null) return;
+        var site = SiteIdOf(tab);
+        var next = !IsQuoteRepliesOn(CurrentConfig, site);
+        UpdateAndPersistConfig(c => c with { QuoteRepliesBySite = WithSite(c.QuoteRepliesBySite, site, next) });
+        RefreshSiteTabs(site);
+        StatusMessage = $"引用文を返信として扱う: {(next ? "ON" : "OFF")} ({ChBrowser.Services.Bbs.BbsRegistry.FindById(site)?.DisplayName ?? site})";
     }
 
     /// <summary>タブ生成時に保存済みの翻訳を読む (レスの描画時点で訳文で出せるよう、appendPosts に同梱される)。</summary>

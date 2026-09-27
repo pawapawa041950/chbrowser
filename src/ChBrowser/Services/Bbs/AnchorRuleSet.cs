@@ -18,6 +18,7 @@ public sealed class AnchorRuleSet
 
     private readonly List<Compiled> _rules = new();
     private readonly Regex          _scan;
+    private readonly Regex          _whole;
 
     /// <summary>JS へ送る用の規則一覧 (有効なもののみ、元の定義のまま)。</summary>
     public IReadOnlyList<AnchorRule> Rules { get; }
@@ -39,8 +40,13 @@ public sealed class AnchorRuleSet
             alts.Add("(?:" + src + ")");
         }
         Rules = enabled;
-        _scan = new Regex(alts.Count > 0 ? string.Join("|", alts) : "(?!)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var alt = alts.Count > 0 ? string.Join("|", alts) : "(?!)";
+        _scan  = new Regex(alt, RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        _whole = new Regex(@"^\s*(?:" + alt + @")\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     }
+
+    /// <summary>文字列全体が 1 つのアンカーか (JS の <c>wholeRe</c> と同じ。「&gt;&gt;12」「&gt;No.12」だけの行は引用ではない)。</summary>
+    public bool IsWholeAnchor(string? text) => !string.IsNullOrEmpty(text) && _whole.IsMatch(text);
 
     /// <summary>本文から参照範囲を抽出する (出現順)。HTML タグは事前に空白へ置換する (JS と同じ)。
     /// <paramref name="attachmentResolver"/> は添付ファイル名 → レス番号 (attachment 規則用)。null なら解決不能扱い。</summary>

@@ -72,6 +72,13 @@ public sealed partial class MainViewModel
         if (tab.OwnPostNumbers.Count == 0) return false;
         if (deltaPosts.Count == 0) return false;
         var rules = ChBrowser.Services.Bbs.AnchorRuleRegistry.ForHost(tab.Board.Host);
+        // 引用文を返信として扱う掲示板では、引用先が自分のレスなら返信あり (引用先はスレの全レスから探す)
+        if (tab.QuoteRepliesOn)
+        {
+            var quotes = ChBrowser.Services.Bbs.QuoteReplyResolver.Resolve(tab.Posts.Concat(deltaPosts), deltaPosts, rules);
+            foreach (var (number, targets) in quotes)
+                if (!tab.OwnPostNumbers.Contains(number) && targets.Overlaps(tab.OwnPostNumbers)) return true;
+        }
         foreach (var p in deltaPosts)
         {
             if (p.Body is null) continue;
