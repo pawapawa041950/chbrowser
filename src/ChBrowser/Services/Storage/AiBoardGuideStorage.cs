@@ -6,7 +6,7 @@ namespace ChBrowser.Services.Storage;
 
 /// <summary>「AI 向けの各板/スレの使い分け説明」をユーザが自由に編集するテキストファイルの入出力。
 /// <c>data/app/ai-board-guide.txt</c>。AI チャットを開くたびに読み込まれ、Strategist / Worker の文脈に
-/// 注入される (= 関連スレ探索時の板選びの精度を上げる)。設定ウィンドウ「AI」カテゴリの
+/// 注入される (= 関連スレ探索時の板選びの精度を上げる)。設定ウィンドウ「AIチャット」カテゴリの
 /// 「説明テキストを開く」ボタンから関連付けエディタで編集する。</summary>
 public sealed class AiBoardGuideStorage
 {

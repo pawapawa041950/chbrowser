@@ -86,7 +86,7 @@ public sealed partial class AiChatViewModel : ObservableObject
         // モデル未設定なら、送信前に気づけるよう最初に案内を出す (Strategist 設定 = 空なら LLM 連携にフォールバック)。
         var s = LlmSettings.StrategistFromConfig(config);
         if (string.IsNullOrWhiteSpace(s.ApiUrl) || string.IsNullOrWhiteSpace(s.Model))
-            StatusMessage = "AI モデルが未設定です。設定 → AI で API URL とモデル名を設定してください。";
+            StatusMessage = "AI モデルが未設定です。設定 → LLM でプロファイル (API URL とモデル名) を登録し、設定 → AIチャット で使うプロファイルを選んでください。";
     }
 
     partial void OnInputTextChanged(string value) => SendCommand.NotifyCanExecuteChanged();

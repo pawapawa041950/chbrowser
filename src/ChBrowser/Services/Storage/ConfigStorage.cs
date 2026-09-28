@@ -33,7 +33,11 @@ public sealed class ConfigStorage
         try
         {
             var json = File.ReadAllText(_path);
-            return JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
+            var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
+            // 旧形式の LLM 設定をプロファイル形式へ (1 回だけ。移したらすぐ保存して Id を固定する)
+            config = ChBrowser.Models.LlmProfileMigration.Migrate(config, out var migrated);
+            if (migrated) Save(config);
+            return config;
         }
         catch (Exception ex)
         {

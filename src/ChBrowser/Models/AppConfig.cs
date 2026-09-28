@@ -39,19 +39,39 @@ public sealed record AppConfig
     /// <summary>HTTP タイムアウト (秒)。次回起動時に反映 (HttpClient.Timeout は実行中変更不可のため)。</summary>
     public int TimeoutSec { get; init; } = 30;
 
+    // ---- LLM プロファイル (設定ウィンドウ「LLM」カテゴリ) ----
+    // LLM の接続 (URL・キー・モデル・コンテキストサイズ・画像入力の可否) は名前付きプロファイルとして複数登録し、
+    // AI チャット / NG 判定 AI / AI 翻訳 は使うプロファイルを Id で指定する (空 = デフォルトのプロファイル)。
+    // 下の Llm* / Worker* / NgAi* / Translate* の接続項目は旧設定 (LlmProfiles が null のとき 1 回だけ移行に使う。LlmProfileMigration)。
+
+    /// <summary>LLM プロファイルの一覧。null = 未移行 (起動時に旧設定から作る)。</summary>
+    public LlmProfile[]? LlmProfiles { get; init; }
+    /// <summary>デフォルトの LLM プロファイルの Id。</summary>
+    public string DefaultLlmProfileId { get; init; } = "";
+    /// <summary>AI チャット (戦略検討モデル) が使うプロファイル。空 = デフォルト。</summary>
+    public string AgentLlmProfileId { get; init; } = "";
+    /// <summary>AI チャットの作業モデルが使うプロファイル (<see cref="SeparateWorkerModel"/> のときだけ)。空 = デフォルト。</summary>
+    public string WorkerLlmProfileId { get; init; } = "";
+    /// <summary>NG 判定 AI が使うプロファイル。空 = デフォルト。</summary>
+    public string NgAiLlmProfileId { get; init; } = "";
+    /// <summary>AI 翻訳が使うプロファイル。空 = デフォルト。</summary>
+    public string TranslateLlmProfileId { get; init; } = "";
+    /// <summary>NG 判定 AI を使うか (プロファイル化でデフォルトの接続があれば動けるようになったので、明示の ON / OFF を持つ)。</summary>
+    public bool NgAiEnabled { get; init; } = false;
+
     // ---- AI (LLM 連携) ----
-    /// <summary>OpenAI 互換 API のエンドポイント URL。base URL (例: https://api.openai.com/v1) でも
+    /// <summary>(旧設定) OpenAI 互換 API のエンドポイント URL。base URL (例: https://api.openai.com/v1) でも
     /// /chat/completions まで含めた完全 URL でも可。空ならLLM機能は未設定扱い。</summary>
     public string LlmApiUrl { get; init; } = "";
 
-    /// <summary>LLM API キー (Bearer トークン)。現状 config.json に平文保存。空なら Authorization ヘッダ無しで送る
+    /// <summary>(旧設定・移行用) LLM API キー (Bearer トークン)。現状 config.json に平文保存。空なら Authorization ヘッダ無しで送る
     /// (= ローカル LLM サーバ等、認証不要なエンドポイント向け)。</summary>
     public string LlmApiKey { get; init; } = "";
 
-    /// <summary>使用する LLM のモデル名 (例: gpt-4o-mini)。リクエストの "model" フィールドに入る。</summary>
+    /// <summary>(旧設定・移行用) 使用する LLM のモデル名 (例: gpt-4o-mini)。リクエストの "model" フィールドに入る。</summary>
     public string LlmModel { get; init; } = "";
 
-    /// <summary>モデルのコンテキストサイズ (トークン数)。将来の要約・翻訳機能で入力長を制御するために保持する。</summary>
+    /// <summary>(旧設定・移行用) モデルのコンテキストサイズ (トークン数)。将来の要約・翻訳機能で入力長を制御するために保持する。</summary>
     public int LlmContextSize { get; init; } = 8192;
 
     // ---- AI エージェント (3 レイヤー・doc/ai-agent-design.md) ----
@@ -59,18 +79,18 @@ public sealed record AppConfig
     // Strategist / Worker 両方を動かし、SeparateWorkerModel=true のとき Worker 設定を別に使う。
     // 各欄が空なら上の Llm* (LLM 連携) 設定にフォールバックする。
 
-    /// <summary>戦略検討モデルと作業モデルを分けるか。false (既定) のときはメインの「AI モデル」(Llm*) 1 つで
-    /// Strategist / Worker 両方を動かす。true のとき下記 Worker 設定を別に使う。</summary>
+    /// <summary>戦略検討モデルと作業モデルを分けるか。false (既定) のときは <see cref="AgentLlmProfileId"/> のプロファイル 1 つで
+    /// Strategist / Worker 両方を動かす。true のとき <see cref="WorkerLlmProfileId"/> のプロファイルを作業モデルに使う。</summary>
     public bool SeparateWorkerModel { get; init; } = false;
 
-    /// <summary>Worker (実行層) の OpenAI 互換 API URL。Strategist と別エンドポイント可。空なら未設定扱い。
+    /// <summary>(旧設定・移行用) Worker (実行層) の OpenAI 互換 API URL。Strategist と別エンドポイント可。空なら未設定扱い。
     /// <see cref="SeparateWorkerModel"/> が true のときだけ使われる。</summary>
     public string WorkerApiUrl { get; init; } = "";
-    /// <summary>Worker の API キー (Bearer)。空なら Authorization 無しで送る。config.json に平文保存。</summary>
+    /// <summary>(旧設定・移行用) Worker の API キー (Bearer)。空なら Authorization 無しで送る。config.json に平文保存。</summary>
     public string WorkerApiKey { get; init; } = "";
-    /// <summary>Worker のモデル名。</summary>
+    /// <summary>(旧設定・移行用) Worker のモデル名。</summary>
     public string WorkerModel { get; init; } = "";
-    /// <summary>Worker のコンテキストサイズ (トークン数)。0 = メイン LLM (<see cref="LlmContextSize"/>) を継承。</summary>
+    /// <summary>(旧設定・移行用) Worker のコンテキストサイズ (トークン数)。0 = メイン LLM (<see cref="LlmContextSize"/>) を継承。</summary>
     public int WorkerContextSize { get; init; } = 0;
 
     /// <summary>複数 Worker の並列実行を許可するか (D7)。既定 OFF (= 逐次・安全側)。
@@ -82,13 +102,13 @@ public sealed record AppConfig
     // 攻撃的 / 荒らし的なレスを LLM で判定して非表示にする機能用の接続設定。
     // AI エージェント (Llm* / Worker*) とは独立した別モデルを指定できる (空なら未設定 = 機能オフ)。
 
-    /// <summary>NG 判定 AI の OpenAI 互換 API URL。空なら未設定。</summary>
+    /// <summary>(旧設定・移行用) NG 判定 AI の OpenAI 互換 API URL。空なら未設定。</summary>
     public string NgAiApiUrl { get; init; } = "";
-    /// <summary>NG 判定 AI の API キー (Bearer)。空なら Authorization 無し。config.json に平文保存。</summary>
+    /// <summary>(旧設定・移行用) NG 判定 AI の API キー (Bearer)。空なら Authorization 無し。config.json に平文保存。</summary>
     public string NgAiApiKey { get; init; } = "";
-    /// <summary>NG 判定 AI のモデル名。</summary>
+    /// <summary>(旧設定・移行用) NG 判定 AI のモデル名。</summary>
     public string NgAiModel { get; init; } = "";
-    /// <summary>NG 判定 AI のコンテキストサイズ (トークン数)。</summary>
+    /// <summary>(旧設定・移行用) NG 判定 AI のコンテキストサイズ (トークン数)。</summary>
     public int NgAiContextSize { get; init; } = 8192;
 
     /// <summary>NG 判定のしきい値。AI が付けた攻撃度スコア (1..5) がこの値以上のレスを非表示にする。
@@ -107,13 +127,13 @@ public sealed record AppConfig
     // ---- AI 翻訳 (スレ / レスを日本語に翻訳。設定ウィンドウ「AI翻訳」) ----
     // 各欄が空なら AI (Llm*) の設定を使う (= 翻訳専用のモデルを用意しなくても使える)。
 
-    /// <summary>AI 翻訳の OpenAI 互換 API URL。空なら AI (<see cref="LlmApiUrl"/>) の設定を使う。</summary>
+    /// <summary>(旧設定・移行用) AI 翻訳の OpenAI 互換 API URL。空なら AI (<see cref="LlmApiUrl"/>) の設定を使う。</summary>
     public string TranslateApiUrl { get; init; } = "";
-    /// <summary>AI 翻訳の API キー (Bearer)。空なら AI の設定を使う。config.json に平文保存。</summary>
+    /// <summary>(旧設定・移行用) AI 翻訳の API キー (Bearer)。空なら AI の設定を使う。config.json に平文保存。</summary>
     public string TranslateApiKey { get; init; } = "";
-    /// <summary>AI 翻訳のモデル名。空なら AI の設定を使う。</summary>
+    /// <summary>(旧設定・移行用) AI 翻訳のモデル名。空なら AI の設定を使う。</summary>
     public string TranslateModel { get; init; } = "";
-    /// <summary>AI 翻訳のコンテキストサイズ (トークン数)。0 なら AI の設定を使う。1 回に送るレスの量もこれで決まる。</summary>
+    /// <summary>(旧設定・移行用) AI 翻訳のコンテキストサイズ (トークン数)。0 なら AI の設定を使う。1 回に送るレスの量もこれで決まる。</summary>
     public int TranslateContextSize { get; init; } = 0;
     /// <summary>AI 翻訳の同時実行数 (並行で投げる LLM リクエスト本数、全スレ合計)。既定 2。</summary>
     public int TranslateConcurrency { get; init; } = 2;

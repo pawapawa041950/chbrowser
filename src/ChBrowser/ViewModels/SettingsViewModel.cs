@@ -40,45 +40,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _emojiFontStatus       = "";
     [ObservableProperty] private string _userAgentOverride     = "";
     [ObservableProperty] private int    _timeoutSec            = 30;
-    // AI カテゴリ (LLM 連携)
-    [ObservableProperty] private string _llmApiUrl             = "";
-    [ObservableProperty] private string _llmApiKey             = "";
-    [ObservableProperty] private string _llmModel              = "";
-    [ObservableProperty] private int    _llmContextSize        = 8192;
-    /// <summary>戦略検討モデル (= 左カラム / メイン) の接続確認結果。表示専用で ConfigStorage には保存しない。
-    /// "OK — ..." / "NG — ..." / "確認中…" / "未確認" のいずれかで始まる (= 色分け converter の規約)。</summary>
-    [ObservableProperty] private string _llmConnectionStatus    = "未確認";
-    /// <summary>作業モデル (= 右カラム) の接続確認結果。表示専用。色分け converter の規約は上と同じ。</summary>
-    [ObservableProperty] private string _workerConnectionStatus = "未確認";
     // AI エージェント (3 レイヤー・doc/ai-agent-design.md)。メインモデルは Llm* (AI モデル) を流用。
     [ObservableProperty] private bool   _separateWorkerModel    = false;
-    [ObservableProperty] private string _workerApiUrl           = "";
-    [ObservableProperty] private string _workerApiKey           = "";
-    [ObservableProperty] private string _workerModel            = "";
-    [ObservableProperty] private int    _workerContextSize      = 0;
     [ObservableProperty] private bool   _allowParallelWorkers   = false;
     // NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統)
-    [ObservableProperty] private string _ngAiApiUrl             = "";
-    [ObservableProperty] private string _ngAiApiKey             = "";
-    [ObservableProperty] private string _ngAiModel              = "";
-    [ObservableProperty] private int    _ngAiContextSize        = 8192;
     /// <summary>NG 判定の同時実行数 (= 並行で投げる LLM リクエスト本数)。サーバを --parallel この値以上で起動すると並列デコードで高速化。既定 4。</summary>
     [ObservableProperty] private int    _ngAiConcurrency        = 4;
     /// <summary>NG 判定リクエストにリーズニング無効化設定一式を付加するか。既定 ON。</summary>
     [ObservableProperty] private bool   _ngAiDisableReasoning   = true;
-    /// <summary>NG 判定 AI の接続確認結果。表示専用 (ConfigStorage に保存しない)。色分け converter の規約は他と同じ。</summary>
-    [ObservableProperty] private string _ngAiConnectionStatus   = "未確認";
 
-    // AI 翻訳 (空の項目は AI の設定を使う)
-    [ObservableProperty] private string _translateApiUrl           = "";
-    [ObservableProperty] private string _translateApiKey           = "";
-    [ObservableProperty] private string _translateModel            = "";
-    [ObservableProperty] private int    _translateContextSize      = 0;
+    // AI 翻訳 (接続は「LLM」カテゴリのプロファイル)
     [ObservableProperty] private int    _translateConcurrency      = 2;
     [ObservableProperty] private bool   _translateDisableReasoning = true;
-    /// <summary>AI 翻訳の接続確認結果。表示専用 (ConfigStorage に保存しない)。</summary>
-    [ObservableProperty] private string _translateConnectionStatus = "未確認";
-    public CommunityToolkit.Mvvm.Input.IAsyncRelayCommand TestTranslateConnectionCommand { get; }
     // MCP サーバ (内蔵ツールを外部 MCP クライアントへ公開・localhost HTTP)
     [ObservableProperty] private bool   _mcpServerEnabled       = false;
     [ObservableProperty] private int    _mcpServerPort          = 7393;
@@ -337,21 +310,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// 入力中の値を <see cref="FlushPendingSave"/> で即時保存 → ConfigStorage に反映 → App 側でログイン試行。</summary>
     public IRelayCommand LoginNowCommand       { get; }
 
-    /// <summary>AI カテゴリの「接続確認」ボタン用。入力中の値を確定してから OpenAI 互換 API に
-    /// 最小リクエストを投げ、結果を <see cref="LlmConnectionStatus"/> に反映する。
-    /// 実行中は CanExecute=false で再入を防ぐ (AsyncRelayCommand の既定挙動)。</summary>
-    public IAsyncRelayCommand TestLlmConnectionCommand { get; }
-    /// <summary>作業モデル (右カラム) の「接続確認」ボタン用。</summary>
-    public IAsyncRelayCommand TestWorkerConnectionCommand { get; }
-    /// <summary>NG 判定 AI の「接続確認」ボタン用。</summary>
-    public IAsyncRelayCommand TestNgAiConnectionCommand { get; }
 
     // ---- Phase 11d: デザイン編集 ----
     public IRelayCommand<string>? OpenCssFileCommand { get; }
     public IRelayCommand           OpenThemeFolderCommand   { get; }
     public IRelayCommand           ReloadAllCssCommand      { get; }
     public IRelayCommand           ExtractDefaultCssCommand { get; }
-    /// <summary>AI カテゴリ「板/スレ説明テキストを開く」ボタン。</summary>
+    /// <summary>AIチャット カテゴリ「板/スレ説明テキストを開く」ボタン。</summary>
     public IRelayCommand           OpenAiBoardGuideCommand  { get; }
 
     private readonly ConfigStorage         _storage;
@@ -363,9 +328,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Action?               _clearCookiesAction;
     private readonly Action?               _clearEddiCookiesAction;
     private readonly Action?               _loginNowAction;
-    /// <summary>AI カテゴリ「板/スレ説明テキストを開く」用。null ならボタン無効化。</summary>
+    /// <summary>AIチャット カテゴリ「板/スレ説明テキストを開く」用。null ならボタン無効化。</summary>
     private readonly Action?               _openAiBoardGuideAction;
-    /// <summary>AI カテゴリの接続確認用コールバック。App が LlmClient を束ねて注入する。
+    /// <summary>LLM カテゴリ (プロファイル) の接続確認用コールバック。App が LlmClient を束ねて注入する。
     /// null のときは接続確認ボタンを無効化する。</summary>
     private readonly Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? _testLlmConnectionAction;
     // Phase 11d
@@ -431,9 +396,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         Categories.Add(new("全般",         "HiDPI モード"));
         Categories.Add(new("通信",         "User-Agent、HTTP タイムアウト"));
         Categories.Add(new("認証",         "どんぐり (5ch) のメール認証、エッヂ・reddit の認証"));
-        Categories.Add(new("AI",           "LLM 連携 (OpenAI 互換 API)"));
-        Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI)"));
-        Categories.Add(new("AI翻訳",       "スレ / レスの日本語への翻訳 (翻訳に使う AI モデル)"));
+        Categories.Add(new("LLM",          "LLM の接続プロファイル (OpenAI 互換 API) の登録・削除・デフォルトの指定"));
+        Categories.Add(new("AIチャット",   "AI チャット (使う LLM プロファイル)、MCP サーバ"));
+        Categories.Add(new("AI NG",        "攻撃的レスの自動非表示 (NG 判定 AI。使う LLM プロファイル)"));
+        Categories.Add(new("AI翻訳",       "スレ / レスの日本語への翻訳 (使う LLM プロファイル)"));
         Categories.Add(new("お気に入り",   "クリックで開く動作"));
         Categories.Add(new("板一覧",       "クリックで開く動作"));
         Categories.Add(new("スレッド一覧", "クリックで開く動作、掲示板ごとの既定の並び順、reddit の「続き」の読み込み回数"));
@@ -460,26 +426,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
         EddiAuthToken                = initial.PostAuthTokens is { } authTokens && authTokens.TryGetValue("eddi", out var eddiToken) ? eddiToken : "";
-        LlmApiUrl                    = initial.LlmApiUrl;
-        LlmApiKey                    = initial.LlmApiKey;
-        LlmModel                     = initial.LlmModel;
-        LlmContextSize               = initial.LlmContextSize;
         SeparateWorkerModel          = initial.SeparateWorkerModel;
-        WorkerApiUrl                 = initial.WorkerApiUrl;
-        WorkerApiKey                 = initial.WorkerApiKey;
-        WorkerModel                  = initial.WorkerModel;
-        WorkerContextSize            = initial.WorkerContextSize;
         AllowParallelWorkers         = initial.AllowParallelWorkers;
-        NgAiApiUrl                   = initial.NgAiApiUrl;
-        NgAiApiKey                   = initial.NgAiApiKey;
-        NgAiModel                    = initial.NgAiModel;
-        NgAiContextSize              = initial.NgAiContextSize;
         NgAiConcurrency              = initial.NgAiConcurrency;
         NgAiDisableReasoning         = initial.NgAiDisableReasoning;
-        TranslateApiUrl              = initial.TranslateApiUrl;
-        TranslateApiKey              = initial.TranslateApiKey;
-        TranslateModel               = initial.TranslateModel;
-        TranslateContextSize         = initial.TranslateContextSize;
         TranslateConcurrency         = initial.TranslateConcurrency;
         TranslateDisableReasoning    = initial.TranslateDisableReasoning;
         McpServerEnabled             = initial.McpServerEnabled;
@@ -488,6 +438,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         DonguriPassword              = initial.DonguriPassword;
         PopularThreshold             = initial.PopularThreshold;
         LoadAnchorRules(initial);
+        InitLlmProfiles(initial);
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
         IdHighlightThreshold         = initial.IdHighlightThreshold;
@@ -557,105 +508,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             _loginNowAction?.Invoke();
         }, () => _loginNowAction is not null);
 
-        // AI カテゴリ「接続確認」: 入力中の値を確定 → App 注入の接続テストを実行 → 結果を表示。
-        // AsyncRelayCommand は実行中 CanExecute=false になるので連打 / 再入は自動で防がれる。
-        TestLlmConnectionCommand = new AsyncRelayCommand(TestLlmConnectionAsync,
-                                                        () => _testLlmConnectionAction is not null);
-        TestWorkerConnectionCommand = new AsyncRelayCommand(TestWorkerConnectionAsync,
-                                                        () => _testLlmConnectionAction is not null);
-        TestNgAiConnectionCommand   = new AsyncRelayCommand(TestNgAiConnectionAsync,
-                                                        () => _testLlmConnectionAction is not null);
-        TestTranslateConnectionCommand = new AsyncRelayCommand(TestTranslateConnectionAsync,
-                                                        () => _testLlmConnectionAction is not null);
 
         RefreshCacheSizeDisplay();
-    }
-
-    /// <summary>「接続確認」ボタンの本体。debounce 待ちの未保存入力を確定してから接続テストを呼ぶ
-    /// (= メアド即ログインと同じ理由: 入力直後にボタンを押しても最新値で試行できるように)。</summary>
-    private async System.Threading.Tasks.Task TestLlmConnectionAsync()
-    {
-        if (_testLlmConnectionAction is null) return;
-        FlushPendingSave();
-        LlmConnectionStatus = "確認中…";
-        try
-        {
-            var settings = new LlmSettings(
-                (LlmApiUrl ?? "").Trim(),
-                LlmApiKey ?? "",
-                (LlmModel ?? "").Trim(),
-                LlmContextSize);
-            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
-            LlmConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
-        }
-        catch (Exception ex)
-        {
-            LlmConnectionStatus = $"NG — {ex.Message}";
-        }
-    }
-
-    /// <summary>作業モデル (右カラム) の「接続確認」本体。実効設定 (= 未入力欄は戦略検討モデルにフォールバック)
-    /// を <see cref="LlmSettings.WorkerFromConfig"/> で組み立ててテストする。</summary>
-    private async System.Threading.Tasks.Task TestWorkerConnectionAsync()
-    {
-        if (_testLlmConnectionAction is null) return;
-        FlushPendingSave();
-        WorkerConnectionStatus = "確認中…";
-        try
-        {
-            var settings = LlmSettings.WorkerFromConfig(ToConfig());
-            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
-            WorkerConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
-        }
-        catch (Exception ex)
-        {
-            WorkerConnectionStatus = $"NG — {ex.Message}";
-        }
-    }
-
-    /// <summary>NG 判定 AI の「接続確認」本体。入力中の値を確定してから、その接続設定で接続テストする。</summary>
-    private async System.Threading.Tasks.Task TestNgAiConnectionAsync()
-    {
-        if (_testLlmConnectionAction is null) return;
-        FlushPendingSave();
-        NgAiConnectionStatus = "確認中…";
-        try
-        {
-            var settings = new LlmSettings(
-                (NgAiApiUrl ?? "").Trim(),
-                NgAiApiKey ?? "",
-                (NgAiModel ?? "").Trim(),
-                NgAiContextSize);
-            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
-            NgAiConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
-        }
-        catch (Exception ex)
-        {
-            NgAiConnectionStatus = $"NG — {ex.Message}";
-        }
-    }
-
-    /// <summary>AI 翻訳の「接続確認」。空の項目は AI の設定で補って (= 実際に翻訳で使う接続で) 確かめる。</summary>
-    private async System.Threading.Tasks.Task TestTranslateConnectionAsync()
-    {
-        if (_testLlmConnectionAction is null) return;
-        FlushPendingSave();
-        TranslateConnectionStatus = "確認中…";
-        try
-        {
-            var settings = LlmSettings.TranslateFromConfig(ToConfig());
-            if (string.IsNullOrWhiteSpace(settings.ApiUrl) || string.IsNullOrWhiteSpace(settings.Model))
-            {
-                TranslateConnectionStatus = "NG — API URL とモデル名を入力してください (空なら AI の設定を使いますが、AI も未設定です)";
-                return;
-            }
-            var (ok, message) = await _testLlmConnectionAction(settings).ConfigureAwait(true);
-            TranslateConnectionStatus = ok ? $"OK — {message}" : $"NG — {message}";
-        }
-        catch (Exception ex)
-        {
-            TranslateConnectionStatus = $"NG — {ex.Message}";
-        }
     }
 
     private async System.Threading.Tasks.Task RunRedditAsync(Func<RedditSettingsHooks, System.Threading.Tasks.Task> action)
@@ -684,10 +538,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             case nameof(RedditLoginStatus):     // reddit のログイン状態 / 接続テスト結果も表示専用
             case nameof(RedditProbeResult):
             case nameof(RedditBusy):
-            case nameof(LlmConnectionStatus):   // 接続確認結果 (戦略検討モデル) も表示専用
-            case nameof(WorkerConnectionStatus): // 接続確認結果 (作業モデル) も表示専用
-            case nameof(NgAiConnectionStatus):
-            case nameof(TranslateConnectionStatus):  // 接続確認結果 (NG 判定 AI) も表示専用
+            case nameof(SelectedLlmProfile):     // 「LLM」カテゴリの選択中のプロファイルは表示専用 (一覧は LlmProfilesVersion で保存)
             case nameof(EmojiFontDownloaded):   // 絵文字フォントの DL 状態は表示専用 (ConfigStorage に書かない)
             case nameof(EmojiFontStatus):       // 絵文字フォントの DL 状況テキストも表示専用
             case nameof(SelectedAnchorRuleRow):      // グリッドの選択行は表示専用
@@ -742,26 +593,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
         PostAuthTokens              = MergeAuthToken(_initialConfig.PostAuthTokens, "eddi", EddiAuthToken),
-        LlmApiUrl                   = LlmApiUrl,
-        LlmApiKey                   = LlmApiKey,
-        LlmModel                    = LlmModel,
-        LlmContextSize              = LlmContextSize,
+        LlmProfiles                 = LlmProfilesSnapshot(),
+        DefaultLlmProfileId         = DefaultLlmProfileId ?? "",
+        AgentLlmProfileId           = AgentLlmProfileId ?? "",
+        WorkerLlmProfileId          = WorkerLlmProfileId ?? "",
+        NgAiLlmProfileId            = NgAiLlmProfileId ?? "",
+        TranslateLlmProfileId       = TranslateLlmProfileId ?? "",
+        NgAiEnabled                 = NgAiEnabled,
         SeparateWorkerModel         = SeparateWorkerModel,
-        WorkerApiUrl                = WorkerApiUrl,
-        WorkerApiKey                = WorkerApiKey,
-        WorkerModel                 = WorkerModel,
-        WorkerContextSize           = WorkerContextSize,
         AllowParallelWorkers        = AllowParallelWorkers,
-        NgAiApiUrl                  = NgAiApiUrl,
-        NgAiApiKey                  = NgAiApiKey,
-        NgAiModel                   = NgAiModel,
-        NgAiContextSize             = NgAiContextSize,
         NgAiConcurrency             = NgAiConcurrency,
         NgAiDisableReasoning        = NgAiDisableReasoning,
-        TranslateApiUrl             = (TranslateApiUrl ?? "").Trim(),
-        TranslateApiKey             = TranslateApiKey ?? "",
-        TranslateModel              = (TranslateModel ?? "").Trim(),
-        TranslateContextSize        = Math.Max(0, TranslateContextSize),
         TranslateConcurrency        = Math.Clamp(TranslateConcurrency, 1, 16),
         TranslateDisableReasoning   = TranslateDisableReasoning,
         McpServerEnabled            = McpServerEnabled,

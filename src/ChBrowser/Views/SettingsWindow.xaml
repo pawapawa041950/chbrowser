@@ -54,6 +54,7 @@
         <DataTemplate x:Key="GeneralTemplate">    <settings:GeneralPanel /> </DataTemplate>
         <DataTemplate x:Key="NetworkTemplate">    <settings:NetworkPanel /> </DataTemplate>
         <DataTemplate x:Key="AuthTemplate">       <settings:AuthPanel /> </DataTemplate>
+        <DataTemplate x:Key="LlmTemplate">        <settings:LlmPanel /> </DataTemplate>
         <DataTemplate x:Key="AiTemplate">         <settings:AiPanel /> </DataTemplate>
         <DataTemplate x:Key="AiNgTemplate">       <settings:AiNgPanel /> </DataTemplate>
         <DataTemplate x:Key="AiTranslateTemplate"> <settings:AiTranslatePanel /> </DataTemplate>
@@ -180,7 +181,10 @@
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="認証">
                                         <Setter Property="ContentTemplate" Value="{StaticResource AuthTemplate}" />
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="AI">
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="LLM">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource LlmTemplate}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="AIチャット">
                                         <Setter Property="ContentTemplate" Value="{StaticResource AiTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="AI NG">

@@ -45,10 +45,9 @@ public sealed partial class MainViewModel
     private AiNgStorage? _aiNgStorageCache;
     private AiNgStorage AiNgStore => _aiNgStorageCache ??= new AiNgStorage(_paths);
 
-    /// <summary>NG 判定 AI が接続設定済みか (URL + モデル名が両方ある)。</summary>
+    /// <summary>NG 判定 AI を使うか (設定で ON、かつ使うプロファイルに接続先 (URL + モデル名) がある)。</summary>
     private bool IsAiNgConfigured =>
-        !string.IsNullOrWhiteSpace(CurrentConfig.NgAiApiUrl) &&
-        !string.IsNullOrWhiteSpace(CurrentConfig.NgAiModel);
+        CurrentConfig.NgAiEnabled && LlmSettings.NgFromConfig(CurrentConfig).IsConfigured;
 
     /// <summary>ツールバーのしきい値メニューから呼ばれる。"1".."6" を受け取りしきい値を更新し、
     /// 永続化 + 選択中タブの再フィルタ + (有効なら) 未判定レスの判定再開を行う。</summary>

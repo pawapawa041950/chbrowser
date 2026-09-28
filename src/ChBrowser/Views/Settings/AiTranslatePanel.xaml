@@ -7,7 +7,7 @@
              xmlns:conv="clr-namespace:ChBrowser.Converters"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
-    <!-- 「AI翻訳」カテゴリ: スレ / レスの翻訳に使う AI モデル。空欄の項目は「AI」カテゴリの設定を使う。 -->
+    <!-- 「AI翻訳」カテゴリ: スレ / レスの翻訳に使う LLM プロファイル (プロファイルは「LLM」カテゴリで登録)。 -->
     <UserControl.Resources>
         <conv:LlmStatusToBrushConverter x:Key="LlmStatusBrush" />
 
@@ -24,22 +24,12 @@
         <TextBlock Text="AI翻訳" FontWeight="SemiBold" Margin="0,0,0,4" />
         <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
             スレ表示のツールバーの 🌐 (スレ全体) と、レス番号 (▸) メニューの「このレスを翻訳」で使う AI モデルです。
-            日本語に翻訳します。空欄の項目は「AI」カテゴリの設定を使います (翻訳専用のモデルを用意しなくても使えます)。
+            日本語に翻訳します。使う LLM プロファイルを選びます (プロファイルは「LLM」カテゴリで登録)。
         </TextBlock>
-        <StackPanel Width="260" HorizontalAlignment="Left">
-            <TextBlock Text="翻訳用AIモデル" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TextBlock Text="API URL (空なら AI の設定)" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding TranslateApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Margin="0,0,0,6" />
-            <TextBlock Text="API Key (空なら AI の設定)" Style="{StaticResource FieldLabel}" />
-            <PasswordBox x:Name="TranslateApiKeyInput" PasswordChanged="TranslateApiKeyInput_PasswordChanged" Margin="0,0,0,6" />
-            <TextBlock Text="モデル名 (空なら AI の設定)" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding TranslateModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Margin="0,0,0,6" />
-            <TextBlock Text="Context Size (トークン数。0 なら AI の設定)" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding TranslateContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Width="120" HorizontalAlignment="Left"
-                     ToolTip="1 回のリクエストにまとめて送るレスの量もこの値から決まります" />
+        <StackPanel Width="340" HorizontalAlignment="Left">
+            <TextBlock Text="使う LLM プロファイル" Style="{StaticResource FieldLabel}" />
+            <ComboBox ItemsSource="{Binding LlmProfileChoices}" DisplayMemberPath="Label" SelectedValuePath="Id"
+                          SelectedValue="{Binding TranslateLlmProfileId, Mode=TwoWay}" Width="320" HorizontalAlignment="Left" Margin="0,0,0,6" />
             <TextBlock Text="同時実行数 (並列リクエスト本数)" Style="{StaticResource FieldLabel}" Margin="0,6,0,0" />
             <TextBox Text="{Binding TranslateConcurrency, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
                      Width="120" HorizontalAlignment="Left"
@@ -52,14 +42,9 @@
             <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
                        Text="リーズニングが動くと翻訳が遅くなるため、リーズニングを OFF にするための一般的な設定を付加します。" />
 
-            <Button Content="接続確認" Padding="14,3" HorizontalAlignment="Left" Margin="0,10,0,4"
-                    Command="{Binding TestTranslateConnectionCommand}"
-                    ToolTip="翻訳で実際に使う接続 (空欄は AI の設定で補ったもの) で OpenAI 互換 API に接続できるか確認します" />
-            <TextBlock Text="{Binding TranslateConnectionStatus}" TextWrapping="Wrap" FontSize="11"
-                       Foreground="{Binding TranslateConnectionStatus, Converter={StaticResource LlmStatusBrush}}" />
         </StackPanel>
         <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,8,0,0">
-            ※ API キーは config.json に平文で保存されます。翻訳したレスはスレのログの隣 (.tr.json) に保存され、同じレスを何度も送りません。
+            ※ 翻訳したレスはスレのログの隣 (.tr.json) に保存され、同じレスを何度も送りません。
         </TextBlock>
 
     </StackPanel>

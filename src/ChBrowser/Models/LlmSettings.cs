@@ -1,45 +1,43 @@
+using System.Linq;
+
 namespace ChBrowser.Models;
 
-/// <summary>LLM 接続設定のスナップショット。<see cref="AppConfig"/> の LLM 系フィールドを
-/// 1 つにまとめて <see cref="ChBrowser.Services.Llm.LlmClient"/> に渡すための値オブジェクト。</summary>
-public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int ContextSize)
+/// <summary>LLM 接続設定のスナップショット。使うプロファイル (<see cref="LlmProfile"/>) を解決して
+/// <see cref="ChBrowser.Services.Llm.LlmClient"/> に渡すための値オブジェクト。</summary>
+/// <param name="SupportsImages">画像を入力できるモデルか (プロファイルの設定)。</param>
+public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int ContextSize, bool SupportsImages = false)
 {
-    /// <summary>AppConfig から現在の LLM 設定 (= 既存エンジン用) を切り出す。</summary>
-    public static LlmSettings FromConfig(AppConfig config)
-        => new(config.LlmApiUrl ?? "", config.LlmApiKey ?? "", config.LlmModel ?? "", config.LlmContextSize);
+    public static LlmSettings Empty { get; } = new("", "", "", 0);
 
-    /// <summary>エージェントの Strategist (戦略層) 接続。= メインの「AI モデル」(<see cref="FromConfig"/>)。
-    /// 戦略検討モデルは常にメインモデルを使う (分けるのは Worker のみ)。</summary>
-    public static LlmSettings StrategistFromConfig(AppConfig c) => FromConfig(c);
+    public static LlmSettings FromProfile(LlmProfile? p)
+        => p is null ? Empty : new(p.ApiUrl ?? "", p.ApiKey ?? "", p.Model ?? "", p.ContextSize, p.SupportsImages);
 
-    /// <summary>エージェントの Worker (実行層) 接続。
-    /// <see cref="AppConfig.SeparateWorkerModel"/> が false ならメインの「AI モデル」と同一を返す
-    /// (= 1 設定で両方を動かす)。true なら Worker 設定を使い、未設定の項目はメインモデルにフォールバックする。</summary>
+    /// <summary>Id でプロファイルを引く。空・見つからないならデフォルトのプロファイル (それも無ければ最初のもの、無ければ null)。</summary>
+    public static LlmProfile? ResolveProfile(AppConfig c, string? id)
+    {
+        var list = c.LlmProfiles;
+        if (list is null || list.Length == 0) return null;
+        return (!string.IsNullOrEmpty(id) ? list.FirstOrDefault(p => p.Id == id) : null)
+            ?? list.FirstOrDefault(p => p.Id == c.DefaultLlmProfileId)
+            ?? list[0];
+    }
+
+    /// <summary>デフォルトのプロファイル。</summary>
+    public static LlmSettings FromConfig(AppConfig config) => FromProfile(ResolveProfile(config, null));
+
+    /// <summary>エージェントの Strategist (戦略層) 接続 (AIチャット カテゴリで選んだプロファイル)。</summary>
+    public static LlmSettings StrategistFromConfig(AppConfig c) => FromProfile(ResolveProfile(c, c.AgentLlmProfileId));
+
+    /// <summary>エージェントの Worker (実行層) 接続。<see cref="AppConfig.SeparateWorkerModel"/> が false なら戦略検討モデルと同じ。</summary>
     public static LlmSettings WorkerFromConfig(AppConfig c)
-    {
-        var main = FromConfig(c);
-        if (!c.SeparateWorkerModel) return main;   // 分けない → メインモデルと同じ
-        return new(Pick(c.WorkerApiUrl, main.ApiUrl),
-                   Pick(c.WorkerApiKey, main.ApiKey),
-                   Pick(c.WorkerModel,  main.Model),
-                   c.WorkerContextSize > 0 ? c.WorkerContextSize : main.ContextSize);
-    }
+        => c.SeparateWorkerModel ? FromProfile(ResolveProfile(c, c.WorkerLlmProfileId)) : StrategistFromConfig(c);
 
-    /// <summary>NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統) の接続。
-    /// 完全に独立した設定 (フォールバックなし。空なら未設定 = 機能オフ)。</summary>
-    public static LlmSettings NgFromConfig(AppConfig c)
-        => new(c.NgAiApiUrl ?? "", c.NgAiApiKey ?? "", c.NgAiModel ?? "", c.NgAiContextSize);
+    /// <summary>NG 判定 AI の接続 (機能の ON / OFF は <see cref="AppConfig.NgAiEnabled"/>)。</summary>
+    public static LlmSettings NgFromConfig(AppConfig c) => FromProfile(ResolveProfile(c, c.NgAiLlmProfileId));
 
-    /// <summary>AI 翻訳の接続。空の項目は AI (メインの「AI モデル」) の設定を使う。</summary>
-    public static LlmSettings TranslateFromConfig(AppConfig c)
-    {
-        var main = FromConfig(c);
-        return new(Pick(c.TranslateApiUrl, main.ApiUrl),
-                   Pick(c.TranslateApiKey, main.ApiKey),
-                   Pick(c.TranslateModel,  main.Model),
-                   c.TranslateContextSize > 0 ? c.TranslateContextSize : main.ContextSize);
-    }
+    /// <summary>AI 翻訳の接続。</summary>
+    public static LlmSettings TranslateFromConfig(AppConfig c) => FromProfile(ResolveProfile(c, c.TranslateLlmProfileId));
 
-    private static string Pick(string? primary, string? fallback)
-        => string.IsNullOrWhiteSpace(primary) ? (fallback ?? "") : primary!;
+    /// <summary>接続先 (URL とモデル名) が入っているか。</summary>
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiUrl) && !string.IsNullOrWhiteSpace(Model);
 }

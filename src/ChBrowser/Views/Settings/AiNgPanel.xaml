@@ -23,22 +23,14 @@
 
         <TextBlock Text="NG判定AI" FontWeight="SemiBold" Margin="0,0,0,4" />
         <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,8">
-            攻撃的・荒らし的なレスの判定に使う AI モデルです（AI エージェントとは別系統の独立設定）。
-            空欄なら未設定（機能オフ）。1 レスごとの短い判定なので、軽量・高速なモデルが向いています。
+            攻撃的・荒らし的なレスを AI で判定して非表示にします。1 レスごとの短い判定なので、軽量・高速なモデルが向いています。
+            使う LLM プロファイルを選びます (プロファイルは「LLM」カテゴリで登録)。
         </TextBlock>
-        <StackPanel Width="260" HorizontalAlignment="Left">
-            <TextBlock Text="NG判定用AIモデル" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TextBlock Text="API URL" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding NgAiApiUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Margin="0,0,0,6" />
-            <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
-            <PasswordBox x:Name="NgAiApiKeyInput" PasswordChanged="NgAiApiKeyInput_PasswordChanged" Margin="0,0,0,6" />
-            <TextBlock Text="モデル名" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding NgAiModel, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Margin="0,0,0,6" />
-            <TextBlock Text="Context Size (トークン数)" Style="{StaticResource FieldLabel}" />
-            <TextBox Text="{Binding NgAiContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Width="120" HorizontalAlignment="Left" />
+        <CheckBox Content="NG 判定 AI を使う" IsChecked="{Binding NgAiEnabled, Mode=TwoWay}" Margin="0,0,0,8" />
+        <StackPanel Width="340" HorizontalAlignment="Left">
+            <TextBlock Text="使う LLM プロファイル" Style="{StaticResource FieldLabel}" />
+            <ComboBox ItemsSource="{Binding LlmProfileChoices}" DisplayMemberPath="Label" SelectedValuePath="Id"
+                          SelectedValue="{Binding NgAiLlmProfileId, Mode=TwoWay}" Width="320" HorizontalAlignment="Left" Margin="0,0,0,6" />
             <TextBlock Text="同時実行数 (並列リクエスト本数)" Style="{StaticResource FieldLabel}" Margin="0,6,0,0" />
             <TextBox Text="{Binding NgAiConcurrency, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
                      Width="120" HorizontalAlignment="Left"
@@ -51,15 +43,7 @@
             <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
                        Text="AI NG処理でLLMのリーズニングが動作すると処理速度が遅くなるため、リーズニングをOFFするための一般的な設定を付加します。基本的にはLLMのサーバ側でリーズニングをOFFして立ち上げるのが望ましいです。" />
 
-            <Button Content="接続確認" Padding="14,3" HorizontalAlignment="Left" Margin="0,10,0,4"
-                    Command="{Binding TestNgAiConnectionCommand}"
-                    ToolTip="この NG 判定 AI の設定で OpenAI 互換 API に接続できるか確認します" />
-            <TextBlock Text="{Binding NgAiConnectionStatus}" TextWrapping="Wrap" FontSize="11"
-                       Foreground="{Binding NgAiConnectionStatus, Converter={StaticResource LlmStatusBrush}}" />
         </StackPanel>
-        <TextBlock TextWrapping="Wrap" Foreground="#A07020" FontSize="11" Margin="0,8,0,0">
-            ※ API キーは config.json に平文で保存されます。
-        </TextBlock>
 
     </StackPanel>
 </UserControl>

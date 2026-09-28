@@ -48,7 +48,7 @@ public sealed partial class MainViewModel
     private bool IsTranslateConfigured
         => TranslateSettings is { } s && !string.IsNullOrWhiteSpace(s.ApiUrl) && !string.IsNullOrWhiteSpace(s.Model);
 
-    private const string NotConfiguredMessage = "AI翻訳の接続が未設定です (設定 → AI翻訳。空欄なら「AI」の設定を使います)";
+    private const string NotConfiguredMessage = "AI翻訳の接続が未設定です (設定 → LLM でプロファイルを登録し、設定 → AI翻訳 で使うプロファイルを選んでください)";
 
     /// <summary>🌐 メニュー「各レスごとに翻訳ボタンを表示する」。掲示板ごとに設定へ保存し、同じ掲示板の開いているスレへ即時に反映する。</summary>
     [RelayCommand]

@@ -698,7 +698,7 @@ public partial class App : Application
             reddit:                   CreateRedditSettingsHooks(),
             loginNowAction:           LoginDonguriNow,
             openAiBoardGuideAction:   OpenAiBoardGuideFile,
-            // AI カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
+            // LLM カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
             testLlmConnectionAction:  async settings =>
             {
                 var result = await _llmClient.TestConnectionAsync(settings).ConfigureAwait(true);
