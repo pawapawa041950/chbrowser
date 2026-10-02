@@ -20,8 +20,11 @@ namespace ChBrowser.Services.Llm;
 /// </list></summary>
 public sealed class TranslationService
 {
-    /// <summary>1 回の推論で送るタイトルの数。多すぎると取り違え・欠落が増え、少なすぎると往復が増える。</summary>
-    public const int TitlesPerRequest = 20;
+    /// <summary>最初の 1 回の推論で送るタイトルの数。少ないほど最初の訳が早く出る (ローカル 70 tok/s で 5 件 ≒ 2.5 秒)。</summary>
+    public const int FirstTitlesPerRequest = 5;
+    /// <summary>2 回目以降の 1 回の推論で送るタイトルの数。1 回ごとに最初の文字まで約 1 秒の固定の待ちがあるので、
+    /// まとめるほど全体は早く終わる (150 件: 5 件ずつ 82 秒 → 10 件ずつで 60 秒台の見積もり)。多すぎると取り違え・欠落が増える。</summary>
+    public const int TitlesPerRequest = 10;
     /// <summary>タイトルの訳を残す上限件数 (超えたら古いものから捨てる)。</summary>
     private const int MaxCachedTitles = 20000;
 
@@ -96,7 +99,7 @@ public sealed class TranslationService
     public bool TitleNeedsTranslation(string title)
         => !string.IsNullOrWhiteSpace(title) && CachedTitle(title) is null && AiTranslator.NeedsTranslation(title);
 
-    /// <summary>タイトルをまとめて訳す (<see cref="TitlesPerRequest"/> 件ずつ・同時実行の枠の中で)。訳せた分は保存し、
+    /// <summary>タイトルをまとめて訳す (最初は <see cref="FirstTitlesPerRequest"/> 件、以降 <see cref="TitlesPerRequest"/> 件ずつ・同時実行の枠の中で)。訳せた分は保存し、
     /// 1 回分の要求が終わるごとに <paramref name="onBatch"/> を呼ぶ (画面を少しずつ更新するため)。
     /// 戻り値: 訳せた件数。失敗 (接続エラー等) は <see cref="AiTranslateException"/> (それまでの分は保存済み)。</summary>
     public async Task<int> TranslateTitlesAsync(IReadOnlyList<string> titles, Action<int>? onBatch, CancellationToken ct)
@@ -106,9 +109,11 @@ public sealed class TranslationService
         try
         {
             var tasks = new List<Task>();
-            for (var i = 0; i < todo.Count; i += TitlesPerRequest)
+            for (var i = 0; i < todo.Count; )
             {
-                var batch = todo.GetRange(i, Math.Min(TitlesPerRequest, todo.Count - i));
+                var size  = i == 0 ? FirstTitlesPerRequest : TitlesPerRequest;   // 最初だけ少なく (= 最初の訳を早く出す)
+                var batch = todo.GetRange(i, Math.Min(size, todo.Count - i));
+                i += batch.Count;
                 tasks.Add(WithSlotAsync(async () =>
                 {
                     ct.ThrowIfCancellationRequested();
