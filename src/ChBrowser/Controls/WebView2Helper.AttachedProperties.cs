@@ -279,7 +279,8 @@ public static partial class WebView2Helper
             filter = new
             {
                 textQuery   = filter?.TextQuery ?? "",
-                popularOnly = filter?.PopularOnly == true,
+                minReplies  = filter?.MinReplies ?? 0,
+                minLikes    = filter?.MinLikes   ?? 0,
                 mediaOnly   = filter?.MediaOnly   == true,
             },
         }, PostJsonOptions);
@@ -436,7 +437,8 @@ public static partial class WebView2Helper
         {
             type        = "setFilter",
             textQuery   = filter.TextQuery,
-            popularOnly = filter.PopularOnly,
+            minReplies  = filter.MinReplies,
+            minLikes    = filter.MinLikes,
             mediaOnly   = filter.MediaOnly,
         }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);

@@ -374,31 +374,85 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private string _statusMessage = "";
 
-    /// <summary>「人気のレス」フィルタトグル (= 👍 ボタン)。tree モードでは popular の配下も含めて表示。</summary>
+    // ---- 「人気のレス」絞り込み (👍 ボタンのメニュー。タブごと・その場限り) ----
+    //   返信数 N 件以上 / イイネ数 M 件以上 (0 はその条件を使わない)。両方使うときはどちらかを満たせば表示 (OR)。
+    //   tree モードでは人気のレスの配下も含めて表示する。
+
+    /// <summary>表示するレスの返信数の下限 (0 = 返信数では絞らない)。</summary>
     [ObservableProperty]
-    private bool _isPopularFilterOn;
+    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn))]
+    private int _popularMinReplies;
+
+    /// <summary>表示するレスのイイネ数の下限 (0 = イイネ数では絞らない)。イイネの無い掲示板では使わない。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn))]
+    private int _popularMinLikes;
+
+    /// <summary>件数の上限 (入力の取り違えで極端な値にならないように)。</summary>
+    public const int PopularMaxCount = 9999;
+
+    /// <summary>この掲示板のレスにイイネ (評価値) があるか (reddit のスコア / ふたばの「そうだね」)。無ければイイネの行はグレーアウト。</summary>
+    public bool SupportsLikes => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host).Voting is not null;
+
+    /// <summary>人気のレスの絞り込みが効いているか (👍 ボタンの押下状態)。</summary>
+    public bool IsPopularFilterOn => PopularMinReplies > 0 || (SupportsLikes && PopularMinLikes > 0);
+
+    partial void OnPopularMinRepliesChanged(int value)
+    {
+        var v = Math.Clamp(value, 0, PopularMaxCount);
+        if (v != value) { PopularMinReplies = v; return; }
+        RebuildFilter();
+    }
+
+    partial void OnPopularMinLikesChanged(int value)
+    {
+        var v = Math.Clamp(value, 0, PopularMaxCount);
+        if (v != value) { PopularMinLikes = v; return; }
+        RebuildFilter();
+    }
+
+    /// <summary>👍 メニューの +/- (パラメータ "replies+1" / "replies-1" / "likes+1" / "likes-1")。</summary>
+    [RelayCommand]
+    private void StepPopularMin(string? spec)
+    {
+        switch (spec)
+        {
+            case "replies+1": PopularMinReplies++; break;
+            case "replies-1": PopularMinReplies--; break;
+            case "likes+1":   PopularMinLikes++;   break;
+            case "likes-1":   PopularMinLikes--;   break;
+        }
+    }
+
+    /// <summary>👍 メニューの「クリア」: 返信数・イイネ数とも 0 に戻す (= 人気のレスの絞り込みを解除)。</summary>
+    [RelayCommand]
+    private void ClearPopularMin()
+    {
+        PopularMinReplies = 0;
+        PopularMinLikes   = 0;
+    }
 
     /// <summary>「画像/動画」フィルタトグル (= 🖼 ボタン)。本文に画像/動画 URL を含むレスのみ表示。</summary>
     [ObservableProperty]
     private bool _isMediaFilterOn;
 
-    /// <summary>現在のフィルタ条件。<see cref="SearchQuery"/> / <see cref="IsPopularFilterOn"/> /
+    /// <summary>現在のフィルタ条件。<see cref="SearchQuery"/> / <see cref="PopularMinReplies"/> / <see cref="PopularMinLikes"/> /
     /// <see cref="IsMediaFilterOn"/> から合成され、<see cref="ChBrowser.Controls.WebView2Helper"/> の
     /// FilterPush 添付プロパティ経由で JS に push される。各タブが独立した状態を持つ。</summary>
     [ObservableProperty]
     private ThreadFilter _filter = new ThreadFilter();
 
     partial void OnSearchQueryChanged(string value)        => RebuildFilter();
-    partial void OnIsPopularFilterOnChanged(bool value)    => RebuildFilter();
     partial void OnIsMediaFilterOnChanged(bool value)      => RebuildFilter();
 
     private void RebuildFilter()
     {
-        // SearchQuery と toggle 群を 1 つの ThreadFilter にまとめる。
-        // テキストクエリは AND 条件、トグル 2 つは互いに OR (= JS 側 postMatchesFilter で合成判定)。
+        // SearchQuery と人気 / 画像の条件を 1 つの ThreadFilter にまとめる。
+        // テキストクエリは AND 条件、人気 (返信数 / イイネ数) と画像は互いに OR (= JS 側 postMatchesFilter で合成判定)。
         Filter = new ThreadFilter(
             TextQuery:   SearchQuery ?? "",
-            PopularOnly: IsPopularFilterOn,
+            MinReplies:  PopularMinReplies,
+            MinLikes:    SupportsLikes ? PopularMinLikes : 0,
             MediaOnly:   IsMediaFilterOn);
     }
 

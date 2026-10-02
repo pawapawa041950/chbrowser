@@ -134,9 +134,23 @@
     // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
     // 評価ルール:
     //   - textQuery (= AND 条件): 本文に含まれていれば match (= 大文字小文字無視)。空なら本文条件なし。
-    //   - popularOnly + mediaOnly (= 互いに OR): どちらかでも ON なら、その条件に match するレスだけ表示。
-    //     両方 OFF なら toggle 条件なし (textQuery のみで判定)。
-    let currentFilter = { textQuery: '', popularOnly: false, mediaOnly: false };
+    //   - 人気のレス (minReplies: 返信数 N 以上 / minLikes: イイネ数 M 以上、0 は条件なし) + mediaOnly (= 互いに OR):
+    //     どれかが ON なら、その条件に match するレスだけ表示。全部 OFF なら条件なし (textQuery のみで判定)。
+    let currentFilter = { textQuery: '', minReplies: 0, minLikes: 0, mediaOnly: false };
+
+    /** C# の ThreadFilter (setFilter / resyncThreadState の filter) を currentFilter の形にする。 */
+    function normalizeFilter(f) {
+        const n = function (v) { return (typeof v === 'number' && v > 0) ? Math.floor(v) : 0; };
+        return {
+            textQuery:  typeof f.textQuery === 'string' ? f.textQuery : '',
+            minReplies: n(f.minReplies),
+            minLikes:   n(f.minLikes),
+            mediaOnly:  f.mediaOnly === true,
+        };
+    }
+
+    /** 人気のレスの条件があるか。 */
+    function popularFilterOn() { return currentFilter.minReplies > 0 || currentFilter.minLikes > 0; }
 
     // popularOnly フィルタの「展開済み include 集合」キャッシュ。
     // tree / dedupTree モードでは popular レス自身 + その配下 (= 返信チェイン) を全て表示する仕様で、
@@ -145,15 +159,16 @@
 
     /** 現在のフィルタが「全レス可視」(= フィルタなし) と等価か。短絡判定用。 */
     function isFilterEmpty() {
-        return !currentFilter.textQuery && !currentFilter.popularOnly && !currentFilter.mediaOnly;
+        return !currentFilter.textQuery && !popularFilterOn() && !currentFilter.mediaOnly;
     }
 
-    /** popularOnly フィルタ用の include 集合を組む。
-     *   - flat モード: popular なレス番号 (= 返信数 >= POPULAR_THRESHOLD) のみ
-     *   - tree / dedupTree モード: popular なレスとその配下 (= 返信チェイン全て) を BFS で展開して含める */
+    /** 人気のレスの絞り込み用の include 集合を組む。人気 = 返信数 >= minReplies または イイネ数 >= minLikes (0 の条件は使わない)。
+     *   - flat モード: 人気のレス番号のみ
+     *   - tree / dedupTree モード: 人気のレスとその配下 (= 返信チェイン全て) を BFS で展開して含める */
     function rebuildPopularIncludeSet() {
         const set = new Set();
-        if (!currentFilter.popularOnly) { popularIncludeCache = set; return; }
+        if (!popularFilterOn()) { popularIncludeCache = set; return; }
+        const minR = currentFilter.minReplies, minL = currentFilter.minLikes;
 
         const reverseIdx = currentReverseIndex && currentReverseIndex.size > 0
             ? currentReverseIndex
@@ -162,7 +177,9 @@
         const popularNums = [];
         for (const p of allPosts) {
             const refs = reverseIdx.get(p.number);
-            if (refs && refs.length >= POPULAR_THRESHOLD) popularNums.push(p.number);
+            const byReplies = minR > 0 && refs && refs.length >= minR;
+            const byLikes   = minL > 0 && (displayScore(p) || 0) >= minL;   // 評価値の無いレス (ふたばの 0 件等) は 0
+            if (byReplies || byLikes) popularNums.push(p.number);
         }
         for (const n of popularNums) set.add(n);
 
@@ -200,8 +217,8 @@
             if (haystack.indexOf(q) < 0) return false;
         }
 
-        // (2) popularOnly / mediaOnly (互いに OR、どちらか ON なら match 必須)
-        const popOn = currentFilter.popularOnly === true;
+        // (2) 人気のレス / mediaOnly (互いに OR、どちらか ON なら match 必須)
+        const popOn = popularFilterOn();
         const medOn = currentFilter.mediaOnly === true;
         if (popOn || medOn) {
             const popMatch = popOn && popularIncludeCache && popularIncludeCache.has(post.number);
@@ -219,7 +236,7 @@
     function applyFilterToAllPosts() {
         const root = document.getElementById('posts');
         if (!root) return;
-        // popularOnly トグル用の include 集合をここで毎回再計算 (= allPosts や viewMode の変化に追従)。
+        // 人気のレスの include 集合をここで毎回再計算 (= allPosts や viewMode の変化に追従)。
         rebuildPopularIncludeSet();
         if (isFilterEmpty()) {
             root.querySelectorAll('.filter-hidden').forEach(function (el) { el.classList.remove('filter-hidden'); });
@@ -4729,7 +4746,7 @@
     // メソッド契約:
     //   insertOnArrival(p, root)    1 レス到着時の DOM 配置 (primary / 親 embed のどちらにするかを決める)
     //   buildPrimaryHtml(p)         primary instance の HTML 生成 (forward 展開などのモード固有の整形)
-    //   expandsPopularChain()       popularOnly フィルタで「人気レスとその子孫」を展開するか (tree 系のみ true)
+    //   expandsPopularChain()       人気のレスの絞り込みで「人気レスとその子孫」を展開するか (tree 系のみ true)
     //   splitBySectionMark()        フル再描画で「以降新レス」ラベルで section A/B 分割するか (dedupTree のみ true)
     //   usesBulkDeltaRebuild()      isDelta バッチで section B を末尾に bulk rebuild するか (dedupTree のみ true)
     //   promoteOnNewRefresh(root)   新リフレッシュ境界で旧 delta を section A に「昇格」する処理。
@@ -5169,13 +5186,7 @@
                         if (msg.authorProfiles && typeof msg.authorProfiles === 'object')
                             for (const k of Object.keys(msg.authorProfiles)) authorProfiles.set(k, msg.authorProfiles[k]);
                         closeAuthorCard();
-                        if (msg.filter && typeof msg.filter === 'object') {
-                            currentFilter = {
-                                textQuery:   typeof msg.filter.textQuery === 'string' ? msg.filter.textQuery : '',
-                                popularOnly: msg.filter.popularOnly === true,
-                                mediaOnly:   msg.filter.mediaOnly   === true,
-                            };
-                        }
+                        if (msg.filter && typeof msg.filter === 'object') currentFilter = normalizeFilter(msg.filter);
                         debugLog('resyncThreadState: viewMode=' + viewMode
                             + ', posts=' + (Array.isArray(msg.posts) ? msg.posts.length : 0)
                             + ', markPostNumber=' + msg.markPostNumber
@@ -5192,11 +5203,7 @@
                 case 'setFilter':
                     // C# 側 ThreadFilter record の JSON 反映。新条件は currentFilter のフィールドを
                     // 増やすだけで対応できる (= 同時に postMatchesFilter にも条件評価を追加する)。
-                    currentFilter = {
-                        textQuery:   typeof msg.textQuery === 'string' ? msg.textQuery : '',
-                        popularOnly: msg.popularOnly === true,
-                        mediaOnly:   msg.mediaOnly   === true,
-                    };
+                    currentFilter = normalizeFilter(msg);
                     applyFilterToAllPosts();
                     break;
                 case 'setMarkPostNumber':

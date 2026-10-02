@@ -35,6 +35,36 @@ public partial class ThreadDisplayPane : UserControl
     /// <summary>ツールバー 🌐: AI 翻訳のメニューを出す (AI NG のしきい値ボタンと同じ出し方)。</summary>
     private void TranslateMenuButton_Click(object sender, RoutedEventArgs e) => AiNgThresholdButton_Click(sender, e);
 
+    // ---- 人気のレス (👍) の件数メニュー (Popup) ----
+
+    /// <summary>Popup が閉じた時刻。開いている Popup の外 (= 👍 ボタン) を押すと、先に Popup が閉じてから Click が来るので、
+    /// その Click で開き直さないように使う。</summary>
+    private DateTime _popularClosedAt;
+
+    private void PopularButton_Click(object sender, RoutedEventArgs e)
+    {
+        if ((DateTime.UtcNow - _popularClosedAt).TotalMilliseconds < 250) return;
+        PopularPopup.IsOpen = !PopularPopup.IsOpen;
+    }
+
+    private void PopularPopup_Closed(object? sender, EventArgs e) => _popularClosedAt = DateTime.UtcNow;
+
+    /// <summary>件数の入力欄は数字だけ受け付ける。</summary>
+    private void PopularCountBox_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+        => e.Handled = !e.Text.All(char.IsAsciiDigit);
+
+    /// <summary>貼り付けも数字だけ。</summary>
+    private void PopularCountBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (e.DataObject.GetData(typeof(string)) is not string s || !s.Trim().All(char.IsAsciiDigit)) e.CancelCommand();
+    }
+
+    /// <summary>入力欄に入ったら全選択 (= そのまま打ち直せる)。</summary>
+    private void PopularCountBox_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox tb) tb.Dispatcher.BeginInvoke(tb.SelectAll);
+    }
+
     private void AiNgThresholdButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn || btn.ContextMenu is null) return;

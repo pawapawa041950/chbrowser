@@ -154,15 +154,111 @@
                         </Button.ContextMenu>
                     </Button>
 
-                    <!-- フィルタトグル: 人気レス / 画像レス。両方 ON で OR (= どちらかに該当なら表示)。 -->
-                    <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
-                                  IsChecked="{Binding SelectedTab.IsPopularFilterOn}"
-                                  ToolTip="人気のレス (返信が多いレス + ツリーモードではその配下) のみ表示。画像トグルと OR 動作">
-                        <TextBlock Text="👍" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </ToggleButton>
+                    <!-- 人気のレス (👍): 押すとメニュー。返信数 N 件以上 / イイネ数 M 件以上 (0 = その条件を使わない、どちらかを満たせば表示)。
+                         件数は +/- (押し続けると連続) か直接入力。タブごと・その場限り。イイネの無い掲示板ではイイネの行はグレーアウト。
+                         画像トグルとは OR。条件が効いている間はボタンを押下状態の色にする。
+                         入力欄を置くので ContextMenu ではなく Popup (ContextMenu はキー入力をメニュー操作に取る)。 -->
+                    <Grid>
+                        <Button x:Name="PopularButton" Click="PopularButton_Click">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                    <Setter Property="ToolTip" Value="人気のレスだけ表示 (返信数 / イイネ数の件数を設定)" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedTab.IsPopularFilterOn}" Value="True">
+                                            <Setter Property="Background"  Value="#CCE5FF" />
+                                            <Setter Property="BorderBrush" Value="#88B0DD" />
+                                            <Setter Property="ToolTip" Value="人気のレスだけ表示中 (押すと件数を変更。両方 0 で解除)" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                            <Setter Property="IsEnabled" Value="False" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <TextBlock Text="👍" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
+                        <Popup x:Name="PopularPopup"
+                               PlacementTarget="{Binding ElementName=PopularButton}" Placement="Bottom"
+                               StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade"
+                               Closed="PopularPopup_Closed">
+                            <Border Background="White" BorderBrush="#A0A0A0" BorderThickness="1" Padding="10,8" Margin="0,0,6,6">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="6" ShadowDepth="2" Opacity="0.25" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <TextBlock Text="人気のレスだけ表示" FontWeight="SemiBold" Margin="0,0,0,2" />
+                                    <TextBlock Text="0 はその条件を使わない。両方使うときはどちらかを満たせば表示" FontSize="11" Foreground="#666" Margin="0,0,0,6" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Opacity" Value="0.4" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <TextBlock Text="返信数" Width="56" VerticalAlignment="Center" />
+                                        <TextBox Width="48" VerticalAlignment="Center" HorizontalContentAlignment="Right" Padding="2,1" MaxLength="4"
+                                                 Text="{Binding SelectedTab.PopularMinReplies, UpdateSourceTrigger=PropertyChanged}"
+                                                 Validation.ErrorTemplate="{x:Null}"
+                                                 PreviewTextInput="PopularCountBox_PreviewTextInput"
+                                                 DataObject.Pasting="PopularCountBox_Pasting"
+                                                 GotKeyboardFocus="PopularCountBox_GotKeyboardFocus"
+                                                 ToolTip="件数を入力 (0 = この条件を使わない)" />
+                                        <TextBlock Text="件以上" Margin="4,0,8,0" VerticalAlignment="Center" />
+                                        <RepeatButton Content="＋" Width="24" Height="22" Margin="0,0,2,0" Delay="400" Interval="60"
+                                                      Command="{Binding SelectedTab.StepPopularMinCommand}" CommandParameter="replies+1" ToolTip="1 増やす (押し続けると連続)" />
+                                        <RepeatButton Content="－" Width="24" Height="22" Delay="400" Interval="60"
+                                                      Command="{Binding SelectedTab.StepPopularMinCommand}" CommandParameter="replies-1" ToolTip="1 減らす (押し続けると連続)" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,2" IsEnabled="{Binding SelectedTab.SupportsLikes}">
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Opacity" Value="0.4" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <TextBlock Text="イイネ数" Width="56" VerticalAlignment="Center" />
+                                        <TextBox Width="48" VerticalAlignment="Center" HorizontalContentAlignment="Right" Padding="2,1" MaxLength="4"
+                                                 Text="{Binding SelectedTab.PopularMinLikes, UpdateSourceTrigger=PropertyChanged}"
+                                                 Validation.ErrorTemplate="{x:Null}"
+                                                 PreviewTextInput="PopularCountBox_PreviewTextInput"
+                                                 DataObject.Pasting="PopularCountBox_Pasting"
+                                                 GotKeyboardFocus="PopularCountBox_GotKeyboardFocus"
+                                                 ToolTip="件数を入力 (0 = この条件を使わない)" />
+                                        <TextBlock Text="件以上" Margin="4,0,8,0" VerticalAlignment="Center" />
+                                        <RepeatButton Content="＋" Width="24" Height="22" Margin="0,0,2,0" Delay="400" Interval="60"
+                                                      Command="{Binding SelectedTab.StepPopularMinCommand}" CommandParameter="likes+1" ToolTip="1 増やす (押し続けると連続)" />
+                                        <RepeatButton Content="－" Width="24" Height="22" Delay="400" Interval="60"
+                                                      Command="{Binding SelectedTab.StepPopularMinCommand}" CommandParameter="likes-1" ToolTip="1 減らす (押し続けると連続)" />
+                                    </StackPanel>
+                                    <TextBlock Text="この掲示板にはイイネがありません" FontSize="11" Foreground="#888" Margin="56,0,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedTab.SupportsLikes}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <Button Content="クリア" HorizontalAlignment="Right" Margin="0,8,0,0" Padding="12,2"
+                                            Command="{Binding SelectedTab.ClearPopularMinCommand}"
+                                            IsEnabled="{Binding SelectedTab.IsPopularFilterOn}"
+                                            ToolTip="返信数・イイネ数とも 0 に戻す (絞り込みを解除)" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
                                   IsChecked="{Binding SelectedTab.IsMediaFilterOn}"
-                                  ToolTip="画像 / 動画 URL を含むレスのみ表示。人気トグルと OR 動作">
+                                  ToolTip="画像 / 動画 URL を含むレスのみ表示。人気のレスの条件と OR 動作">
                         <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </ToggleButton>
 
