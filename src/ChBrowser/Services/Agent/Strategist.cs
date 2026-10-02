@@ -12,7 +12,10 @@ public delegate Task<TaskResult> WorkerDispatcher(TaskSpec spec, IWorkSection se
 ///
 /// <para>tool-call ループで plan を所有し、<c>dispatch_task</c> で Worker を起動 (= 1 ツール呼び = Worker 1 本)、
 /// finding を見て次の手を決める。会話 (<see cref="_messages"/>) はターンを跨いで永続 (D8)。
-/// 生 tool 出力は持たず finding と evidence id のみ受け取る。</para></summary>
+/// 生 tool 出力は持たず finding と evidence id のみ受け取る。</para>
+///
+/// <para>文脈: 履歴に思考過程は残さない。会話が長くなって入力枠を超えそうなら、前のターンの tool 結果 (finding) から短くする。
+/// 中断されたら、応答の無い tool_call に「中断」の結果を補って会話を壊さない。</para></summary>
 public sealed class Strategist
 {
     private readonly LlmClient            _llm;
@@ -22,19 +25,20 @@ public sealed class Strategist
     private readonly System.Func<string, string> _recallArchive;
     private readonly bool                 _allowParallel;   // 1 ターンの複数 dispatch_task を同時 in-flight にするか (D7)
 
-    private readonly List<LlmChatMessage> _messages = new();   // 永続会話 (D8)
+    private readonly List<LlmChatMessage> _messages = new();   // 永続会話 (D8)。[0] は system
+    private string                        _currentUserText = "";  // この依頼のユーザ発言 (Worker に原文として渡す)
     private readonly List<PlanItem>       _plan      = new();   // 新エンジン独自の簡易 plan
     private readonly Dictionary<string, int> _dispatchCounts = new(System.StringComparer.Ordinal); // D9 リトライ
 
     // heavy ゲート (D11/D12 + レビュー②: 累積コミット予算)。
-    private int  _committedBudget;   // 既に dispatch したタスクの maxToolCalls 合計 (アクティブ依頼単位)
+    private int  _committedBudget;   // この依頼で dispatch したタスクの maxToolCalls 合計 (新しい依頼でリセット)
     private bool _planHeavy;         // 現 plan の宣言が heavy か
     private bool _heavyConfirmed;    // ユーザ確認が取れたか
     private bool _lastTurnAskedUser; // 前ターンが ask_user で終わったか (= 解除条件)
 
     private const int MaxRounds   = 32;  // Strategist ターンの安全上限
     private const int MaxDispatch = 3;   // 同一 task id の再委譲上限 (D9)
-    private const int HeavyToolCallThreshold = 72;  // アクティブ依頼の累積コミット予算がこれ以上で heavy (D11/D12)。従来 24 の 3 倍
+    private const int HeavyToolCallThreshold = 150; // 1 依頼の累積コミット予算がこれ以上で heavy (D11/D12)。横断 (many=64) 2 本までは確認なし
 
     private sealed record PlanItem(string Id, string Goal, string Hint, Limits Limits);
 
@@ -51,6 +55,9 @@ public sealed class Strategist
         _messages.Add(new("system", systemPrompt));
     }
 
+    /// <summary>system プロンプトを差し替える (スレの切り替えで背景 = スレの状況が変わったとき)。会話は維持する。</summary>
+    public void UpdateSystemPrompt(string systemPrompt) => _messages[0] = new("system", systemPrompt);
+
     public async Task RunTurnAsync(string userText, CancellationToken ct)
     {
         _host.Begin();
@@ -59,16 +66,34 @@ public sealed class Strategist
         // とみなしゲートを開く。そうでなければ (= 新しい依頼) 確認状態をリセットして再度ゲートを要求する。
         // ※ 承認状態はこのターン境界だけで管理する。create_plan では触らない (= 承認後に Strategist が
         //   plan を再宣言しても承認が落ちず、確認ループに陥らないように)。
-        _heavyConfirmed    = _lastTurnAskedUser;
+        _heavyConfirmed = _lastTurnAskedUser;
+        if (!_lastTurnAskedUser)
+        {
+            // 新しい依頼: 依頼単位の状態 (累積予算 / 再委譲回数 / plan の heavy 宣言) をリセットする。
+            // ここでリセットしないと、create_plan を使わない単純依頼 (dispatch_task 直行) が続いたとき
+            // 前の依頼の予算が積み上がり、2 件目の普通の依頼で heavy 判定に掛かってしまう。
+            _committedBudget = 0;
+            _dispatchCounts.Clear();
+            _planHeavy       = false;
+            _currentUserText = userText;
+        }
+        else
+        {
+            // ask_user への返答: 元の依頼を続ける (Worker には元の依頼と今回の返答の両方を渡す)
+            _currentUserText = _currentUserText.Length == 0 ? userText : _currentUserText + "\n(確認への返答) " + userText;
+        }
         _lastTurnAskedUser = false;
 
         _messages.Add(new("user", userText));
-        var tools = StrategistToolDefs();
+        var turnStart   = _messages.Count - 1;
+        var tools       = StrategistToolDefs();
+        var inputBudget = ContextBudget.InputBudget(_settings, ContextBudget.EstimateToolDefs(tools));
 
         try
         {
             for (var round = 0; round < MaxRounds; round++)
             {
+                Compact(inputBudget, turnStart);
                 var checkpoint = _host.WorkCheckpoint();
                 var result = await _llm.ChatStreamAsync(_settings, _messages, _host.StreamWork, tools, ct).ConfigureAwait(true);
 
@@ -84,13 +109,13 @@ public sealed class Strategist
                 {
                     _host.RollbackWork(checkpoint);
                     _host.StreamBody(result.Content ?? "");
-                    _messages.Add(new("assistant", result.Content ?? ""));
+                    _messages.Add(new("assistant", ContextBudget.StripThink(result.Content)));
                     _host.End();
                     return;
                 }
 
                 // tool_calls ラウンド: assistant メッセージを履歴へ。
-                _messages.Add(new("assistant", result.Content ?? "") { ToolCalls = result.ToolCalls });
+                _messages.Add(new("assistant", ContextBudget.StripThink(result.Content)) { ToolCalls = result.ToolCalls });
 
                 // --- 1) 各 tool_call をプリプロセス: 即時系は処理、dispatch_task は準備 (gate/予算/区画) のみ ---
                 // (= 並列実行時も gate / 予算 / 区画作成は逐次に確定させ、Worker 実行だけ同時 in-flight にする)
@@ -186,16 +211,49 @@ public sealed class Strategist
         }
         catch (OperationCanceledException)
         {
+            RepairUnansweredToolCalls("中断されたため未完了");
             _host.Notice("中断しました。");
             _host.End();
         }
         catch (System.Exception ex)
         {
+            RepairUnansweredToolCalls("エラーのため未完了");
             // 致命的例外 (例: ChatStreamAsync が throw する / 想定外) は赤エラーで可視化してターンを閉じる (D15)。
             // ここで End されないと「作業中」のまま固まるため、必ず Error を呼ぶ。
             System.Diagnostics.Debug.WriteLine($"[NewAgent] Strategist 例外: {ex}");
             _host.Error($"エージェント実行中にエラーが発生しました: {ex.Message}");
         }
+    }
+
+    // ---- 文脈 ----
+
+    /// <summary>入力枠を超えそうなら、前のターンの tool 結果 (finding) を先頭だけに縮め、それでも超えるなら前のターンの
+    /// 長い assistant 本文も縮める。system と今のターン (<paramref name="turnStart"/> 以降) は触らない。</summary>
+    private void Compact(int budget, int turnStart)
+    {
+        ContextBudget.CompactToolResults(_messages, budget, turnStart, (_, content) =>
+            "以前の結果 (先頭のみ): " + ContextBudget.TruncateToTokens(content, 200).Text + "…");
+        var total = ContextBudget.EstimateTokens(_messages);
+        for (var i = 1; i < turnStart && total > budget; i++)
+        {
+            var m = _messages[i];
+            if (m.Role != "assistant" || ContextBudget.EstimateTokens(m.Content) <= 400) continue;
+            var shortened = ContextBudget.TruncateToTokens(m.Content, 300).Text + "…(以前の回答のため省略)";
+            total -= ContextBudget.EstimateTokens(m.Content) - ContextBudget.EstimateTokens(shortened);
+            _messages[i] = m with { Content = shortened };
+        }
+    }
+
+    /// <summary>最後の assistant の tool_call のうち結果が無いものに結果を補う (中断 / 例外で途中終了したとき)。
+    /// OpenAI 互換 API は「tool_call に対応する tool 結果が無い履歴」を拒否するため、次のターンが送れなくなるのを防ぐ。</summary>
+    private void RepairUnansweredToolCalls(string reason)
+    {
+        var last = _messages.FindLastIndex(m => m.Role == "assistant");
+        if (last < 0 || _messages[last].ToolCalls is not { Count: > 0 } calls) return;
+        var answered = _messages.Skip(last + 1).Where(m => m.Role == "tool").Select(m => m.ToolCallId).ToHashSet();
+        foreach (var c in calls)
+            if (!answered.Contains(c.Id))
+                _messages.Add(new("tool", ErrorJson(reason)) { ToolCallId = c.Id });
     }
 
     // ---- plan ----
@@ -232,18 +290,19 @@ public sealed class Strategist
         _planHeavy = planBudget >= HeavyToolCallThreshold || anyAllBoards || anyFullThread;
 
         _host.PlanUpdated(BuildPlanView());
+        var budgets = string.Join(", ", _plan.Select(p => $"{p.Id}={p.Limits.MaxToolCalls}"));
 
         if (_planHeavy && !_heavyConfirmed)
         {
             return JsonOut(new
             {
                 severity     = "heavy",
-                reason       = $"宣言予算 {planBudget} / all_boards={anyAllBoards} / full_thread={anyFullThread}",
+                reason       = $"予算合計 {planBudget} ({budgets}) / all_boards={anyAllBoards} / full_thread={anyFullThread}",
                 instruction  = "重い作業です。dispatch_task の前に、必ず ask_user で A=実施 / B=軽量版 / C=別案 を提示してユーザの確認を取ってください。",
                 tasks        = _plan.Count,
             });
         }
-        return JsonOut(new { severity = "light", instruction = "proceed: dispatch_task を進めてよい。", tasks = _plan.Count });
+        return JsonOut(new { severity = "light", instruction = "proceed: dispatch_task を進めてよい。", tasks = _plan.Count, budgets });
     }
 
     // ---- dispatch ----
@@ -287,7 +346,7 @@ public sealed class Strategist
         _dispatchCounts[taskId] = count + 1;
         _committedBudget += limits.MaxToolCalls;
         var section = _host.BeginWorkSection(string.IsNullOrEmpty(goal) ? taskId : goal);
-        return (new TaskSpec(taskId, goal, hint, limits), section, null);
+        return (new TaskSpec(taskId, goal, hint, limits, _currentUserText), section, null);
     }
 
     private static string DispatchResultJson(TaskResult r) => JsonOut(new
@@ -320,17 +379,19 @@ public sealed class Strategist
         return list;
     }
 
+    /// <summary>タスクの予算。スキャン幅 (と全読みか) からプログラムが決める (<see cref="Limits.For"/>)。
+    /// max_tool_calls が明示されたときだけそれで上書きする (モデルに予算の計算はさせない)。</summary>
     private static Limits ParseLimits(JsonElement el)
     {
         if (el.ValueKind != JsonValueKind.Object) return Limits.Default;
-        var max = Limits.Default.MaxToolCalls;
-        if (el.TryGetProperty("max_tool_calls", out var m) && m.ValueKind == JsonValueKind.Number && m.TryGetInt32(out var mi))
-            max = System.Math.Clamp(mi, 1, 256);
         var breadth = ScanBreadth.Single;
         if (el.TryGetProperty("scan_breadth", out var b) && b.ValueKind == JsonValueKind.String)
             breadth = ParseBreadth(b.GetString());
-        var full = el.TryGetProperty("reads_full_thread", out var f) && f.ValueKind == JsonValueKind.True;
-        return new Limits(max, breadth, full);
+        var full   = el.TryGetProperty("reads_full_thread", out var f) && f.ValueKind == JsonValueKind.True;
+        var limits = Limits.For(breadth, full);
+        if (el.TryGetProperty("max_tool_calls", out var m) && m.ValueKind == JsonValueKind.Number && m.TryGetInt32(out var mi))
+            limits = limits with { MaxToolCalls = System.Math.Clamp(mi, 1, 256) };
+        return limits;
     }
 
     private static ScanBreadth ParseBreadth(string? s) => (s ?? "").Trim().ToLowerInvariant() switch
@@ -384,11 +445,11 @@ public sealed class Strategist
                         properties = new
                         {
                             id    = new { type = "string", description = "タスク id (任意・短い識別子)。" },
-                            goal  = new { type = "string", description = "このタスクのゴール (自然文)。" },
-                            hint  = new { type = "string", description = "解くための文脈ヒント (前タスクの finding 抜粋など)。" },
-                            max_tool_calls    = new { type = "integer", description = "このタスクのツール予算 (既定 36, 上限 256)。" },
-                            scan_breadth      = new { type = "string", description = "single / few / many / all_boards。" },
-                            reads_full_thread = new { type = "boolean", description = "スレ全読みか。" },
+                            goal  = new { type = "string", description = "このタスクのゴール (自然文)。何を持ち帰れば完了か / アプリに表示するかまで書く。" },
+                            hint  = new { type = "string", description = "解くための文脈ヒント (前タスクの finding 抜粋・別名・対象板など)。" },
+                            scan_breadth      = new { type = "string", @enum = BreadthValues, description = BreadthDescription },
+                            reads_full_thread = new { type = "boolean", description = "スレを最初から最後まで全部読むタスクなら true (予算が増える)。" },
+                            max_tool_calls    = new { type = "integer", description = "通常は省略 (予算は scan_breadth から自動で決まる)。特別に変えたいときだけ指定 (1〜256)。" },
                         },
                         required = new[] { "goal" },
                     },
@@ -405,17 +466,18 @@ public sealed class Strategist
             },
             required = new[] { "tasks" },
         }),
-        Fn("dispatch_task", "1 タスクを Worker に委譲して実行し、finding (要約) を受け取る。plan のタスク id を指定するか、id 無しで goal を直接渡す (= 単純依頼の近道)。", new
+        Fn("dispatch_task", "1 タスクを Worker に委譲して実行し、finding (報告) を受け取る。plan のタスク id を指定するか、id 無しで goal を直接渡す (= 単純依頼の近道)。" +
+                            "Worker にはユーザの依頼の原文も渡る。", new
         {
             type = "object",
             properties = new
             {
                 id           = new { type = "string", description = "plan のタスク id (指定時はそのタスクを実行)。" },
                 goal         = new { type = "string", description = "id 未指定時のタスクゴール。" },
-                context_hint = new { type = "string", description = "Worker に渡す文脈ヒント。" },
-                max_tool_calls    = new { type = "integer", description = "ツール予算 (既定 36, 上限 256)。" },
-                scan_breadth      = new { type = "string", description = "single / few / many / all_boards。" },
-                reads_full_thread = new { type = "boolean", description = "スレ全読みか。" },
+                context_hint = new { type = "string", description = "Worker に渡す文脈ヒント (前タスクの finding 抜粋・別名・対象板・thread_url など)。" },
+                scan_breadth      = new { type = "string", @enum = BreadthValues, description = BreadthDescription },
+                reads_full_thread = new { type = "boolean", description = "スレを最初から最後まで全部読むタスクなら true (予算が増える)。" },
+                max_tool_calls    = new { type = "integer", description = "通常は省略 (予算は scan_breadth から自動で決まる)。特別に変えたいときだけ指定 (1〜256)。" },
             },
             required = System.Array.Empty<string>(),
         }),
@@ -432,6 +494,11 @@ public sealed class Strategist
             required = new[] { "id" },
         }),
     };
+
+    private static readonly string[] BreadthValues = { "single", "few", "many", "all_boards" };
+    private static readonly string BreadthDescription =
+        $"調べる範囲。single=1 スレ / 1 板 (予算 {Limits.BudgetFor(ScanBreadth.Single, false)} 回)、few=2〜4 板 ({Limits.BudgetFor(ScanBreadth.Few, false)})、" +
+        $"many=5 板以上 ({Limits.BudgetFor(ScanBreadth.Many, false)})、all_boards=全板 ({Limits.BudgetFor(ScanBreadth.AllBoards, false)}・要確認)。既定 single。";
 
     private static object Fn(string name, string description, object parameters) => new
     {

@@ -63,16 +63,14 @@ public sealed class WebSearchToolset : IAgentToolset
             function = new
             {
                 name        = "web_search",
-                description = "DuckDuckGo で WEB 検索し、ヒットしたページのタイトル / URL / 抜粋の一覧を返す。" +
-                              "5ch の外の最新情報・事実確認・用語や固有名詞の裏取りなどに使う。" +
-                              "結果は抜粋までなので、本文が必要なら返ってきた url を web_fetch に渡して読むこと。",
+                description = "WEB 検索して、ページのタイトル・URL・抜粋を返す (掲示板の外の情報・事実確認・用語の正体の特定に使う)。本文は web_fetch で読む。",
                 parameters  = new
                 {
                     type       = "object",
                     properties = new
                     {
-                        query = new { type = "string",  description = "検索クエリ (自然文 / キーワード)。" },
-                        count = new { type = "integer", description = $"返す最大件数 (既定 {DefaultSearchCount}, 上限 {MaxSearchCount})。" },
+                        query = new { type = "string",  description = "検索語" },
+                        count = new { type = "integer", description = $"最大件数 (既定 {DefaultSearchCount}, 上限 {MaxSearchCount})" },
                     },
                     required = new[] { "query" },
                 },
@@ -84,15 +82,14 @@ public sealed class WebSearchToolset : IAgentToolset
             function = new
             {
                 name        = "web_fetch",
-                description = "指定 URL のページを取得して本文テキストを抽出して返す (HTML はタグ除去・整形済み)。" +
-                              "web_search で見つけた url の中身を読むときに使う。長いページは max_chars で切り詰める。",
+                description = "URL のページの本文テキストを返す。",
                 parameters  = new
                 {
                     type       = "object",
                     properties = new
                     {
-                        url       = new { type = "string",  description = "取得する http / https の URL。" },
-                        max_chars = new { type = "integer", description = $"返す本文の最大文字数 (既定 {DefaultFetchChars}, {MinFetchChars}〜{MaxFetchChars})。" },
+                        url       = new { type = "string",  description = "http / https の URL" },
+                        max_chars = new { type = "integer", description = $"最大文字数 (既定 {DefaultFetchChars}, {MinFetchChars}〜{MaxFetchChars})" },
                     },
                     required = new[] { "url" },
                 },

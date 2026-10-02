@@ -321,6 +321,10 @@ public sealed class LlmClient : IDisposable
         {
             return new LlmChatResult(false, "", Array.Empty<LlmToolCall>(), "タイムアウトしました");
         }
+        catch (OperationCanceledException)
+        {
+            throw;   // 呼び出し側の中断 (停止ボタン等) は失敗結果にせず、そのまま伝える
+        }
         catch (Exception ex)
         {
             return new LlmChatResult(false, "", Array.Empty<LlmToolCall>(), $"通信エラー: {ex.Message}");
@@ -608,7 +612,7 @@ public sealed class LlmClient : IDisposable
     /// <summary>1 リクエストで出力させる token 数の上限。Context Size の 1/4 を狙い、
     /// [2048, 16384] にクランプする。これで think + 本文がだいたい収まる枠を確保する。
     /// 設定が 0 / 未設定なら 4096 をデフォルトに。</summary>
-    private static int ComputeMaxTokens(int contextSize)
+    internal static int ComputeMaxTokens(int contextSize)
     {
         if (contextSize <= 0) return 4096;
         var v = contextSize / 4;

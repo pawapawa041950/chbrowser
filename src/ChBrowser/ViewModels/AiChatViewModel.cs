@@ -101,6 +101,9 @@ public sealed partial class AiChatViewModel : ObservableObject
         ThreadTitle      = string.IsNullOrEmpty(newThreadTitle) ? "(スレッド指定なし)" : newThreadTitle;
         ContextSubtitle  = ComputeContextSubtitle(newToolset);
 
+        // 背景 (スレタイ・スレの状況・自分の書き込み) を新しいスレのもので作り直す
+        _engine.UpdateContextPreamble(BuildAgentContextPreamble());
+
         StatusMessage = newToolset.HasAttached
             ? $"コンテキスト切替: 「{ThreadTitle}」にアタッチしました (これまでの会話は保持されています)"
             : "コンテキスト切替: スレッドに非アタッチになりました (横断ツールは引き続き使えます)";
@@ -112,7 +115,8 @@ public sealed partial class AiChatViewModel : ObservableObject
             ? "このスレッドを文脈に LLM と会話します (他スレも横断アクセス可)"
             : "スレッドに非アタッチ — 板やスレを横断して質問できます";
 
-    /// <summary>新エンジン (Strategist / Worker) の system プロンプトに前置きする文脈 (= スレ attached 状況)。</summary>
+    /// <summary>新エンジン (Strategist / Worker) の system プロンプトの末尾に付ける背景 (= 対応掲示板・対象スレの状況・自分の書き込み)。
+    /// スレの切り替え (<see cref="SwitchContext"/>) で作り直す。</summary>
     private string BuildAgentContextPreamble()
     {
         var attached = _threadToolset is { HasAttached: true };
@@ -122,6 +126,17 @@ public sealed partial class AiChatViewModel : ObservableObject
             ? $"現在「{ThreadTitle}」というスレッドを文脈にしています。"
             : "特定スレッドには非アタッチです。");
         sb.Append("板やスレッドはツールで横断的に参照できます。");
+        if (attached)
+        {
+            var t = _threadToolset!;
+            sb.Append("\n\n# 対象スレの状況 (この会話にスレを付けた時点。スレ読み取りツールで thread_url を省略するとこのスレが対象)\n");
+            sb.Append("- スレタイ: ").Append(t.ThreadTitle).Append('\n');
+            sb.Append("- 板: ").Append(t.BoardName).Append('\n');
+            sb.Append(t.BuildInitialStateSnapshot());
+            var own = t.BuildOwnPostsWithRepliesSummary(repliesPerOwnLimit: 5, maxChars: 2000);
+            if (own.Length > 0)
+                sb.Append("\n# 自分の書き込みと、それへの返信\n").Append(own);
+        }
         if (!string.IsNullOrWhiteSpace(_aiBoardGuide))
         {
             sb.Append("\n\n# 板/スレの使い分け (ユーザ提供メモ)\n");
@@ -140,8 +155,38 @@ public sealed partial class AiChatViewModel : ObservableObject
 
         InputText = "";
         UserMessageAdded?.Invoke(userText);   // ユーザ発言バブル
-        await _engine.RunTurnAsync(userText, CancellationToken.None).ConfigureAwait(true);
+        using var cts = new CancellationTokenSource();
+        _turnCts  = cts;
+        IsRunning = true;
+        try
+        {
+            await _engine.RunTurnAsync(userText, cts.Token).ConfigureAwait(true);
+        }
+        finally
+        {
+            _turnCts  = null;
+            IsRunning = false;
+            if (cts.IsCancellationRequested && StatusMessage == StoppingMessage) StatusMessage = "";
+        }
     }
+
+    /// <summary>実行中のターンの中断 (= 「停止」ボタン)。</summary>
+    private CancellationTokenSource? _turnCts;
+
+    /// <summary>ターンを実行中か (「停止」ボタンの表示 / 有効)。</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StopCommand))]
+    private bool _isRunning;
+
+    /// <summary>「停止」ボタン: 実行中の LLM 呼び出し / Worker を中断する (会話は次の送信で続けられる)。</summary>
+    [RelayCommand(CanExecute = nameof(IsRunning))]
+    private void Stop()
+    {
+        _turnCts?.Cancel();
+        StatusMessage = StoppingMessage;
+    }
+
+    private const string StoppingMessage = "中断しています…";
 
     /// <summary>HTML 出力に直接埋め込む文字列のエスケープ。host (AgentHost partial) が使用。</summary>
     private static string EscapeHtml(string s)

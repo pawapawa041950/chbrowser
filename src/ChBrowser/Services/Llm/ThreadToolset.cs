@@ -60,9 +60,11 @@ public sealed class ThreadToolset : IAgentToolset
     /// <summary>list_threads で keyword 省略時 (= scan モード) の既定件数。
     /// 板の上位 100 スレぐらいを取って、AI がタイトルから関連を判定する用途。</summary>
     private const int ThreadsScanDefaultLimit = 100;
-    /// <summary>list_boards で keyword 省略時 (= scan モード) の既定件数。
-    /// 5ch の全板 (~1100) を 1 ショットで返して、AI がカテゴリ単位で関連板を pick できるようにする。</summary>
+    /// <summary>list_boards で categories 指定時 (keyword なし) の既定件数 (= 指定カテゴリの板は基本的に全部返す)。
+    /// 絞り込み無しの呼び出しは板ではなくカテゴリの一覧を返す (全板 ~1100 件は LLM の文脈を溢れさせるため)。</summary>
     private const int BoardsScanDefaultLimit = 1500;
+    /// <summary>list_boards のカテゴリ一覧で、カテゴリごとに見せる板名の例の数。</summary>
+    private const int CategoryExampleCount = 6;
     /// <summary>search_boards の 1 キーワード・1 掲示板あたりの上限件数。</summary>
     private const int MaxBoardSearchLimit = 100;
 
@@ -190,386 +192,186 @@ public sealed class ThreadToolset : IAgentToolset
         return map;
     }
 
-    /// <summary>OpenAI 互換 <c>tools</c> パラメータに渡す配列を返す。</summary>
+    /// <summary>OpenAI 互換 <c>tools</c> パラメータに渡す配列を返す。
+    /// 説明文は毎回の LLM 呼び出しで全部送られる (内蔵エージェントの Worker / MCP クライアント) ので、行動を変える要点だけを短く書く。</summary>
     public IReadOnlyList<object> GetToolDefinitions()
     {
         return new object[]
         {
             // ---- スレ読み取り系 (thread_url 省略時は attached を使う) ----
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_thread_meta",
-                    description = "スレッドのメタ情報 (タイトル / 掲示板 / 板 / 総レス数 / 最初と最後のレス番号 / 番号の振り方) と最初のレス (オリジナルポスト) の全文を返す。" +
-                                  "thread_url 省略時は attached スレ。会話開始時にまず呼ぶのが推奨。" +
-                                  "レス番号は掲示板により 1 始まりの連番 (5ch 等) とは限らず、4chan / ふたばは飛び飛びの大きな番号になるので、" +
-                                  "get_posts などで範囲を指定する前にここで first_post_number / last_post_number を確認すること。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_thread_state",
-                    description = "attached スレッドの状態スナップショット (= 既読位置 / 新着の範囲 / 自分のレス番号 / 自分宛て返信フラグ) を返す。" +
-                                  "attached が無い (= スタンドアロンチャット) 場合はエラー。状態は会話開始時点のものなので通常はシステムプロンプトで既に見られている。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new { },
-                        required   = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_posts",
-                    description = $"レス番号の範囲 (両端含む) にあるレスを取得する。範囲は実際のレス番号で指定する " +
-                                  "(5ch 等は 1 始まりの連番、4chan / ふたばは飛び飛びの大きな番号。get_thread_meta の first_post_number / last_post_number を参照)。" +
-                                  $"1 度に返すのは最大 {MaxPostsPerCall} 件で、範囲内にそれより多くあれば先頭 {MaxPostsPerCall} 件と続きの開始番号 next_start を返す。" +
-                                  "thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            start      = new { type = "integer", description = "開始レス番号 (含む)" },
-                            end        = new { type = "integer", description = "終了レス番号 (含む)" },
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = new[] { "start", "end" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "search_posts",
-                    description = "本文中にキーワードを含むレスを検索し、ヒットしたレス番号と短い抜粋を返す。大小文字無視 + 全角/半角ゆれ吸収 (あいまい一致)。" +
-                                  "複数キーワードは keywords 配列で渡す (既定は OR = いずれか含めばヒット、match_all=true で AND)。" +
-                                  "thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            keyword    = new { type = "string",  description = "検索キーワード (単一)。複数なら keywords を使う。" },
-                            keywords   = new { type = "array", description = "複数キーワード。既定 OR (いずれか含めばヒット)。", items = new { type = "string" } },
-                            match_all  = new { type = "boolean", description = "true で AND (全キーワードを含むレスのみ)。既定 false (OR)。" },
-                            limit      = new { type = "integer", description = $"返す最大ヒット数 (既定 {DefaultSearchLimit}, 上限 {MaxSearchLimit})" },
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_post",
-                    description = "単一レスを番号指定で取得する。thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            number     = new { type = "integer", description = "取得するレス番号" },
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = new[] { "number" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_posts_by_id",
-                    description = "指定 ID (5ch の ID:XXXXXXXX、4chan / ふたばの ID 等) で書き込まれた全レスを返す (= 「同じ人物の発言一覧」)。" +
-                                  "reddit など ID の無い掲示板では投稿者名を渡すと名前の一致で返す。thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            id         = new { type = "string", description = "ID 文字列 (例: \"abc1234\"。大文字小文字区別)。ID の無い掲示板では投稿者名" },
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = new[] { "id" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "get_my_posts",
-                    description = "attached スレッドで「自分の書き込み」とマークされているレスを取得する。" +
-                                  "include_replies=true (既定) では各自分レスへの直接返信もぶら下げてツリーモード。" +
-                                  "他スレの自分マークは持たないので thread_url 引数は無い。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            include_replies        = new { type = "boolean", description = "true: 各自分レスにその被アンカー (返信) をぶら下げてツリー化 (既定 true)。false: 自分レスのみ。" },
-                            replies_per_post_limit = new { type = "integer", description = "1 自分レスあたり含める返信の最大件数 (既定 20, 上限 50)。" },
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "find_replies_to",
-                    description = "指定レス番号 N への返信を集めて返す。返信の判定はスレ表示と同じで、本文のアンカー (書式は掲示板ごと: " +
-                                  "5ch 等の >>N / >>N-M / >>N,M、ふたばの >No.N や添付ファイル名の引用など)、reddit の親コメント、" +
-                                  "「引用文を返信として扱う」が ON の掲示板 (既定はふたば) では >引用文 の引用元。thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            number     = new { type = "integer", description = "対象レス番号" },
-                            limit      = new { type = "integer", description = $"返す最大件数 (既定 {DefaultRepliesLimit}, 上限 {MaxRepliesLimit})" },
-                            thread_url = ThreadUrlParam(),
-                        },
-                        required = new[] { "number" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "find_popular_posts",
-                    description = "被アンカー数 (= 他レスから返信された数。判定は find_replies_to と同じ) の多いレスを上位から返す。" +
-                                  "range_start / range_end で範囲を絞ると「新着の中で人気」「特定区間で人気」を取れる。thread_url 省略時は attached スレ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            top_k       = new { type = "integer", description = $"上位何件返すか (既定 {DefaultPopularTopK}, 上限 {MaxPopularTopK})" },
-                            range_start = new { type = "integer", description = "対象範囲の開始レス番号 (省略時 スレの最初のレス)" },
-                            range_end   = new { type = "integer", description = "対象範囲の終了レス番号 (省略時 スレの最後のレス)" },
-                            min_count   = new { type = "integer", description = "被アンカー数の最小しきい値 (既定 1)。" },
-                            thread_url  = ThreadUrlParam(),
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
+            Fn("get_thread_meta",
+               "スレのタイトル・掲示板・板・総レス数・最初と最後のレス番号と、最初のレスの全文を返す。" +
+               "レス番号は連番とは限らない (4chan / ふたばは飛び飛びの大きな番号) ので、範囲指定の前にここで確認する。",
+               new { thread_url = ThreadUrlParam() }),
+            Fn("get_thread_state",
+               "今のスレの既読位置・新着の範囲・自分のレス番号・自分宛て返信の有無を返す (スレに付いていないチャットではエラー)。",
+               new { }),
+            Fn("get_posts",
+               $"レス番号の範囲 (両端含む) のレスを返す。実際のレス番号で指定する。1 回最大 {MaxPostsPerCall} 件で、超える分は next_start から続きを取る。",
+               new
+               {
+                   start      = new { type = "integer", description = "開始レス番号" },
+                   end        = new { type = "integer", description = "終了レス番号" },
+                   thread_url = ThreadUrlParam(),
+               },
+               "start", "end"),
+            Fn("search_posts",
+               "本文にキーワードを含むレスの番号と抜粋を返す (大小・全角半角を区別しない)。",
+               new
+               {
+                   keyword    = KeywordParam("検索語"),
+                   keywords   = KeywordsParam(),
+                   match_all  = MatchAllParam(),
+                   limit      = LimitParam(DefaultSearchLimit, MaxSearchLimit),
+                   thread_url = ThreadUrlParam(),
+               }),
+            Fn("get_post",
+               "レスを 1 件、番号で返す。",
+               new
+               {
+                   number     = new { type = "integer", description = "レス番号" },
+                   thread_url = ThreadUrlParam(),
+               },
+               "number"),
+            Fn("get_posts_by_id",
+               "同じ ID の全レスを返す (同じ人物の発言)。ID の無い掲示板 (reddit 等) では投稿者名で引く。",
+               new
+               {
+                   id         = new { type = "string", description = "ID (大文字小文字を区別) または投稿者名" },
+                   thread_url = ThreadUrlParam(),
+               },
+               "id"),
+            Fn("get_my_posts",
+               "今のスレで「自分の書き込み」に印を付けたレスと、それぞれへの返信を返す。",
+               new
+               {
+                   include_replies        = new { type = "boolean", description = "返信も付けるか (既定 true)" },
+                   replies_per_post_limit = new { type = "integer", description = "1 レスあたりの返信の最大数 (既定 20, 上限 50)" },
+               }),
+            Fn("find_replies_to",
+               "レス N への返信を返す (判定はスレ表示と同じ: 掲示板ごとのアンカー、reddit の親コメント、設定が ON なら >引用文 の引用元)。",
+               new
+               {
+                   number     = new { type = "integer", description = "対象のレス番号" },
+                   limit      = LimitParam(DefaultRepliesLimit, MaxRepliesLimit),
+                   thread_url = ThreadUrlParam(),
+               },
+               "number"),
+            Fn("find_popular_posts",
+               "返信の多いレスを多い順に返す。範囲を絞れば「新着の中の人気レス」も取れる。",
+               new
+               {
+                   top_k       = LimitParam(DefaultPopularTopK, MaxPopularTopK),
+                   range_start = new { type = "integer", description = "範囲の開始レス番号 (省略時 最初)" },
+                   range_end   = new { type = "integer", description = "範囲の終了レス番号 (省略時 最後)" },
+                   min_count   = new { type = "integer", description = "最小の返信数 (既定 1)" },
+                   thread_url  = ThreadUrlParam(),
+               }),
 
             // ---- ワークスペース横断系 ----
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "list_boards",
-                    description = "アプリにロード済みの板一覧を返す。板一覧を持つ掲示板 (5ch / まちBBS / エッヂ / 4chan / ふたば 等) の板が対象で、" +
-                                  "各エントリに site (掲示板名) / board_url / category が含まれる。site で掲示板を絞れる。" +
-                                  "板一覧を持たない掲示板 (したらば / reddit) の板はここに出ないので search_boards を使う。\n" +
-                                  "**呼び分けを意識すること**:\n" +
-                                  "(a) **単純な板名マッチで十分** → keyword 指定 (例: 「ニュース板を開いて」「将棋板を見せて」)。\n" +
-                                  "(b) **テーマ / ジャンル絞り込みで複数板に跨りそう** → **keyword 省略**で全板取得 (scan モード)。" +
-                                  "板はカテゴリ別に整理されており、5ch では漫画関連だけで「マンガ」「コミック」「漫画作品」「漫画サロン」など複数、" +
-                                  "アニメ関連も「アニメ」「アニメ実況」「声優」「アニソン」など複数の板が存在する。" +
-                                  "「ダン飯関連スレを探す」のようなテーマ検索では、漫画系板群 + アニメ系板群を **複数まとめて pick して** から、" +
-                                  "各板に対して list_threads (scan モード) を回すべき。" +
-                                  "scan モードでは site + category 別にグルーピングされた構造で返されるので、" +
-                                  "カテゴリ単位で関連を pick しやすい (= カテゴリ「漫画」「アニメ」「アニメ実況」全体をまとめて pick できる)。" +
-                                  $"keyword 省略時の既定取得数は {BoardsScanDefaultLimit} 件、上限 {MaxListLimit} 件。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            site    = new { type = "string",  description = $"掲示板で絞る (省略時は全掲示板)。指定できる値: {SiteList()}" },
-                            keyword = new { type = "string",  description = "板名・カテゴリ名の部分一致フィルタ (単一・大小文字無視 + 全角/半角ゆれ吸収)。テーマ検索で複数板候補を見たい場合は省略すること。" },
-                            keywords = new { type = "array", description = "複数キーワードで板名/カテゴリを絞る (既定 OR = いずれか一致)。", items = new { type = "string" } },
-                            match_all = new { type = "boolean", description = "true で AND。既定 false (OR)。" },
-                            limit   = new { type = "integer", description = $"返す最大件数 (keyword/keywords 指定時の既定 {DefaultListLimit}, 省略時の既定 {BoardsScanDefaultLimit}, 上限 {MaxListLimit})" },
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "search_boards",
-                    description = "板一覧を持たない掲示板 (したらば / reddit) の板をキーワードで検索する (各掲示板の板検索を使う。ネットワークアクセスあり)。" +
-                                  "したらばは日本語の板名・説明、reddit は subreddit 名・説明 (英語が中心) で探す。" +
-                                  "複数キーワードは keywords 配列で渡すと語ごとに検索して結果をまとめる。返値の board_url は list_threads / open_board_in_app にそのまま渡せる。" +
-                                  "5ch など板一覧を持つ掲示板の板は list_boards で探すこと。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            keyword  = new { type = "string", description = "検索キーワード (単一)" },
-                            keywords = new { type = "array",  description = "複数キーワード (語ごとに検索して結果を合わせる)", items = new { type = "string" } },
-                            site     = new { type = "string", description = $"検索する掲示板 (省略時は板検索できる全掲示板)。指定できる値: {string.Join(", ", BbsRegistry.All.Where(p => p.SupportsBoardSearch).Select(p => $"{p.Id} ({p.DisplayName})"))}" },
-                            limit    = new { type = "integer", description = $"1 掲示板・1 キーワードあたりの最大件数 (既定 {DefaultListLimit}, 上限 {MaxBoardSearchLimit})" },
-                        },
-                        required = Array.Empty<string>(),
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "list_threads",
-                    description = "指定した板のスレッド一覧を返す (アプリのスレ一覧と同じもの。ローカルに保存済みならそれを使う)。" +
-                                  "各スレに post_count (レス数) と momentum (勢い = 1 日あたりレス数の概算) が付く。" +
-                                  "「勢いが高い / 伸びているスレを探して」のような依頼には sort=\"momentum\" を指定して上位を取る。" +
-                                  "**2 つの使い方を意識して呼び分けること**:\n" +
-                                  "(a) **単純な単語マッチで十分な場合** → keyword を指定。例: スレタイにそのまま「初音ミク」と入ってる確率が高いケース。\n" +
-                                  "(b) **曖昧 / 略称 / ジャンル判定が必要な場合** → **keyword を省略**して多めに取得し、" +
-                                  "AI 自身がタイトル一覧を読んでテーマとの関連を判断する。" +
-                                  $"例: 「ソニー製品関連スレ」(= 単に \"ソニー\" でマッチしない、PS5 / α7 / WH-1000XM5 等の製品名が並ぶ)、" +
-                                  "「ダンジョン飯関連スレ」(= スレタイには \"ダン飯\" と略されていることが多い)、" +
-                                  "「異世界転生もの」(= ジャンル判定が必要、特定キーワードでは取りこぼす)。" +
-                                  $"keyword 省略時の既定取得数は {ThreadsScanDefaultLimit} 件、上限 {MaxListLimit} 件。" +
-                                  "返値の各エントリには thread_url が含まれ、関連と判定したものをそのまま open_thread_list_in_app の threads 配列に詰めれば良い。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            board_url = new { type = "string",  description = "対象板の URL (list_boards / search_boards の board_url をそのまま渡せる)" },
-                            keyword   = new { type = "string",  description = "スレタイの部分一致フィルタ (単一)。複数語で探すなら keywords を使う。大小文字無視 + 全角/半角ゆれ吸収。曖昧 / 略称 / ジャンル判定が必要で取りこぼしを避けたいなら省略 (= AI が手動で取捨選択する scan モード)。" },
-                            keywords  = new { type = "array", description = "**複数キーワードでのスレタイ検索 (既定 OR = いずれか含めばヒット)。** 例: 作品のキャラ名を並べて関連スレを拾う [\"ダン飯\",\"マルシル\",\"ライオス\",\"センシ\"]。", items = new { type = "string" } },
-                            match_all = new { type = "boolean", description = "true で AND (全キーワードをスレタイに含むもののみ)。既定 false (OR)。" },
-                            limit     = new { type = "integer", description = $"返す最大件数 (keyword/keywords 指定時の既定 {DefaultListLimit}, 省略時の既定 {ThreadsScanDefaultLimit}, 上限 {MaxListLimit})" },
-                            sort      = new { type = "string",  description = "並び順。\"default\" (板の既定の並び) / \"momentum\" (勢い順 = 1 日あたりレス数の多い順) / \"post_count\" (レス数の多い順)。勢いの高いスレを上位に取りたいときは \"momentum\"。" },
-                        },
-                        required = new[] { "board_url" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "open_thread_in_app",
-                    description = "指定スレをユーザのアプリのスレ表示ペインで開く (= 実際に画面にスレタブを増やすアクション)。" +
-                                  "ユーザが見ることを意図した依頼 (例: 「開いて」「見せて」「探して開いて」「次スレ開いて」など)" +
-                                  "に対して、対象スレが特定できたら必ず呼ぶこと。" +
-                                  "「見つけました」とテキストで報告するだけでは依頼を満たさない — 開く動作までやって完了。" +
-                                  "確信が無い場合は get_posts で内容確認してから、確信が取れた時点で呼ぶ。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            thread_url = new { type = "string", description = "対象スレッドの URL。**必ず list_threads / get_thread_meta 等のツール結果から取得した実在の URL を使う**こと。URL の形式は掲示板ごとに違う (5ch: https://<host>/test/read.cgi/<板>/<key>/ など) ので、ツール結果の thread_url をそのまま渡す。\"thread_id_1\" のような placeholder や記憶からの推測 URL は絶対禁止 (= 不正 URL は parse エラーになる)。" },
-                        },
-                        required = new[] { "thread_url" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "open_board_in_app",
-                    description = "指定した板をユーザのアプリのスレ一覧ペインで開く (= 実際に画面にスレ一覧タブを増やすアクション)。" +
-                                  "ユーザが「この板開いて」「○○板見せて」のように板を見ることを意図した依頼を出した場合に、" +
-                                  "対象板が特定できたら必ず呼ぶ。報告だけで済ませない。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            board_url = new { type = "string", description = "対象板の URL (list_boards / search_boards / list_threads の board_url をそのまま渡す)" },
-                        },
-                        required = new[] { "board_url" },
-                    },
-                },
-            },
-            new
-            {
-                type     = "function",
-                function = new
-                {
-                    name        = "open_thread_list_in_app",
-                    description = "**複数のスレ候補をまとめて 1 つのタブに並べてユーザに見せる**ためのアクション (= スレ一覧ペインに新規タブを作る)。" +
-                                  "板をまたぐ検索 (例: 「○○の関連スレを見つけて」「△△に関するスレ集めて」) で複数ヒットしたときに使う。" +
-                                  "1 つのスレを開くだけなら open_thread_in_app の方が良い。" +
-                                  "**threads 配列の各要素は、必ず先に list_threads を呼んで得た実在のスレのみを入れる**。" +
-                                  "「thread_id_1」「key_N」のような placeholder 風 URL や、記憶 / 推測で生成した URL は絶対に入れない (parse エラーになる)。" +
-                                  "thread_url / title / post_count は list_threads 結果のフィールドをそのまま流用する。",
-                    parameters  = new
-                    {
-                        type       = "object",
-                        properties = new
-                        {
-                            title   = new { type = "string", description = "タブのヘッダラベル (例: 「鬼滅の刃 関連スレ」「AI 検索: ○○」)。検索の意図がわかる短いタイトル。" },
-                            threads = new
-                            {
-                                type        = "array",
-                                description = "並べるスレッドの配列。各要素は {thread_url, title?, post_count?}。",
-                                items       = new
-                                {
-                                    type       = "object",
-                                    properties = new
-                                    {
-                                        thread_url = new { type = "string",  description = "スレ URL (必須)" },
-                                        title      = new { type = "string",  description = "スレタイ (list_threads の title をそのまま渡せる)" },
-                                        post_count = new { type = "integer", description = "レス数 (list_threads の post_count をそのまま渡せる)" },
-                                    },
-                                    required = new[] { "thread_url" },
-                                },
-                            },
-                        },
-                        required = new[] { "title", "threads" },
-                    },
-                },
-            },
+            Fn("list_boards",
+               "板一覧を持つ掲示板 (5ch / まちBBS / エッヂ / 4chan / ふたば 等) の板を探す。したらば / reddit は search_boards。" +
+               "板名が分かるなら keyword。テーマで複数の板を探すなら、まず引数なしで呼んでカテゴリの一覧を見て、" +
+               "関係するカテゴリを categories にまとめて指定して板 (board_url) を取る。",
+               new
+               {
+                   keyword    = KeywordParam("板名・カテゴリ名の部分一致"),
+                   keywords   = KeywordsParam(),
+                   match_all  = MatchAllParam(),
+                   categories = new { type = "array", description = "このカテゴリの板を返す (一覧で見た名前・複数可)", items = new { type = "string" } },
+                   site       = new { type = "string", description = $"掲示板で絞る: {SiteIds(all: true)}" },
+                   limit      = LimitParam(DefaultListLimit, MaxListLimit),
+               }),
+            Fn("search_boards",
+               "したらば (日本語) / reddit (英語中心) の板をキーワードで検索する。keywords は語ごとに検索して合わせる。",
+               new
+               {
+                   keyword  = KeywordParam("検索語"),
+                   keywords = KeywordsParam(),
+                   site     = new { type = "string", description = $"検索する掲示板: {SiteIds(all: false)} (省略時 全部)" },
+                   limit    = LimitParam(DefaultListLimit, MaxBoardSearchLimit),
+               }),
+            Fn("list_threads",
+               "板のスレ一覧 (thread_url・レス数・勢い=1 日あたりレス数) を返す。スレタイにそのまま入りそうな語なら keyword、" +
+               $"略称・関連語・ジャンルで判断が要るなら keyword なしで多めに取り (既定 {ThreadsScanDefaultLimit} 件) タイトルを読んで選ぶ。",
+               new
+               {
+                   board_url = new { type = "string", description = "板の URL (list_boards / search_boards の結果)" },
+                   keyword   = KeywordParam("スレタイの部分一致"),
+                   keywords  = KeywordsParam(),
+                   match_all = MatchAllParam(),
+                   sort      = new { type = "string", @enum = new[] { "default", "momentum", "post_count" }, description = "並び順 (勢い順 / レス数順も可)" },
+                   limit     = LimitParam(DefaultListLimit, MaxListLimit),
+               },
+               "board_url"),
+            Fn("open_thread_in_app",
+               "スレをアプリのスレ表示ペインで開く。ユーザが見たい (開いて / 見せて) 依頼なら、報告で済ませず必ず呼ぶ。",
+               new { thread_url = OpenUrlParam("スレの URL") },
+               "thread_url"),
+            Fn("open_board_in_app",
+               "板をアプリのスレ一覧ペインで開く。ユーザが板を見たい依頼なら必ず呼ぶ。",
+               new { board_url = OpenUrlParam("板の URL") },
+               "board_url"),
+            Fn("open_thread_list_in_app",
+               "複数のスレを 1 つのタブに並べてアプリに表示する (関連スレを集める依頼の結果を出す)。1 スレだけなら open_thread_in_app。",
+               new
+               {
+                   title   = new { type = "string", description = "タブの見出し (例: 「鬼滅の刃 関連スレ」)" },
+                   threads = new
+                   {
+                       type        = "array",
+                       description = "list_threads の結果のスレ (thread_url・title・post_count をそのまま)",
+                       items       = new
+                       {
+                           type       = "object",
+                           properties = new
+                           {
+                               thread_url = OpenUrlParam("スレの URL"),
+                               title      = new { type = "string",  description = "スレタイ" },
+                               post_count = new { type = "integer", description = "レス数" },
+                           },
+                           required = new[] { "thread_url" },
+                       },
+                   },
+               },
+               "title", "threads"),
         };
     }
 
-    /// <summary>各スレ読み取り系ツールの thread_url 引数の共通 schema を吐く (= 説明文を一本化)。</summary>
+    /// <summary>ツール定義 1 件 (<c>{type:"function", function:{name, description, parameters}}</c>)。</summary>
+    private static object Fn(string name, string description, object properties, params string[] required) => new
+    {
+        type     = "function",
+        function = new
+        {
+            name,
+            description,
+            parameters = new { type = "object", properties, required },
+        },
+    };
+
+    /// <summary>各スレ読み取り系ツールの thread_url 引数 (共通)。</summary>
     private static object ThreadUrlParam() => new
     {
-        type = "string",
-        description = "対象スレッドの URL (省略時は attached スレッド)。他スレを読みたいときに渡す。list_threads 等のツール結果の thread_url をそのまま使う " +
-                      "(形式は掲示板ごとに違う。例: 5ch https://news.5ch.io/test/read.cgi/news/1234567890/)。",
+        type        = "string",
+        description = "スレの URL (省略時は今のスレ)。ツール結果の thread_url をそのまま渡す",
     };
+
+    /// <summary>開く系ツールの URL 引数。推測した URL を渡させない。</summary>
+    private static object OpenUrlParam(string what) => new
+    {
+        type        = "string",
+        description = $"{what}。ツール結果にあった URL をそのまま渡す (推測で作った URL は不可)",
+    };
+
+    private static object KeywordParam(string what) => new { type = "string", description = $"{what} (単一)" };
+    private static object KeywordsParam() => new { type = "array", description = "複数の語 (既定はいずれかに一致)", items = new { type = "string" } };
+    private static object MatchAllParam() => new { type = "boolean", description = "true で全部の語に一致するものだけ" };
+    private static object LimitParam(int def, int max) => new { type = "integer", description = $"最大件数 (既定 {def}, 上限 {max})" };
+
+    /// <summary>site 引数に指定できる提供者 ID の一覧 (all=false なら板検索できる掲示板だけ)。</summary>
+    private static string SiteIds(bool all)
+        => string.Join(" / ", BbsRegistry.All.Where(p => all || p.SupportsBoardSearch).Select(p => p.Id));
 
     // ---- 複数キーワード / OR・AND / あいまい (NFKC + 大小無視) マッチの共通ヘルパ ----
 
@@ -1210,10 +1012,24 @@ public sealed class ThreadToolset : IAgentToolset
         var matchAll     = ReadMatchAll(args);
         var nkw          = NormalizeKeywords(keywords);
         var keywordLabel = string.Join(matchAll ? " AND " : " / ", keywords);
-        var isScanMode   = nkw.Count == 0;
+        // カテゴリ指定 (categories 配列 / category 単一)。部分一致。
+        var categoryTerms = new List<string>();
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            if (args.TryGetProperty("category", out var cEl) && cEl.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(cEl.GetString()))
+                categoryTerms.Add(cEl.GetString()!.Trim());
+            if (args.TryGetProperty("categories", out var csEl) && csEl.ValueKind == JsonValueKind.Array)
+                foreach (var e in csEl.EnumerateArray())
+                    if (e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString())) categoryTerms.Add(e.GetString()!.Trim());
+        }
+        var ncat = NormalizeKeywords(categoryTerms);
 
-        // keyword 指定の有無で既定件数を切り替える (= scan モードは全板返却が原則)。
-        var defaultLimit = isScanMode ? BoardsScanDefaultLimit : DefaultListLimit;
+        // モード: keyword (板名で検索) / categories (指定カテゴリの板) / overview (カテゴリの一覧のみ)。
+        // 全板をそのまま返すと 5ch だけで 1100 板・約 9 万文字になり LLM の文脈を溢れさせるので、絞り込み無しはカテゴリの一覧にする。
+        var mode       = nkw.Count > 0 ? "keyword" : ncat.Count > 0 ? "categories" : "overview";
+        var isScanMode = mode == "categories";
+
+        var defaultLimit = mode == "keyword" ? DefaultListLimit : BoardsScanDefaultLimit;
         var limit        = defaultLimit;
         if (args.ValueKind == JsonValueKind.Object &&
             args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
@@ -1235,10 +1051,18 @@ public sealed class ThreadToolset : IAgentToolset
             .Where(x => site is null || x.Site.Id == site.Id)
             .ToList();
         var filtered = all.AsEnumerable();
-        if (!isScanMode)
+        if (ncat.Count > 0)
+        {
+            filtered = filtered.Where(x =>
+            {
+                var cat = NormalizeForSearch(x.Board.CategoryName ?? "");
+                return cat.Length > 0 && ncat.Any(t => cat.Contains(t, StringComparison.Ordinal) || t.Contains(cat, StringComparison.Ordinal));
+            });
+        }
+        if (nkw.Count > 0)
         {
             // 板名 / カテゴリ / dir / 掲示板名のいずれかに一致すれば、その語を「含む」とみなす (OR/AND は語間)。
-            filtered = all.Where(x =>
+            filtered = filtered.Where(x =>
             {
                 var b = x.Board;
                 var fields = NormalizeForSearch((b.BoardName ?? "") + "\n" + (b.CategoryName ?? "") + "\n" + (b.DirectoryName ?? "") + "\n" + x.Site.DisplayName);
@@ -1247,7 +1071,7 @@ public sealed class ThreadToolset : IAgentToolset
         }
         var picked    = filtered.Take(limit).ToArray();
         var totalAll  = all.Count;
-        var matched   = isScanMode ? totalAll : filtered.Count();
+        var matched   = filtered.Count();
         var truncated = picked.Length < matched;
 
         // 板一覧を持たない掲示板 (したらば / reddit) はここに出ないので、search_boards を案内する
@@ -1255,21 +1079,44 @@ public sealed class ThreadToolset : IAgentToolset
         var searchHint = searchOnly.Count == 0 ? ""
             : $" {string.Join(" / ", searchOnly.Select(p => p.DisplayName))} の板は板一覧が無いのでここには出ない。それらの板は search_boards で探すこと。";
 
-        // scan モード時のヒント: AI に「カテゴリ単位で関連を pick、漏れなく複数カテゴリを跨いで」と促す。
+        if (mode == "overview")
+        {
+            // カテゴリの一覧: 掲示板 + カテゴリごとに板数と板名の例だけ返す (板の URL は categories 指定で取る)。
+            var cats = all
+                .GroupBy(x => (Site: x.Site.DisplayName, Category: string.IsNullOrEmpty(x.Board.CategoryName) ? "(未分類)" : x.Board.CategoryName))
+                .Select(g => new
+                {
+                    site     = g.Key.Site,
+                    category = g.Key.Category,
+                    count    = g.Count(),
+                    examples = g.Take(CategoryExampleCount).Select(x => x.Board.BoardName).ToArray(),
+                })
+                .ToArray();
+            return JsonSerializer.Serialize(new
+            {
+                total_boards_in_app = totalAll,
+                mode                = "overview",
+                hint                = "カテゴリの一覧 (板の URL は含まない)。テーマに関係するカテゴリを複数まとめて選び、" +
+                                      "list_boards(categories=[…]) でそのカテゴリの板を取ること。" +
+                                      "例 (5ch): 漫画・アニメの話題 →「漫画・小説等」「テレビ等」「実況ch」、" +
+                                      "ソニー製品 →「家電製品」「ゲーム」「携帯型ゲーム」「ＰＣ等」。テーマに関係しそうなカテゴリは漏れなく選ぶ。" +
+                                      "英語圏の話題なら 4chan の板も候補になる。板名が分かっているなら keyword で直接探せる。" + searchHint,
+                categories_count    = cats.Length,
+                categories          = cats,
+            }, JsonOpts);
+        }
+
         var hint = isScanMode
-            ? $"スキャンモード (= keyword 無し)。全 {totalAll} 板中 {picked.Length} 件を掲示板 (site) とカテゴリ別にグルーピングして返した。" +
-              "**categories の各 category 名を見て、テーマに関連するカテゴリを複数まとめて pick すること**。" +
-              "例: 「ダン飯関連」→ 5ch の category=「漫画」「漫画作品」「アニメ」「アニメ実況」「声優」など漫画/アニメ系を全部 pick。" +
-              "「ソニー製品」→ category=「家電」「AV機器」「PCハードウェア」「ゲーム機」「デジカメ」など複数の家電/ゲーム系を全部 pick。" +
-              "1 カテゴリ 1 板に絞らない (= 同テーマでも複数の category や複数の板に分散しているのが普通)。" +
-              "英語圏の話題なら 4chan の板も候補になる。" +
+            ? $"カテゴリ指定モード ({string.Join(" / ", categoryTerms)})。{matched} 板中 {picked.Length} 件をカテゴリ別に返した。" +
+              "テーマに関係しそうな板を複数選んで list_threads を回すこと (1 板に絞らない)。" +
+              (matched == 0 ? " 一致するカテゴリが無い。keyword も categories も省略して呼ぶとカテゴリの一覧が見られる。" : "") +
               (truncated ? $" 全 {matched} 件中 {picked.Length} 件のみ。続きが必要なら limit={MaxListLimit} で再取得可。" : "") +
               searchHint
-            : $"キーワード検索モード (\"{keywordLabel}\")。テーマ検索で複数板候補を見たい場合は keyword/keywords 省略で再取得すること。" + searchHint;
+            : $"キーワード検索モード (\"{keywordLabel}\")。テーマで複数の板を探したい場合は keyword を省略してカテゴリの一覧を見ること。" + searchHint;
 
         if (isScanMode)
         {
-            // scan モード: 掲示板 + カテゴリ別にグルーピングして返す。各カテゴリ内では出現順 (= 板一覧の元順序) を維持。
+            // カテゴリ指定モード: 掲示板 + カテゴリ別にグルーピングして返す。各カテゴリ内では出現順 (= 板一覧の元順序) を維持。
             var grouped = picked
                 .GroupBy(x => (Site: x.Site.DisplayName, Category: string.IsNullOrEmpty(x.Board.CategoryName) ? "(未分類)" : x.Board.CategoryName))
                 .Select(g => new
@@ -1292,8 +1139,7 @@ public sealed class ThreadToolset : IAgentToolset
                 matched,
                 returned         = picked.Length,
                 truncated,
-                keyword          = "",
-                mode             = "scan",
+                mode             = "categories",
                 hint,
                 categories_count = grouped.Length,
                 categories       = grouped,

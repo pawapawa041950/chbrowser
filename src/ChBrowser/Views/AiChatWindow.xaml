@@ -94,14 +94,40 @@
                              ToolTip="Enter で送信 / Shift+Enter で改行" />
                 </Border>
 
-                <Button Grid.Column="1"
-                        Content="送信"
-                        Width="72"
-                        Margin="8,0,0,0"
-                        VerticalAlignment="Bottom"
-                        Padding="0,8"
-                        IsDefault="False"
-                        Command="{Binding SendCommand}" />
+                <!-- 実行中は「停止」(LLM 呼び出し / Worker を中断。会話は次の送信で続けられる)、それ以外は「送信」 -->
+                <Grid Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Bottom">
+                    <Button Content="送信"
+                            Width="72"
+                            Padding="0,8"
+                            IsDefault="False"
+                            Command="{Binding SendCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="停止"
+                            Width="72"
+                            Padding="0,8"
+                            ToolTip="実行中の AI の処理を中断する"
+                            Command="{Binding StopCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

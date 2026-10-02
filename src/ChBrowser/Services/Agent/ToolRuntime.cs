@@ -7,8 +7,8 @@ namespace ChBrowser.Services.Agent;
 ///
 /// <para>Worker からの 1 ツール呼び出しを <b>検証・実行・正規化・archive 記録 (id 返却)</b> して
 /// <see cref="ToolOutput"/> を返す。estimate ゲートは持たない (= heavy 判定は L3 ポリシー)。
-/// 生の tool 出力は archive にだけ置き、Worker へは正規化結果 + archive id を返す
-/// (= 生出力が Worker のスコープを超えない / D5)。</para>
+/// 生の tool 出力は全文を archive に置き、Worker へは上限トークン数に収めた結果 + archive id を返す
+/// (= 1 回の結果で Worker の文脈を食い尽くさない / D5)。</para>
 ///
 /// <para>提示するツール = スレ読み取り / 横断 / 開く 系 + <c>recall_archive</c> (id 指定)。
 /// <c>list_archive</c> は <b>Worker には渡さない</b> (= session 全体の探索を封じ、タスク隔離 D2 を守る / レビュー①)。</para>
@@ -41,9 +41,11 @@ public sealed class ToolRuntime
 
     /// <summary>1 ツール呼び出しを実行する。
     /// 結果 JSON に top-level <c>"error"</c> があれば失敗 (= structuredError) とみなす。
-    /// 成功かつ生データ系ツール (= スレ読み取り) なら archive に記録し <see cref="ToolOutput.ArchiveId"/> を付ける。
-    /// <paramref name="taskId"/> は archive エントリの紐付け用 (= 後で finding の evidence として引ける)。</summary>
-    public async Task<ToolOutput> ExecuteAsync(string name, string argumentsJson, string? taskId, CancellationToken ct)
+    /// 成功かつ生データ系ツール (= スレ読み取り) なら archive に全文を記録し <see cref="ToolOutput.ArchiveId"/> を付ける。
+    /// Worker に返す結果は上限トークン数で切る (切った旨と取り直し方を添える)。
+    /// <paramref name="taskId"/> は archive エントリの紐付け用 (= 後で finding の evidence として引ける)。
+    /// <paramref name="maxOutputTokens"/> は Worker に返す結果の上限 (Worker が自分の入力枠から決める)。</summary>
+    public async Task<ToolOutput> ExecuteAsync(string name, string argumentsJson, string? taskId, int maxOutputTokens, CancellationToken ct)
     {
         var args = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
 
@@ -85,9 +87,10 @@ public sealed class ToolRuntime
         if (IsErrorJson(raw))
             return new ToolOutput(Ok: false, NormalizedResult: null, StructuredError: raw, ArchiveId: null);
 
-        // 成功。生データ系なら archive に記録して id を付ける。
+        // 成功。生データ系なら archive に全文を記録して id を付け、Worker へは上限内に収めた結果を返す。
         string? archiveId = archivable ? _archive.RecordToolCall(name, args, raw, taskId) : null;
-        return new ToolOutput(Ok: true, NormalizedResult: raw, StructuredError: null, ArchiveId: archiveId);
+        return new ToolOutput(Ok: true, NormalizedResult: ContextBudget.CapToolOutput(raw, maxOutputTokens, archiveId),
+                              StructuredError: null, ArchiveId: archiveId);
     }
 
     // ---- helpers ----
@@ -111,20 +114,20 @@ public sealed class ToolRuntime
         }
     }
 
-    /// <summary>recall_archive のツール定義 (= Strategist から渡された evidence id を Worker が引き戻すための片方)。</summary>
+    /// <summary>recall_archive のツール定義 (= 省略された過去の結果や、Strategist から渡された evidence id を引き戻す)。</summary>
     private static object RecallArchiveToolDef() => new
     {
         type     = "function",
         function = new
         {
             name        = "recall_archive",
-            description = "指定 id のエントリの完全な原文を返す。Strategist から渡された evidence id を厳密に確認 / 引用したいときに使う。長文を引き戻すので必要なときだけ。",
+            description = "archive id (\"aN\") のツール結果を返す (省略された過去の結果や、文脈ヒントで渡された id を見るとき)。",
             parameters  = new
             {
                 type       = "object",
                 properties = new
                 {
-                    id = new { type = "string", description = "エントリ id (= \"aN\" 形式)。" },
+                    id = new { type = "string", description = "archive id (\"aN\")" },
                 },
                 required = new[] { "id" },
             },
