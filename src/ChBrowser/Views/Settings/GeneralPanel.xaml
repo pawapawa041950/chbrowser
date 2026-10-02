@@ -65,6 +65,12 @@
                     Padding="10,3"
                     Margin="16,0,0,0"
                     VerticalAlignment="Center" />
+            <Button Content="更新を確認"
+                    Command="{Binding CheckEmojiFontUpdateCommand}"
+                    Padding="10,3"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    ToolTip="配布元 (GitHub の googlefonts/noto-emoji) に新しい版があるか確認し、あればそのまま更新します" />
         </StackPanel>
         <TextBlock Text="{Binding EmojiFontStatus}"
                    Foreground="#666"

@@ -256,6 +256,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(EmojiFontButtonText));
         // コンストラクタの初期化ブロック (コマンド生成より前) からも呼ばれるため null 安全に。
         DownloadEmojiFontCommand?.NotifyCanExecuteChanged();
+        CheckEmojiFontUpdateCommand?.NotifyCanExecuteChanged();
         // フォントが無くなった (削除等) のに ON のままなら OFF に落とす。
         if (!value && UseNotoColorEmoji) UseNotoColorEmoji = false;
     }
@@ -287,6 +288,40 @@ public sealed partial class SettingsViewModel : ObservableObject
             EmojiFontStatus = $"ダウンロード失敗: {ex.Message}";
         }
     }
+
+    /// <summary>「更新を確認」ボタンの本体。配布元 (GitHub) の最新版と手元のフォントの内容ハッシュを比べ、
+    /// 新しい版があればそのままダウンロードして置き換え、各ペインに反映する (スレ表示は開き直しで反映)。</summary>
+    private async System.Threading.Tasks.Task CheckEmojiFontUpdateAsync()
+    {
+        EmojiFontStatus = "更新を確認中…";
+        try
+        {
+            var progress = new Progress<double>(p => EmojiFontStatus = $"新しい版をダウンロード中… {p * 100:F0}%");
+            var outcome = await ChBrowser.Services.Fonts.EmojiFontService
+                .CheckAndUpdateAsync(progress, System.Threading.CancellationToken.None)
+                .ConfigureAwait(true);
+            switch (outcome)
+            {
+                case ChBrowser.Services.Fonts.EmojiFontService.UpdateOutcome.UpToDate:
+                    EmojiFontStatus = $"最新版です (確認: {DateTime.Now:HH:mm})";
+                    break;
+                case ChBrowser.Services.Fonts.EmojiFontService.UpdateOutcome.Updated:
+                    EmojiFontStatus = "新しい版に更新しました (開いているスレは開き直すと反映されます)";
+                    _reloadAllCssAction?.Invoke();
+                    break;
+                case ChBrowser.Services.Fonts.EmojiFontService.UpdateOutcome.UpdatedOnNextStart:
+                    EmojiFontStatus = "新しい版をダウンロードしました (使用中のため、次回起動時に反映されます)";
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            EmojiFontStatus = $"更新の確認に失敗しました: {ex.Message}";
+        }
+    }
+
+    /// <summary>全般カテゴリの「更新を確認」ボタン用 (ダウンロード済みのときだけ押せる)。</summary>
+    public IAsyncRelayCommand CheckEmojiFontUpdateCommand { get; private set; } = null!;
 
     /// <summary>「画像」カテゴリで現在のキャッシュ使用量を表示するための文字列 (例: "512.3 MB / 1024 MB")。
     /// 設定ウィンドウを開くたびに <see cref="RefreshCacheSizeDisplay"/> で更新する。</summary>
@@ -421,7 +456,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         // OnUseNotoColorEmojiChanged のクランプが EmojiFontDownloaded を参照するため、順序が逆だと
         // 「DL 済みなのに未 DL 扱い」で設定 ON を毎回 OFF に戻してしまう。
         EmojiFontDownloaded          = ChBrowser.Services.Fonts.EmojiFontService.IsDownloaded;
-        EmojiFontStatus              = EmojiFontDownloaded ? "ダウンロード済み" : "未ダウンロード";
+        EmojiFontStatus              = ChBrowser.Services.Fonts.EmojiFontService.HasPendingUpdate ? "新しい版をダウンロード済み (次回起動時に反映)"
+                                     : EmojiFontDownloaded ? "ダウンロード済み" : "未ダウンロード";
         UseNotoColorEmoji            = initial.UseNotoColorEmoji;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
@@ -476,6 +512,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         // 絵文字フォントのダウンロード。実行中は AsyncRelayCommand が自動で再入を防ぐ。
         // ダウンロード済みのときは CanExecute=false (= ボタンを押せない)。
         DownloadEmojiFontCommand = new AsyncRelayCommand(DownloadEmojiFontAsync, () => !EmojiFontDownloaded);
+        CheckEmojiFontUpdateCommand = new AsyncRelayCommand(CheckEmojiFontUpdateAsync, () => EmojiFontDownloaded);
 
         RestartNowCommand      = new RelayCommand(() => _restartNowAction());
         OpenCacheFolderCommand = new RelayCommand(() => _openCacheFolderAction());
