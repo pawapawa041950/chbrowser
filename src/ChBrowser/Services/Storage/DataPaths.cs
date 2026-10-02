@@ -56,6 +56,8 @@ public sealed class DataPaths
     /// 動画サムネ (JPEG) は Image 同様 CacheImagesDir に置く。</summary>
     public string CacheVideosDir  => EnsureDir(Path.Combine(Root, "cache", "videos"));
     public string ThemesDir       => EnsureDir(Path.Combine(Root, "themes"));
+    /// <summary>AI 翻訳したスレタイの保存先 (原文 → 訳。<see cref="ChBrowser.Services.Llm.TranslationService"/>)。</summary>
+    public string TitleTranslationsPath => Path.Combine(EnsureDir(Path.Combine(Root, "cache")), "title-translations.json");
 
     public string Root5chIo       => EnsureDir(Path.Combine(Root, "5ch.io"));
     public string RootBbspink     => EnsureDir(Path.Combine(Root, "bbspink.com"));

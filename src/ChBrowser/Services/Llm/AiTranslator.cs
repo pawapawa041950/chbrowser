@@ -135,6 +135,81 @@ public static class AiTranslator
         return ToDisplayBody(Unmask(text, tokens));
     }
 
+    // ---- スレタイ (短文) をまとめて翻訳 ----
+
+    private const string TitlesSystemPrompt =
+        "あなたは掲示板のスレッドタイトルを日本語に翻訳する翻訳者です。\n" +
+        "ユーザーは JSON 配列 [{\"i\":番号,\"t\":\"タイトル\"}, …] を送ります。各タイトルを自然な日本語に訳し、" +
+        "同じ形の JSON 配列 [{\"i\":番号,\"t\":\"訳\"}, …] だけを出力してください (前置き・説明・コードブロックは不要)。\n" +
+        "規則:\n" +
+        "- 番号 i は変えず、全件を返してください。\n" +
+        "- 板名・スレの略称 (例: /g/, /lmg/)、固有名詞、絵文字、[NSFW] のような印はそのまま残してください。\n" +
+        "- 掲示板らしい口語・スラングは、意味が伝わる自然な日本語にしてください。\n" +
+        "- すでに日本語の部分はそのまま残してください。";
+
+    /// <summary>短文 (スレタイ) を 1 回の推論でまとめて訳す (タイトルは短いので 1 件ずつ送ると往復が多すぎる)。
+    /// 戻り値: 入力の位置 → 訳 (応答から取り出せたものだけ。欠けたものは呼び出し側が未翻訳として扱う)。
+    /// LLM が失敗 (接続エラー等) したら <see cref="AiTranslateException"/>。</summary>
+    public static async Task<Dictionary<int, string>> TranslateTitlesAsync(
+        LlmClient llm, LlmSettings settings, IReadOnlyList<string> titles, bool disableReasoning, CancellationToken ct)
+    {
+        var input = System.Text.Json.JsonSerializer.Serialize(
+            titles.Select((t, i) => new { i = i + 1, t }),
+            new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        var messages = new[]
+        {
+            new LlmChatMessage("system", TitlesSystemPrompt),
+            new LlmChatMessage("user", input),
+        };
+        var chat = await llm.ChatStreamAsync(settings, messages, _ => { }, null, ct,
+            disableReasoning ? ChBrowser.Services.Ng.AiNgJudge.ReasoningOff : null).ConfigureAwait(false);
+        if (!chat.Ok) throw new AiTranslateException(chat.Error ?? "翻訳の要求に失敗しました");
+
+        var (text, _) = ChatArchive.SplitThink(chat.Content ?? "");
+        var result = new Dictionary<int, string>();
+        foreach (var (i, t) in ParseNumberedJson(StripWrapping(text)))
+        {
+            var s = t.Replace("\r", "").Replace("\n", " ").Trim();
+            if (i >= 1 && i <= titles.Count && s.Length > 0) result[i - 1] = s;
+        }
+        return result;
+    }
+
+    /// <summary>[{"i":n,"t":"…"}, …] を取り出す。配列の前後に余計な文があっても、最初の [ から最後の ] までを読む。
+    /// 読めなければ「n. 訳」「n: 訳」形式の行として読む (JSON を守らないモデル向け)。</summary>
+    internal static IEnumerable<(int Index, string Text)> ParseNumberedJson(string text)
+    {
+        var list = new List<(int, string)>();
+        var a = text.IndexOf('[');
+        var b = text.LastIndexOf(']');
+        if (a >= 0 && b > a)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(text[a..(b + 1)]);
+                foreach (var e in doc.RootElement.EnumerateArray())
+                {
+                    if (e.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                    var hasI = e.TryGetProperty("i", out var iEl);
+                    var hasT = e.TryGetProperty("t", out var tEl);
+                    if (!hasI || !hasT || tEl.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+                    int idx;
+                    if (iEl.ValueKind == System.Text.Json.JsonValueKind.Number && iEl.TryGetInt32(out var n)) idx = n;
+                    else if (iEl.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(iEl.GetString(), out var ns)) idx = ns;
+                    else continue;
+                    list.Add((idx, tEl.GetString() ?? ""));
+                }
+                if (list.Count > 0) return list;
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        foreach (Match m in NumberedLineRe.Matches(text))
+            list.Add((int.Parse(m.Groups[1].Value), m.Groups[2].Value));
+        return list;
+    }
+
+    private static readonly Regex NumberedLineRe = new(@"^\s*(\d+)\s*[.:：)）]\s*(.+?)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
+
     /// <summary>モデルが付けがちな包み (コードブロック ``` / 全体を囲む引用符) を外す。</summary>
     public static string StripWrapping(string text)
     {

@@ -622,6 +622,9 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         _postClient      = postClient;
         // 掲示板ごとの表示の切り替え (引用文を返信として扱う / 各レスの 🌐 ボタン)。タブが作られる前に口を用意しておく
         ThreadTabViewModel.SiteToggles = site => (IsQuoteRepliesOn(CurrentConfig, site), IsPostTranslateButtonsOn(CurrentConfig, site));
+        // スレ一覧のスレタイの AI 翻訳: 保存済みの訳の引き当てと、翻訳 ON のタブで一覧が入れ替わったときの新しい行の翻訳
+        ThreadListTabViewModel.TitleTranslationLookup = title => Translation.CachedTitle(title);
+        ThreadListTabViewModel.ItemsReplaced = t => { if (t.IsTitleTranslationOn) _ = TranslateTitlesAsync(t); };
         _donguri         = donguri;
         _ng              = ng;
         _paths           = paths;

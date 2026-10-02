@@ -249,12 +249,16 @@
         }
         var cls = (LOG_CLASS[r.log] ? LOG_CLASS[r.log] + ' ' : '') + (r.fav ? 'is-favorited ' : '');
         var m = esc(r.momentum || '0');
+        // AI 翻訳で表示しているスレタイ: セルは訳、マウスを乗せると原文。絞り込みは訳・原文の両方に当てる (data-orig)
+        var orig = r.orig ? esc(r.orig) : '';
+        var tip = orig ? '原文: ' + orig + '&#10;訳: ' + title : title;
         return '<tr class="' + cls + '" data-key="' + esc(r.key) + '" data-host="' + esc(r.host) + '" data-dir="' + esc(r.dir)
-             + '" data-no="' + r.no + '" data-title="' + title + '" data-board="' + board + '" data-count="' + r.count
+             + '" data-no="' + r.no + '" data-title="' + title + '"' + (orig ? ' data-orig="' + orig + '"' : '')
+             + ' data-board="' + board + '" data-count="' + r.count
              + '" data-momentum="' + m + '" data-log="' + (r.log | 0) + '">'
              + '<td class="col-log"><span class="log-mark"></span></td>'
              + '<td class="col-no" title="' + r.no + '">' + r.no + '</td>'
-             + '<td class="col-title" title="' + title + '">' + title + '</td>'
+             + '<td class="col-title' + (orig ? ' translated' : '') + '" title="' + tip + '">' + title + '</td>'
              + '<td class="col-board" title="' + board + '">' + board + '</td>'
              + '<td class="col-count" title="' + r.count + '">' + r.count + '</td>'
              + '<td class="col-momentum" title="' + m + '">' + m + '</td></tr>';
@@ -374,7 +378,7 @@
                 continue;
             }
 
-            var title = (tr.dataset.title || '');
+            var title = (tr.dataset.title || '') + (tr.dataset.orig ? '\n' + tr.dataset.orig : '');
             if (title.toLowerCase().indexOf(queryLower) < 0) {
                 tr.classList.add('filter-hidden');
             } else {

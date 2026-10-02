@@ -37,7 +37,10 @@ public sealed partial class MainViewModel
 
     /// <summary>タブを所属一覧ペインから取り除く (= 閉じる)。所属不明ならアクティブペインから試みる。</summary>
     public void RemoveThreadListTab(ThreadListTabViewModel tab)
-        => (ThreadListGroupOf(tab) ?? _activeThreadListGroup).Tabs.Remove(tab);
+    {
+        tab.TitleTranslateCts?.Cancel();   // スレタイの翻訳中なら止める
+        (ThreadListGroupOf(tab) ?? _activeThreadListGroup).Tabs.Remove(tab);
+    }
 
     /// <summary>指定タブの所属一覧ペインをアクティブにして選択する (= 既存タブ検索のヒット時の活性化)。</summary>
     private void ActivateThreadListTab(ThreadListTabViewModel tab)

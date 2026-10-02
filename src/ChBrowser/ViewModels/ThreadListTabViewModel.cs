@@ -118,6 +118,29 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     [ObservableProperty]
     private string? _nextCursor;
 
+    // ---- スレタイの AI 翻訳 (タブごと・その場限り) ----
+
+    /// <summary>このタブのスレタイを翻訳して表示するか (スレ一覧ペインの 🌐)。ON の間は一覧が入れ替わっても新しい行を訳す。</summary>
+    [ObservableProperty]
+    private bool _isTitleTranslationOn;
+
+    /// <summary>スレタイを翻訳中か (🌐 を ⏳ にする)。</summary>
+    [ObservableProperty]
+    private bool _isTranslatingTitles;
+
+    /// <summary>実行中のスレタイ翻訳の取り消し (OFF にしたとき / タブを閉じたとき)。</summary>
+    internal System.Threading.CancellationTokenSource? TitleTranslateCts { get; set; }
+
+    /// <summary>保存済みのスレタイの訳を引く (MainViewModel が <c>TranslationService.CachedTitle</c> を設定する)。</summary>
+    public static Func<string, string?>? TitleTranslationLookup { get; set; }
+
+    /// <summary>行を出し直したときの通知 (MainViewModel が、翻訳 ON のタブなら新しい行を訳すのに使う)。</summary>
+    public static Action<ThreadListTabViewModel>? ItemsReplaced { get; set; }
+
+    /// <summary>行の送信データ。翻訳 ON なら訳のあるスレタイを訳に置き換える (原文は行に残す)。</summary>
+    private IReadOnlyList<ThreadListRow> BuildRows(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
+        => ThreadListHtmlBuilder.BuildRows(items, now, IsTitleTranslationOn ? TitleTranslationLookup : null);
+
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)
     {
@@ -160,9 +183,10 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     {
         Items = items;
         if (string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
-        ItemsPush        = new ThreadListItemsMessage(ThreadListHtmlBuilder.BuildRows(items, now));
+        ItemsPush        = new ThreadListItemsMessage(BuildRows(items, now));
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
+        ItemsReplaced?.Invoke(this);
     }
 
     /// <summary>ページを読み込み直した WebView (CSS の変更 / 別ペインへの移動で作り直された WebView) から <c>ready</c> が来たとき:
@@ -170,7 +194,7 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     public void ResendItems()
     {
         if (Items.Count == 0 && ItemsPush is null) return;   // まだ一覧を出していない
-        ItemsPush = new ThreadListItemsMessage(ThreadListHtmlBuilder.BuildRows(Items, DateTimeOffset.UtcNow));
+        ItemsPush = new ThreadListItemsMessage(BuildRows(Items, DateTimeOffset.UtcNow));
     }
 
     /// <summary>シェル HTML を作り直す (CSS の再読み込み)。中身が変わればページが読み直され、<c>ready</c> で行が送り直される。</summary>

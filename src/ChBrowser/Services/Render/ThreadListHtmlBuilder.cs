@@ -31,8 +31,10 @@ public static class ThreadListHtmlBuilder
         @"<th class=""col-momentum sortable"" data-sort=""momentum"" data-sort-type=""num"">勢い</th>" +
         @"</tr></thead><tbody></tbody></table>";
 
-    /// <summary>行の送信データ。勢いは <paramref name="now"/> 時点で計算する (表示と並べ替えに使う)。</summary>
-    public static IReadOnlyList<ThreadListRow> BuildRows(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
+    /// <summary>行の送信データ。勢いは <paramref name="now"/> 時点で計算する (表示と並べ替えに使う)。
+    /// <paramref name="translateTitle"/> があれば、訳のあるスレタイを訳に置き換え、原文を <see cref="ThreadListRow.Orig"/> に入れる (AI 翻訳)。</summary>
+    public static IReadOnlyList<ThreadListRow> BuildRows(IReadOnlyList<ThreadListItem> items, DateTimeOffset now,
+                                                         Func<string, string?>? translateTitle = null)
     {
         var rows = new List<ThreadListRow>(items.Count);
         foreach (var item in items)
@@ -45,8 +47,10 @@ public static class ThreadListHtmlBuilder
                 continue;
             }
             var momentum = CalcMomentum(t, now).ToString("F1", CultureInfo.InvariantCulture);
-            rows.Add(new ThreadListRow("thread", t.Key, item.Host, item.DirectoryName, t.Order, t.Title, item.BoardName, t.PostCount,
-                momentum, (int)item.State, item.IsFavorited));   // Log: None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
+            var translated = translateTitle?.Invoke(t.Title);
+            rows.Add(new ThreadListRow("thread", t.Key, item.Host, item.DirectoryName, t.Order, translated ?? t.Title, item.BoardName, t.PostCount,
+                momentum, (int)item.State, item.IsFavorited,   // Log: None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
+                translated is null ? null : t.Title));
         }
         return rows;
     }
@@ -97,6 +101,7 @@ public static class ThreadListHtmlBuilder
 }
 
 /// <summary>スレ一覧の 1 行 (<c>setItems</c> で JS へ送る)。<see cref="Kind"/> = "thread" / "board" (板そのものの行)。
-/// <see cref="Momentum"/> は表示用の文字列 (板の行は null)、<see cref="Log"/> は状態マーク (0〜4、並べ替えにも使う)。</summary>
+/// <see cref="Momentum"/> は表示用の文字列 (板の行は null)、<see cref="Log"/> は状態マーク (0〜4、並べ替えにも使う)。
+/// <see cref="Orig"/> はスレタイを AI 翻訳で表示しているときの原文 (<see cref="Title"/> は訳)。翻訳していなければ null。</summary>
 public sealed record ThreadListRow(string Kind, string Key, string Host, string Dir, int No, string Title, string Board,
-                                   int Count, string? Momentum, int Log, bool Fav);
+                                   int Count, string? Momentum, int Log, bool Fav, string? Orig = null);

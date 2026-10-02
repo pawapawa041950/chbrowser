@@ -103,6 +103,37 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
 
+                    <!-- AI 翻訳: このタブのスレタイを訳して表示する (タブごと・その場限り)。ON の間は押下状態の色、翻訳中は ⏳ -->
+                    <Button Click="TranslateTitlesButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
+                                <Setter Property="ToolTip" Value="スレタイを AI 翻訳する (このタブだけ。もう一度押すと原文に戻す)" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedTab.IsTitleTranslationOn}" Value="True">
+                                        <Setter Property="Background"  Value="#CCE5FF" />
+                                        <Setter Property="BorderBrush" Value="#88B0DD" />
+                                        <Setter Property="ToolTip" Value="スレタイを翻訳表示中 (押すと原文に戻す。原文はタイトルにマウスを乗せると見られる)" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="🌐" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedTab.IsTranslatingTitles}" Value="True">
+                                            <Setter Property="Text" Value="⏳" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Button>
+
                     <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効。 -->
                     <Button Click="NewThreadButton_Click"
                             ToolTip="この板に新規スレッドを立てる">

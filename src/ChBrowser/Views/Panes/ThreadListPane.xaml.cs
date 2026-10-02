@@ -59,6 +59,14 @@ public partial class ThreadListPane : UserControl
         _ = main.RefreshThreadListTabAsync(g.SelectedTab);
     }
 
+    /// <summary>🌐: このペインの選択タブのスレタイの AI 翻訳を ON / OFF する (タブごと)。</summary>
+    private void TranslateTitlesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (Group is not { } g || Vm is not { } main) return;
+        if (g.SelectedTab is null) return;
+        _ = main.ToggleThreadListTranslationAsync(g.SelectedTab);
+    }
+
     /// <summary>選択中の板タブの板をお気に入りに追加 / 削除する (トグル)。
     /// 板タブ以外 (お気に入り展開タブ / 全ログタブ) では XAML 側で IsEnabled=False になっているため呼ばれない。</summary>
     private void ToggleBoardFavoriteButton_Click(object sender, RoutedEventArgs e)

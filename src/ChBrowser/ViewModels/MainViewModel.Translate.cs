@@ -20,35 +20,21 @@ namespace ChBrowser.ViewModels;
 /// <item><description>訳文はスレのログの隣 (<c>&lt;key&gt;.tr.json</c>) に保存し、同じレスを何度も LLM に送らない。
 ///   スレ全体の翻訳の ON / OFF と、翻訳で表示しているレスも保存する (= 開き直しても同じ見た目)。</description></item>
 /// <item><description>スレ全体の翻訳では、もともと日本語のレス・訳す文字が無いレスは送らない。ON の間は新着も自動で訳す。</description></item>
-/// </list></summary>
+/// <item><description>スレ一覧ペインの 🌐: そのタブのスレタイを訳して表示する (タブごと・その場限り)。訳は <see cref="TranslationService"/> が保存する。</description></item>
+/// </list>
+/// 接続・同時実行数・タイトルの訳の保存は <see cref="TranslationService"/> (今後の書き込み窓の翻訳も同じものを使う)。</summary>
 public sealed partial class MainViewModel
 {
     private TranslationStorage? _translationStorage;
     private TranslationStorage TranslationStore => _translationStorage ??= new(_paths);
 
-    private SemaphoreSlim? _translateGate;
-    private int _translateGateSize;
-    /// <summary>全スレ共通の同時実行の上限 (設定が変わったら次の要求から新しい上限)。</summary>
-    private SemaphoreSlim TranslateGate
-    {
-        get
-        {
-            var n = Math.Clamp(CurrentConfig.TranslateConcurrency, 1, 16);
-            if (_translateGate is null || _translateGateSize != n)
-            {
-                _translateGate     = new SemaphoreSlim(n);
-                _translateGateSize = n;
-            }
-            return _translateGate;
-        }
-    }
+    private TranslationService? _translation;
+    /// <summary>AI 翻訳の共通窓口 (接続・同時実行の上限・タイトルの訳の保存)。書き込み窓などほかの画面にもこれを渡す。</summary>
+    public TranslationService Translation => _translation ??= new(_llmClient, () => CurrentConfig, _paths);
 
-    private LlmSettings TranslateSettings => LlmSettings.TranslateFromConfig(CurrentConfig);
+    private bool IsTranslateConfigured => Translation.IsConfigured;
 
-    private bool IsTranslateConfigured
-        => TranslateSettings is { } s && !string.IsNullOrWhiteSpace(s.ApiUrl) && !string.IsNullOrWhiteSpace(s.Model);
-
-    private const string NotConfiguredMessage = "AI翻訳の接続が未設定です (設定 → LLM でプロファイルを登録し、設定 → AI翻訳 で使うプロファイルを選んでください)";
+    private const string NotConfiguredMessage = TranslationService.NotConfiguredMessage;
 
     /// <summary>🌐 メニュー「各レスごとに翻訳ボタンを表示する」。掲示板ごとに設定へ保存し、同じ掲示板の開いているスレへ即時に反映する。</summary>
     [RelayCommand]
@@ -153,29 +139,26 @@ public sealed partial class MainViewModel
 
     /// <summary>1 レスを翻訳する (同時実行の上限の中で、訳している間は loading を表示)。成功なら訳文を保存して翻訳表示にする。
     /// 戻り値: 訳せたか。LLM が失敗 (接続エラー等) したら <see cref="AiTranslateException"/> をそのまま投げる。</summary>
-    private async Task<bool> TranslateOneAndShowAsync(ThreadTabViewModel tab, long number, string plain, CancellationToken ct)
-    {
-        var gate = TranslateGate;
-        await gate.WaitAsync(ct).ConfigureAwait(true);
-        tab.TranslatingPosts.Add(number);
-        PushTranslation(tab, loading: new[] { number });
-        try
+    private Task<bool> TranslateOneAndShowAsync(ThreadTabViewModel tab, long number, string plain, CancellationToken ct)
+        => Translation.WithSlotAsync(async () =>
         {
-            var body = await AiTranslator.TranslateOneAsync(_llmClient, TranslateSettings, plain,
-                CurrentConfig.TranslateDisableReasoning, ct).ConfigureAwait(true);
-            if (body is null) return false;
-            tab.Translations[number] = body;
-            tab.TranslatedShown.Add(number);
-            PushTranslation(tab, new Dictionary<long, string> { [number] = body }, show: new[] { number });
-            return true;
-        }
-        finally
-        {
-            gate.Release();
-            tab.TranslatingPosts.Remove(number);
-            PushTranslation(tab, loaded: new[] { number });
-        }
-    }
+            tab.TranslatingPosts.Add(number);
+            PushTranslation(tab, loading: new[] { number });
+            try
+            {
+                var body = await Translation.TranslatePostAsync(plain, ct).ConfigureAwait(true);
+                if (body is null) return false;
+                tab.Translations[number] = body;
+                tab.TranslatedShown.Add(number);
+                PushTranslation(tab, new Dictionary<long, string> { [number] = body }, show: new[] { number });
+                return true;
+            }
+            finally
+            {
+                tab.TranslatingPosts.Remove(number);
+                PushTranslation(tab, loaded: new[] { number });
+            }
+        }, ct);
 
     /// <summary>スレ全体の翻訳が ON のとき、まだ訳していないレス (日本語・訳す文字が無いレスを除く) を 1 件ずつ翻訳する
     /// (上限までは並行)。翻訳中に届いたレスも最後に拾う。接続エラーならそこで止めてステータスに出す。</summary>
@@ -305,5 +288,79 @@ public sealed partial class MainViewModel
         if (!tab.TranslatedShown.Remove(number)) return;
         PushTranslation(tab, hide: new[] { number });
         SaveTranslation(tab);
+    }
+
+    // ---- スレ一覧ペイン: スレタイの翻訳 (タブごと・その場限り) ----
+
+    /// <summary>スレ一覧ペインの 🌐: このタブのスレタイの翻訳の ON / OFF。ON にすると保存済みの訳をすぐ出し、残りを訳す。
+    /// OFF にすると実行中の翻訳を止めて原文に戻す (訳は残す = 次に ON にしたとき送らない)。</summary>
+    public async Task ToggleThreadListTranslationAsync(ThreadListTabViewModel tab)
+    {
+        if (tab.IsTitleTranslationOn)
+        {
+            tab.TitleTranslateCts?.Cancel();
+            tab.IsTitleTranslationOn = false;
+            tab.ResendItems();
+            tab.StatusMessage = "スレタイを原文の表示に戻しました";
+            return;
+        }
+        if (!IsTranslateConfigured)
+        {
+            tab.StatusMessage = NotConfiguredMessage;
+            StatusMessage     = NotConfiguredMessage;
+            return;
+        }
+        tab.IsTitleTranslationOn = true;
+        tab.ResendItems();   // 保存済みの訳をすぐ出す
+        await TranslateTitlesAsync(tab).ConfigureAwait(true);
+    }
+
+    /// <summary>タブのスレタイのうち、まだ訳が無い日本語以外のものを訳す。訳せた分から表示を更新する。
+    /// 実行中に一覧が入れ替わったら (更新 / 続きの読み込み)、終わった後に新しい行も拾う。</summary>
+    private async Task TranslateTitlesAsync(ThreadListTabViewModel tab)
+    {
+        if (!tab.IsTitleTranslationOn || tab.IsTranslatingTitles || !IsTranslateConfigured) return;
+        var cts = new CancellationTokenSource();
+        tab.TitleTranslateCts   = cts;
+        tab.IsTranslatingTitles = true;
+        var total = 0;
+        string? error = null;
+        try
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                var titles = tab.Items.Where(i => i.Kind == ThreadListItemKind.Thread).Select(i => i.Info.Title)
+                                      .Where(Translation.TitleNeedsTranslation).Distinct().ToList();
+                if (titles.Count == 0) break;
+                tab.StatusMessage = $"スレタイを翻訳中… 0/{titles.Count}";
+                var got = await Translation.TranslateTitlesAsync(titles, done =>
+                {
+                    if (cts.IsCancellationRequested) return;
+                    tab.StatusMessage = $"スレタイを翻訳中… {done}/{titles.Count}";
+                    tab.ResendItems();
+                }, cts.Token).ConfigureAwait(true);
+                total += got;
+                if (got == 0) break;   // 1 件も訳せなかった (応答の形が合わない等): 同じものを送り続けない
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (AiTranslateException ex) { error = ex.Message; }
+        finally
+        {
+            tab.IsTranslatingTitles = false;
+            if (ReferenceEquals(tab.TitleTranslateCts, cts)) tab.TitleTranslateCts = null;
+        }
+
+        if (!tab.IsTitleTranslationOn) return;   // 途中で OFF にした
+        tab.ResendItems();
+        if (error is not null)
+        {
+            tab.StatusMessage = $"スレタイの翻訳に失敗しました: {error}";
+            StatusMessage     = tab.StatusMessage;
+        }
+        else
+        {
+            tab.StatusMessage = total > 0 ? $"スレタイを翻訳しました ({total} 件)" : "翻訳が必要なスレタイはありません (日本語のタイトルは翻訳しません)";
+        }
     }
 }
