@@ -55,7 +55,7 @@ public sealed class NewAgentEngine : IAgentEngine
         "# Worker にできること (= goal を書くときの前提)\n" +
         "Worker 側のツールはあなたからは直接呼べないので、何をしてほしいかは dispatch_task の goal に書いて指示する。Worker は:\n" +
         "- スレ / 板の読み取りと横断検索\n" +
-        "- WEB 検索 (web_search) と WEB ページ取得 (web_fetch) — 5ch 外の最新情報・事実確認・用語や固有名詞の裏取り\n" +
+        "- WEB 検索 (web_search) と WEB ページ取得 (web_fetch) — 掲示板の外の最新情報・事実確認・用語や固有名詞の裏取り\n" +
         "- 結果をアプリのペインに開く操作 (open_thread_list_in_app / open_thread_in_app / open_board_in_app)\n" +
         "ができる。\n" +
         "\n" +

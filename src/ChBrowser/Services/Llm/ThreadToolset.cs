@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ChBrowser.Models;
+using ChBrowser.Services.Bbs;
 
 namespace ChBrowser.Services.Llm;
 
@@ -62,6 +63,8 @@ public sealed class ThreadToolset : IAgentToolset
     /// <summary>list_boards で keyword 省略時 (= scan モード) の既定件数。
     /// 5ch の全板 (~1100) を 1 ショットで返して、AI がカテゴリ単位で関連板を pick できるようにする。</summary>
     private const int BoardsScanDefaultLimit = 1500;
+    /// <summary>search_boards の 1 キーワード・1 掲示板あたりの上限件数。</summary>
+    private const int MaxBoardSearchLimit = 100;
 
     /// <summary><c>&lt;a href=...&gt;text&lt;/a&gt;</c> を可視テキストだけにする (= dat 中のリンクは
     /// LLM にとっては中身のテキストだけが意味を持つ)。</summary>
@@ -69,12 +72,9 @@ public sealed class ThreadToolset : IAgentToolset
     /// <summary>残ったあらゆる HTML タグ (= レアケース)。タグ自体を除去するが中身は残す。</summary>
     private static readonly Regex AnyTagRe = new(@"<[^>]+>", RegexOptions.Compiled);
 
-    /// <summary>本文中のレス参照アンカー (<c>&gt;&gt;N</c> / <c>&gt;&gt;N-M</c> / <c>&gt;&gt;N,M</c>)。
-    /// <c>&amp;gt;&amp;gt;</c> も CleanBody 通過後は <c>&gt;&gt;</c> に正規化されている前提。
-    /// 全体マッチは <c>&gt;&gt;</c> + 数字列 (数字 / ハイフン / カンマ) 列 で受ける。</summary>
-    private static readonly Regex AnchorRefRe = new(@">>(\d+(?:[\-,]\d+)*)", RegexOptions.Compiled);
-
     private readonly ThreadDataLoader              _dataLoader;
+    /// <summary>掲示板 (提供者 ID) ごとの「引用文を返信として扱う」の設定。返信関係 (被アンカー) の算出に使う。</summary>
+    private readonly Func<string, bool>            _quoteRepliesOn;
     private readonly Func<string, Task<string>>    _openThreadInAppAsync;
     private readonly Func<string, Task<string>>    _openBoardInAppAsync;
     private readonly Func<string, IReadOnlyList<AiSearchResultEntry>, Task<string>> _openThreadListInAppAsync;
@@ -106,9 +106,11 @@ public sealed class ThreadToolset : IAgentToolset
         long?                         attachedLastRead        = null,
         long?                         attachedMarkPostNumber  = null,
         IEnumerable<long>?            attachedOwnPostNumbers  = null,
-        bool                          attachedHasReplyToOwn   = false)
+        bool                          attachedHasReplyToOwn   = false,
+        Func<string, bool>?           quoteRepliesOn          = null)
     {
         _dataLoader               = dataLoader;
+        _quoteRepliesOn           = quoteRepliesOn ?? (site => site == "futaba");
         _openThreadInAppAsync     = openThreadInAppAsync;
         _openBoardInAppAsync      = openBoardInAppAsync;
         _openThreadListInAppAsync = openThreadListInAppAsync;
@@ -122,7 +124,7 @@ public sealed class ThreadToolset : IAgentToolset
                 Title:              attachedTitle ?? "",
                 BoardName:          attachedBoard.BoardName ?? attachedBoard.DirectoryName,
                 Posts:              posts,
-                InboundAnchors:     BuildInboundAnchorIndex(posts),
+                InboundAnchors:     BuildInboundAnchorIndex(posts, attachedBoard),
                 LastReadPostNumber: attachedLastRead,
                 MarkPostNumber:     attachedMarkPostNumber,
                 OwnPostNumbers:     attachedOwnPostNumbers is null ? new HashSet<long>() : new HashSet<long>(attachedOwnPostNumbers),
@@ -144,67 +146,48 @@ public sealed class ThreadToolset : IAgentToolset
         IReadOnlySet<long>          OwnPostNumbers,
         bool                        HasReplyToOwn);
 
-    /// <summary>本文を 1 度ずつ走査して被アンカーマップ (target -> from[]) を作る。
-    /// アンカー範囲 (>>N-M) は両端含めて展開、リスト (>>N,M) は個別にカウント。</summary>
-    private static Dictionary<long, List<long>> BuildInboundAnchorIndex(IReadOnlyList<Post> posts)
+    /// <summary>被アンカーマップ (target -> from[]、from は出現順) を作る。返信関係はスレ表示と同じく次の和:
+    /// <list type="bullet">
+    /// <item><description>本文のアンカー (掲示板ごとの規則 <see cref="AnchorRuleRegistry"/>。5ch の <c>&gt;&gt;N-M</c>、ふたばの <c>&gt;No.N</c> / 添付ファイル名など)</description></item>
+    /// <item><description>構造上の返信先 (reddit の親コメント = <see cref="PostExtra.ParentNumber"/>)</description></item>
+    /// <item><description>「引用文を返信として扱う」が ON の掲示板では、引用文の引用先 (<see cref="QuoteReplyResolver"/>)</description></item>
+    /// </list>
+    /// 範囲アンカーは 50 件で打ち切る (荒らし対策)。同じレスから同じ先への参照は 1 票。</summary>
+    private Dictionary<long, List<long>> BuildInboundAnchorIndex(IReadOnlyList<Post> posts, Board board)
     {
+        var provider = BbsRegistry.ResolveOrDefault(board.Host);
+        var rules    = AnchorRuleRegistry.For(provider);
+
+        // 添付ファイル名 → それを添付したレス番号 (attachment 規則用。thread.js の attachmentIndex と同じく小文字・前後空白除去)
+        var attachments = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var p in posts)
+            if (p.Ext?.Attachments is { } list)
+                foreach (var a in list)
+                {
+                    var key = (a.FileName ?? "").Trim().ToLowerInvariant();
+                    if (key.Length > 0) attachments.TryAdd(key, p.Number);
+                }
+        long? ResolveAttachment(string name)
+            => attachments.TryGetValue(name.Trim().ToLowerInvariant(), out var n) ? n : null;
+
+        var quotes = _quoteRepliesOn(provider.Id)
+            ? QuoteReplyResolver.Resolve(posts, posts, rules)
+            : new Dictionary<long, HashSet<long>>();
+
         var map = new Dictionary<long, List<long>>();
         foreach (var p in posts)
         {
-            var body = CleanBody(p.Body);
-            foreach (var target in ExtractAnchorTargets(body))
+            var targets = rules.ExtractNumbers(p.Body, maxSpan: 50, attachmentResolver: ResolveAttachment);
+            if (p.Ext?.ParentNumber is long parent) targets.Add(parent);
+            if (quotes.TryGetValue(p.Number, out var q)) targets.UnionWith(q);
+            foreach (var target in targets.OrderBy(n => n))
             {
                 if (target <= 0 || target == p.Number) continue;
-                if (!map.TryGetValue(target, out var list))
-                {
-                    list = new List<long>();
-                    map[target] = list;
-                }
-                // 同一レス内に >>N と >>N が複数あっても 1 票扱い。
-                if (list.Count == 0 || list[^1] != p.Number) list.Add(p.Number);
+                if (!map.TryGetValue(target, out var from)) map[target] = from = new List<long>();
+                from.Add(p.Number);
             }
         }
         return map;
-    }
-
-    /// <summary>本文中のアンカー記法から参照先レス番号を全列挙する。
-    /// <c>&gt;&gt;5</c>, <c>&gt;&gt;5-7</c> (=5,6,7), <c>&gt;&gt;5,7,9</c> (=5,7,9) の混在に対応。
-    /// 範囲が異常に広い場合は安全のため 50/100 件で打ち切る。</summary>
-    private static IEnumerable<long> ExtractAnchorTargets(string body)
-    {
-        if (string.IsNullOrEmpty(body)) yield break;
-        foreach (Match m in AnchorRefRe.Matches(body))
-        {
-            var token = m.Groups[1].Value;
-            int emitted = 0;
-            foreach (var sub in token.Split(','))
-            {
-                var dash = sub.IndexOf('-');
-                if (dash < 0)
-                {
-                    if (long.TryParse(sub, out var n))
-                    {
-                        yield return n;
-                        if (++emitted >= 100) yield break;
-                    }
-                }
-                else
-                {
-                    if (long.TryParse(sub[..dash], out var a) &&
-                        long.TryParse(sub[(dash + 1)..], out var b))
-                    {
-                        var lo = Math.Min(a, b);
-                        var hi = Math.Max(a, b);
-                        var capped = Math.Min(hi, lo + 50);
-                        for (long n = lo; n <= capped; n++)
-                        {
-                            yield return n;
-                            if (++emitted >= 100) yield break;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// <summary>OpenAI 互換 <c>tools</c> パラメータに渡す配列を返す。</summary>
@@ -219,8 +202,10 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "get_thread_meta",
-                    description = "スレッドのメタ情報 (タイトル / 板 / 総レス数) と >>1 (オリジナルポスト) の全文を返す。" +
-                                  "thread_url 省略時は attached スレ。会話開始時にまず呼ぶのが推奨。",
+                    description = "スレッドのメタ情報 (タイトル / 掲示板 / 板 / 総レス数 / 最初と最後のレス番号 / 番号の振り方) と最初のレス (オリジナルポスト) の全文を返す。" +
+                                  "thread_url 省略時は attached スレ。会話開始時にまず呼ぶのが推奨。" +
+                                  "レス番号は掲示板により 1 始まりの連番 (5ch 等) とは限らず、4chan / ふたばは飛び飛びの大きな番号になるので、" +
+                                  "get_posts などで範囲を指定する前にここで first_post_number / last_post_number を確認すること。",
                     parameters  = new
                     {
                         type       = "object",
@@ -254,14 +239,16 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "get_posts",
-                    description = $"指定範囲のレスを取得する (1 始まり、両端含む)。1 度に最大 {MaxPostsPerCall} 件まで。" +
-                                  "thread_url 省略時は attached スレ。広い範囲を読みたい場合は何度かに分けて呼ぶこと。",
+                    description = $"レス番号の範囲 (両端含む) にあるレスを取得する。範囲は実際のレス番号で指定する " +
+                                  "(5ch 等は 1 始まりの連番、4chan / ふたばは飛び飛びの大きな番号。get_thread_meta の first_post_number / last_post_number を参照)。" +
+                                  $"1 度に返すのは最大 {MaxPostsPerCall} 件で、範囲内にそれより多くあれば先頭 {MaxPostsPerCall} 件と続きの開始番号 next_start を返す。" +
+                                  "thread_url 省略時は attached スレ。",
                     parameters  = new
                     {
                         type       = "object",
                         properties = new
                         {
-                            start      = new { type = "integer", description = "開始レス番号 (1 始まり、含む)" },
+                            start      = new { type = "integer", description = "開始レス番号 (含む)" },
                             end        = new { type = "integer", description = "終了レス番号 (含む)" },
                             thread_url = ThreadUrlParam(),
                         },
@@ -305,7 +292,7 @@ public sealed class ThreadToolset : IAgentToolset
                         type       = "object",
                         properties = new
                         {
-                            number     = new { type = "integer", description = "取得するレス番号 (1 始まり)" },
+                            number     = new { type = "integer", description = "取得するレス番号" },
                             thread_url = ThreadUrlParam(),
                         },
                         required = new[] { "number" },
@@ -318,13 +305,14 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "get_posts_by_id",
-                    description = "指定 ID (5ch の ID:XXXXXXXX) で書き込まれた全レスを返す (= 「同じ人物の発言一覧」)。thread_url 省略時は attached スレ。",
+                    description = "指定 ID (5ch の ID:XXXXXXXX、4chan / ふたばの ID 等) で書き込まれた全レスを返す (= 「同じ人物の発言一覧」)。" +
+                                  "reddit など ID の無い掲示板では投稿者名を渡すと名前の一致で返す。thread_url 省略時は attached スレ。",
                     parameters  = new
                     {
                         type       = "object",
                         properties = new
                         {
-                            id         = new { type = "string", description = "ID 文字列 (例: \"abc1234\"。大文字小文字区別)" },
+                            id         = new { type = "string", description = "ID 文字列 (例: \"abc1234\"。大文字小文字区別)。ID の無い掲示板では投稿者名" },
                             thread_url = ThreadUrlParam(),
                         },
                         required = new[] { "id" },
@@ -358,14 +346,15 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "find_replies_to",
-                    description = "指定レス番号 N にぶら下がっているレス (= 本文中で >>N / >>N-M / >>N,M で N を参照しているレス) を集めて返す。" +
-                                  "thread_url 省略時は attached スレ。",
+                    description = "指定レス番号 N への返信を集めて返す。返信の判定はスレ表示と同じで、本文のアンカー (書式は掲示板ごと: " +
+                                  "5ch 等の >>N / >>N-M / >>N,M、ふたばの >No.N や添付ファイル名の引用など)、reddit の親コメント、" +
+                                  "「引用文を返信として扱う」が ON の掲示板 (既定はふたば) では >引用文 の引用元。thread_url 省略時は attached スレ。",
                     parameters  = new
                     {
                         type       = "object",
                         properties = new
                         {
-                            number     = new { type = "integer", description = "対象レス番号 (1 始まり)" },
+                            number     = new { type = "integer", description = "対象レス番号" },
                             limit      = new { type = "integer", description = $"返す最大件数 (既定 {DefaultRepliesLimit}, 上限 {MaxRepliesLimit})" },
                             thread_url = ThreadUrlParam(),
                         },
@@ -379,7 +368,7 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "find_popular_posts",
-                    description = "被アンカー数 (= 他レスから >>N で参照された回数) の多いレスを上位から返す。" +
+                    description = "被アンカー数 (= 他レスから返信された数。判定は find_replies_to と同じ) の多いレスを上位から返す。" +
                                   "range_start / range_end で範囲を絞ると「新着の中で人気」「特定区間で人気」を取れる。thread_url 省略時は attached スレ。",
                     parameters  = new
                     {
@@ -387,8 +376,8 @@ public sealed class ThreadToolset : IAgentToolset
                         properties = new
                         {
                             top_k       = new { type = "integer", description = $"上位何件返すか (既定 {DefaultPopularTopK}, 上限 {MaxPopularTopK})" },
-                            range_start = new { type = "integer", description = "対象範囲の開始レス番号 (省略時 1)" },
-                            range_end   = new { type = "integer", description = "対象範囲の終了レス番号 (省略時 末尾)" },
+                            range_start = new { type = "integer", description = "対象範囲の開始レス番号 (省略時 スレの最初のレス)" },
+                            range_end   = new { type = "integer", description = "対象範囲の終了レス番号 (省略時 スレの最後のレス)" },
                             min_count   = new { type = "integer", description = "被アンカー数の最小しきい値 (既定 1)。" },
                             thread_url  = ThreadUrlParam(),
                         },
@@ -404,22 +393,25 @@ public sealed class ThreadToolset : IAgentToolset
                 function = new
                 {
                     name        = "list_boards",
-                    description = "アプリにロード済みの板一覧 (bbsmenu) を返す。各エントリに board_url / category が含まれる。\n" +
+                    description = "アプリにロード済みの板一覧を返す。板一覧を持つ掲示板 (5ch / まちBBS / エッヂ / 4chan / ふたば 等) の板が対象で、" +
+                                  "各エントリに site (掲示板名) / board_url / category が含まれる。site で掲示板を絞れる。" +
+                                  "板一覧を持たない掲示板 (したらば / reddit) の板はここに出ないので search_boards を使う。\n" +
                                   "**呼び分けを意識すること**:\n" +
                                   "(a) **単純な板名マッチで十分** → keyword 指定 (例: 「ニュース板を開いて」「将棋板を見せて」)。\n" +
                                   "(b) **テーマ / ジャンル絞り込みで複数板に跨りそう** → **keyword 省略**で全板取得 (scan モード)。" +
-                                  "5ch の板はカテゴリ別に整理されており、漫画関連だけで「マンガ」「コミック」「漫画作品」「漫画サロン」など複数、" +
+                                  "板はカテゴリ別に整理されており、5ch では漫画関連だけで「マンガ」「コミック」「漫画作品」「漫画サロン」など複数、" +
                                   "アニメ関連も「アニメ」「アニメ実況」「声優」「アニソン」など複数の板が存在する。" +
                                   "「ダン飯関連スレを探す」のようなテーマ検索では、漫画系板群 + アニメ系板群を **複数まとめて pick して** から、" +
                                   "各板に対して list_threads (scan モード) を回すべき。" +
-                                  "scan モードでは category 別にグルーピングされた構造で返されるので、" +
+                                  "scan モードでは site + category 別にグルーピングされた構造で返されるので、" +
                                   "カテゴリ単位で関連を pick しやすい (= カテゴリ「漫画」「アニメ」「アニメ実況」全体をまとめて pick できる)。" +
-                                  $"keyword 省略時の既定取得数は {BoardsScanDefaultLimit} 件 (= 5ch 全板)、上限 {MaxListLimit} 件。",
+                                  $"keyword 省略時の既定取得数は {BoardsScanDefaultLimit} 件、上限 {MaxListLimit} 件。",
                     parameters  = new
                     {
                         type       = "object",
                         properties = new
                         {
+                            site    = new { type = "string",  description = $"掲示板で絞る (省略時は全掲示板)。指定できる値: {SiteList()}" },
                             keyword = new { type = "string",  description = "板名・カテゴリ名の部分一致フィルタ (単一・大小文字無視 + 全角/半角ゆれ吸収)。テーマ検索で複数板候補を見たい場合は省略すること。" },
                             keywords = new { type = "array", description = "複数キーワードで板名/カテゴリを絞る (既定 OR = いずれか一致)。", items = new { type = "string" } },
                             match_all = new { type = "boolean", description = "true で AND。既定 false (OR)。" },
@@ -434,8 +426,32 @@ public sealed class ThreadToolset : IAgentToolset
                 type     = "function",
                 function = new
                 {
+                    name        = "search_boards",
+                    description = "板一覧を持たない掲示板 (したらば / reddit) の板をキーワードで検索する (各掲示板の板検索を使う。ネットワークアクセスあり)。" +
+                                  "したらばは日本語の板名・説明、reddit は subreddit 名・説明 (英語が中心) で探す。" +
+                                  "複数キーワードは keywords 配列で渡すと語ごとに検索して結果をまとめる。返値の board_url は list_threads / open_board_in_app にそのまま渡せる。" +
+                                  "5ch など板一覧を持つ掲示板の板は list_boards で探すこと。",
+                    parameters  = new
+                    {
+                        type       = "object",
+                        properties = new
+                        {
+                            keyword  = new { type = "string", description = "検索キーワード (単一)" },
+                            keywords = new { type = "array",  description = "複数キーワード (語ごとに検索して結果を合わせる)", items = new { type = "string" } },
+                            site     = new { type = "string", description = $"検索する掲示板 (省略時は板検索できる全掲示板)。指定できる値: {string.Join(", ", BbsRegistry.All.Where(p => p.SupportsBoardSearch).Select(p => $"{p.Id} ({p.DisplayName})"))}" },
+                            limit    = new { type = "integer", description = $"1 掲示板・1 キーワードあたりの最大件数 (既定 {DefaultListLimit}, 上限 {MaxBoardSearchLimit})" },
+                        },
+                        required = Array.Empty<string>(),
+                    },
+                },
+            },
+            new
+            {
+                type     = "function",
+                function = new
+                {
                     name        = "list_threads",
-                    description = "指定した板のスレッド一覧を返す (subject.txt ベース)。" +
+                    description = "指定した板のスレッド一覧を返す (アプリのスレ一覧と同じもの。ローカルに保存済みならそれを使う)。" +
                                   "各スレに post_count (レス数) と momentum (勢い = 1 日あたりレス数の概算) が付く。" +
                                   "「勢いが高い / 伸びているスレを探して」のような依頼には sort=\"momentum\" を指定して上位を取る。" +
                                   "**2 つの使い方を意識して呼び分けること**:\n" +
@@ -452,12 +468,12 @@ public sealed class ThreadToolset : IAgentToolset
                         type       = "object",
                         properties = new
                         {
-                            board_url = new { type = "string",  description = "対象板の URL (list_boards の board_url をそのまま渡せる)" },
+                            board_url = new { type = "string",  description = "対象板の URL (list_boards / search_boards の board_url をそのまま渡せる)" },
                             keyword   = new { type = "string",  description = "スレタイの部分一致フィルタ (単一)。複数語で探すなら keywords を使う。大小文字無視 + 全角/半角ゆれ吸収。曖昧 / 略称 / ジャンル判定が必要で取りこぼしを避けたいなら省略 (= AI が手動で取捨選択する scan モード)。" },
                             keywords  = new { type = "array", description = "**複数キーワードでのスレタイ検索 (既定 OR = いずれか含めばヒット)。** 例: 作品のキャラ名を並べて関連スレを拾う [\"ダン飯\",\"マルシル\",\"ライオス\",\"センシ\"]。", items = new { type = "string" } },
                             match_all = new { type = "boolean", description = "true で AND (全キーワードをスレタイに含むもののみ)。既定 false (OR)。" },
                             limit     = new { type = "integer", description = $"返す最大件数 (keyword/keywords 指定時の既定 {DefaultListLimit}, 省略時の既定 {ThreadsScanDefaultLimit}, 上限 {MaxListLimit})" },
-                            sort      = new { type = "string",  description = "並び順。\"default\" (subject.txt 順) / \"momentum\" (勢い順 = 1 日あたりレス数の多い順) / \"post_count\" (レス数の多い順)。勢いの高いスレを上位に取りたいときは \"momentum\"。" },
+                            sort      = new { type = "string",  description = "並び順。\"default\" (板の既定の並び) / \"momentum\" (勢い順 = 1 日あたりレス数の多い順) / \"post_count\" (レス数の多い順)。勢いの高いスレを上位に取りたいときは \"momentum\"。" },
                         },
                         required = new[] { "board_url" },
                     },
@@ -479,7 +495,7 @@ public sealed class ThreadToolset : IAgentToolset
                         type       = "object",
                         properties = new
                         {
-                            thread_url = new { type = "string", description = "対象スレッドの URL。**必ず list_threads / search_posts 等のツール結果から取得した実在の URL を使う**こと。形式は https://<host>/test/read.cgi/<板dir>/<数字key>/ で、key は数字のみ。\"thread_id_1\" のような placeholder や記憶からの推測 URL は絶対禁止 (= 不正 URL は parse エラーになる)。" },
+                            thread_url = new { type = "string", description = "対象スレッドの URL。**必ず list_threads / get_thread_meta 等のツール結果から取得した実在の URL を使う**こと。URL の形式は掲示板ごとに違う (5ch: https://<host>/test/read.cgi/<板>/<key>/ など) ので、ツール結果の thread_url をそのまま渡す。\"thread_id_1\" のような placeholder や記憶からの推測 URL は絶対禁止 (= 不正 URL は parse エラーになる)。" },
                         },
                         required = new[] { "thread_url" },
                     },
@@ -499,7 +515,7 @@ public sealed class ThreadToolset : IAgentToolset
                         type       = "object",
                         properties = new
                         {
-                            board_url = new { type = "string", description = "対象板の URL (https://<host>/<dir>/)" },
+                            board_url = new { type = "string", description = "対象板の URL (list_boards / search_boards / list_threads の board_url をそのまま渡す)" },
                         },
                         required = new[] { "board_url" },
                     },
@@ -551,7 +567,8 @@ public sealed class ThreadToolset : IAgentToolset
     private static object ThreadUrlParam() => new
     {
         type = "string",
-        description = "対象スレッドの URL (省略時は attached スレッド)。他スレを読みたいときに渡す。例: https://news.5ch.io/test/read.cgi/news/1234567890/",
+        description = "対象スレッドの URL (省略時は attached スレッド)。他スレを読みたいときに渡す。list_threads 等のツール結果の thread_url をそのまま使う " +
+                      "(形式は掲示板ごとに違う。例: 5ch https://news.5ch.io/test/read.cgi/news/1234567890/)。",
     };
 
     // ---- 複数キーワード / OR・AND / あいまい (NFKC + 大小無視) マッチの共通ヘルパ ----
@@ -637,6 +654,7 @@ public sealed class ThreadToolset : IAgentToolset
                 "find_popular_posts"  => await FindPopularPostsAsync(argumentsJson, ct).ConfigureAwait(false),
                 "get_my_posts"        => GetMyPosts(argumentsJson),
                 "list_boards"         => ListBoards(argumentsJson),
+                "search_boards"       => await SearchBoardsAsync(argumentsJson, ct).ConfigureAwait(false),
                 "list_threads"        => await ListThreadsAsync(argumentsJson, ct).ConfigureAwait(false),
                 "open_thread_in_app"      => await OpenThreadInAppAsync(argumentsJson).ConfigureAwait(false),
                 "open_board_in_app"       => await OpenBoardInAppAsync(argumentsJson).ConfigureAwait(false),
@@ -683,7 +701,7 @@ public sealed class ThreadToolset : IAgentToolset
                     Title:              title,
                     BoardName:          board.BoardName ?? board.DirectoryName,
                     Posts:              posts,
-                    InboundAnchors:     BuildInboundAnchorIndex(posts),
+                    InboundAnchors:     BuildInboundAnchorIndex(posts, board),
                     LastReadPostNumber: null,
                     MarkPostNumber:     null,
                     OwnPostNumbers:     new HashSet<long>(),
@@ -714,7 +732,11 @@ public sealed class ThreadToolset : IAgentToolset
             board_url   = ctx.Board.Url,
             thread_url  = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(ctx.Board.Host)
                               .ThreadUrl(ctx.Board.Host, ctx.Board.DirectoryName, ctx.ThreadKey),
+            site        = BbsRegistry.ResolveOrDefault(ctx.Board.Host).DisplayName,
             total_posts = ctx.Posts.Count,
+            first_post_number = op?.Number,
+            last_post_number  = ctx.Posts.Count > 0 ? ctx.Posts[^1].Number : (long?)null,
+            numbering   = NumberingNote(ctx),
             op = op is null ? null : new
             {
                 n    = op.Number,
@@ -740,8 +762,8 @@ public sealed class ThreadToolset : IAgentToolset
         {
             newStart = mark;
             newEnd   = ctx.Posts[^1].Number;
-            if (newEnd.Value >= newStart.Value)
-                newCount = (int)(newEnd.Value - newStart.Value + 1);
+            // 番号の差ではなく実在するレスの数で数える (4chan / ふたばは番号が飛ぶ)
+            newCount = ctx.Posts.Count(p => p.Number >= mark);
         }
 
         string hint;
@@ -782,27 +804,42 @@ public sealed class ThreadToolset : IAgentToolset
 
         if (ctx.Posts.Count == 0) return JsonSerializer.Serialize(new { posts = Array.Empty<object>() }, JsonOpts);
 
-        var lo = Math.Max(1, start);
-        var hi = Math.Min(ctx.Posts.Count, end);
-        if (hi < lo)
-            return ErrorJson($"範囲が空です (start={start}, end={end}, total={ctx.Posts.Count})");
-        if (hi - lo + 1 > MaxPostsPerCall)
-            return ErrorJson($"範囲が広すぎます ({hi - lo + 1} 件)。1 度に取れるのは {MaxPostsPerCall} 件まで。分割して呼んでください");
+        // 範囲はレス番号そのもので指定する。番号は掲示板により飛び番 (4chan / ふたば) なので、
+        // 件数は「範囲内に実在するレスの数」で数え、多すぎれば先頭から上限件数で切って続きの開始番号を返す。
+        var lo = Math.Min(start, end);
+        var hi = Math.Max(start, end);
+        var inRange = ctx.Posts.Where(p => p.Number >= lo && p.Number <= hi).ToList();
+        if (inRange.Count == 0)
+            return ErrorJson($"範囲内にレスがありません (start={start}, end={end})。{NumberingNote(ctx)}");
 
-        var slice = new List<object>((int)(hi - lo + 1));
-        foreach (var p in ctx.Posts)
+        var truncated = inRange.Count > MaxPostsPerCall;
+        var slice = inRange.Take(MaxPostsPerCall).Select(p => (object)new
         {
-            if (p.Number < lo || p.Number > hi) continue;
-            slice.Add(new
-            {
-                n    = p.Number,
-                name = p.Name,
-                id   = p.Id,
-                date = p.DateText,
-                body = CleanBody(p.Body),
-            });
-        }
-        return JsonSerializer.Serialize(new { posts = slice }, JsonOpts);
+            n    = p.Number,
+            name = p.Name,
+            id   = p.Id,
+            date = p.DateText,
+            body = CleanBody(p.Body),
+        }).ToList();
+        if (!truncated) return JsonSerializer.Serialize(new { posts = slice }, JsonOpts);
+        return JsonSerializer.Serialize(new
+        {
+            posts      = slice,
+            truncated  = true,
+            next_start = inRange[MaxPostsPerCall].Number,
+            note       = $"範囲内の {inRange.Count} 件のうち先頭 {MaxPostsPerCall} 件を返した。続きは start={inRange[MaxPostsPerCall].Number} で呼ぶ。",
+        }, JsonOpts);
+    }
+
+    /// <summary>そのスレのレス番号の振り方の説明 (LLM が「1 始まりの連番」と決めつけないよう、メタ情報やエラーに添える)。</summary>
+    private static string NumberingNote(ThreadContext ctx)
+    {
+        if (ctx.Posts.Count == 0) return "レスがありません。";
+        var first = ctx.Posts[0].Number;
+        var last  = ctx.Posts[^1].Number;
+        return last - first + 1 == ctx.Posts.Count
+            ? $"レス番号は {first}〜{last} の連番 (全 {ctx.Posts.Count} 件)。"
+            : $"このスレのレス番号は連番ではない ({first}〜{last} の範囲に飛び飛びで全 {ctx.Posts.Count} 件)。範囲指定には実際のレス番号を使うこと。";
     }
 
     private async Task<string> SearchPostsAsync(string argsJson, CancellationToken ct)
@@ -910,8 +947,15 @@ public sealed class ThreadToolset : IAgentToolset
         var (ctx, err) = await ResolveContextAsync(args, ct).ConfigureAwait(false);
         if (ctx is null) return ErrorJson(err!);
 
-        var matches = ctx.Posts
-            .Where(p => string.Equals(p.Id, id, StringComparison.Ordinal))
+        // ID で一致させる。ID の無い掲示板 (reddit 等) や ID の無いレスしか無い場合は投稿者名で一致させる。
+        var byId    = ctx.Posts.Where(p => string.Equals(p.Id, id, StringComparison.Ordinal)).ToList();
+        var matchBy = "id";
+        if (byId.Count == 0)
+        {
+            byId    = ctx.Posts.Where(p => string.IsNullOrEmpty(p.Id) && string.Equals(p.Name, id, StringComparison.Ordinal)).ToList();
+            matchBy = "name";
+        }
+        var matches = byId
             .Select(p => new
             {
                 n    = p.Number,
@@ -924,6 +968,7 @@ public sealed class ThreadToolset : IAgentToolset
         return JsonSerializer.Serialize(new
         {
             id,
+            matched_by  = matchBy,
             total_posts = matches.Length,
             posts = matches,
         }, JsonOpts);
@@ -987,9 +1032,10 @@ public sealed class ThreadToolset : IAgentToolset
         var (ctx, err) = await ResolveContextAsync(args, ct).ConfigureAwait(false);
         if (ctx is null) return ErrorJson(err!);
 
+        // 範囲の既定はスレの最初〜最後のレス番号 (番号は掲示板により飛び番なので件数では決めない)
         var topK       = DefaultPopularTopK;
-        long rangeStart = 1;
-        long rangeEnd   = ctx.Posts.Count;
+        long rangeStart = ctx.Posts.Count > 0 ? ctx.Posts[0].Number : 1;
+        long rangeEnd   = ctx.Posts.Count > 0 ? ctx.Posts[^1].Number : 0;
         var minCount   = 1;
 
         if (args.ValueKind == JsonValueKind.Object)
@@ -999,7 +1045,7 @@ public sealed class ThreadToolset : IAgentToolset
             if (args.TryGetProperty("range_start", out var rsEl) && TryGetLongLoose(rsEl, out var rs))
                 rangeStart = Math.Max(1, rs);
             if (args.TryGetProperty("range_end", out var reEl) && TryGetLongLoose(reEl, out var re))
-                rangeEnd = Math.Min(ctx.Posts.Count, re);
+                rangeEnd = re;
             if (args.TryGetProperty("min_count", out var mcEl) && TryGetIntLoose(mcEl, out var mc))
                 minCount = Math.Max(0, mc);
         }
@@ -1175,14 +1221,27 @@ public sealed class ThreadToolset : IAgentToolset
             limit = Math.Clamp(lim, 1, MaxListLimit);
         }
 
-        var all = _dataLoader.ListBoardsSnapshot();
-        IEnumerable<Board> filtered = all;
+        // 掲示板の絞り込み (提供者 ID または表示名)。不明な値はエラーにして指定できる値を返す。
+        IBbsProvider? site = null;
+        if (TryGetSiteArg(args, out var siteArg))
+        {
+            site = FindSite(siteArg);
+            if (site is null) return ErrorJson($"site \"{siteArg}\" は不明です。指定できる値: {SiteList()}");
+        }
+
+        // 板と、その板の掲示板 (提供者)。板一覧を持つ掲示板 (5ch / まちBBS / エッヂ / 4chan / ふたば) の板が混在している。
+        var all = _dataLoader.ListBoardsSnapshot()
+            .Select(b => (Board: b, Site: BbsRegistry.ResolveOrDefault(b.Host)))
+            .Where(x => site is null || x.Site.Id == site.Id)
+            .ToList();
+        var filtered = all.AsEnumerable();
         if (!isScanMode)
         {
-            // 板名 / カテゴリ / dir のいずれかに一致すれば、その語を「含む」とみなす (OR/AND は語間)。
-            filtered = all.Where(b =>
+            // 板名 / カテゴリ / dir / 掲示板名のいずれかに一致すれば、その語を「含む」とみなす (OR/AND は語間)。
+            filtered = all.Where(x =>
             {
-                var fields = NormalizeForSearch((b.BoardName ?? "") + "\n" + (b.CategoryName ?? "") + "\n" + (b.DirectoryName ?? ""));
+                var b = x.Board;
+                var fields = NormalizeForSearch((b.BoardName ?? "") + "\n" + (b.CategoryName ?? "") + "\n" + (b.DirectoryName ?? "") + "\n" + x.Site.DisplayName);
                 return MatchesKeywords(fields, nkw, matchAll);
             });
         }
@@ -1191,32 +1250,38 @@ public sealed class ThreadToolset : IAgentToolset
         var matched   = isScanMode ? totalAll : filtered.Count();
         var truncated = picked.Length < matched;
 
+        // 板一覧を持たない掲示板 (したらば / reddit) はここに出ないので、search_boards を案内する
+        var searchOnly = BbsRegistry.All.Where(p => p.SupportsBoardSearch && (site is null || p.Id == site.Id)).ToList();
+        var searchHint = searchOnly.Count == 0 ? ""
+            : $" {string.Join(" / ", searchOnly.Select(p => p.DisplayName))} の板は板一覧が無いのでここには出ない。それらの板は search_boards で探すこと。";
+
         // scan モード時のヒント: AI に「カテゴリ単位で関連を pick、漏れなく複数カテゴリを跨いで」と促す。
         var hint = isScanMode
-            ? $"スキャンモード (= keyword 無し)。全 {totalAll} 板中 {picked.Length} 件をカテゴリ別にグルーピングして返した。" +
+            ? $"スキャンモード (= keyword 無し)。全 {totalAll} 板中 {picked.Length} 件を掲示板 (site) とカテゴリ別にグルーピングして返した。" +
               "**categories の各 category 名を見て、テーマに関連するカテゴリを複数まとめて pick すること**。" +
-              "例: 「ダン飯関連」→ category=「漫画」「漫画作品」「漫画系」「アニメ」「アニメ実況」「声優」など漫画/アニメ系を全部 pick。" +
+              "例: 「ダン飯関連」→ 5ch の category=「漫画」「漫画作品」「アニメ」「アニメ実況」「声優」など漫画/アニメ系を全部 pick。" +
               "「ソニー製品」→ category=「家電」「AV機器」「PCハードウェア」「ゲーム機」「デジカメ」など複数の家電/ゲーム系を全部 pick。" +
               "1 カテゴリ 1 板に絞らない (= 同テーマでも複数の category や複数の板に分散しているのが普通)。" +
-              "返値の categories は CategoryOrder 順で並んでいる。" +
-              (truncated ? $" 全 {matched} 件中 {picked.Length} 件のみ。続きが必要なら limit={MaxListLimit} で再取得可。" : "")
-            : $"キーワード検索モード (\"{keywordLabel}\")。テーマ検索で複数板候補を見たい場合は keyword/keywords 省略で再取得すること。";
+              "英語圏の話題なら 4chan の板も候補になる。" +
+              (truncated ? $" 全 {matched} 件中 {picked.Length} 件のみ。続きが必要なら limit={MaxListLimit} で再取得可。" : "") +
+              searchHint
+            : $"キーワード検索モード (\"{keywordLabel}\")。テーマ検索で複数板候補を見たい場合は keyword/keywords 省略で再取得すること。" + searchHint;
 
         if (isScanMode)
         {
-            // scan モード: カテゴリ別にグルーピングして返す。各カテゴリ内では出現順 (= bbsmenu の元順序) を維持。
+            // scan モード: 掲示板 + カテゴリ別にグルーピングして返す。各カテゴリ内では出現順 (= 板一覧の元順序) を維持。
             var grouped = picked
-                .GroupBy(b => string.IsNullOrEmpty(b.CategoryName) ? "(未分類)" : b.CategoryName)
-                .OrderBy(g => g.Min(b => b.CategoryOrder))
+                .GroupBy(x => (Site: x.Site.DisplayName, Category: string.IsNullOrEmpty(x.Board.CategoryName) ? "(未分類)" : x.Board.CategoryName))
                 .Select(g => new
                 {
-                    category = g.Key,
+                    site     = g.Key.Site,
+                    category = g.Key.Category,
                     count    = g.Count(),
-                    boards   = g.Select(b => new
+                    boards   = g.Select(x => new
                     {
-                        name      = b.BoardName,
-                        dir       = b.DirectoryName,
-                        board_url = b.Url,
+                        name      = x.Board.BoardName,
+                        dir       = x.Board.DirectoryName,
+                        board_url = x.Board.Url,
                     }).ToArray(),
                 })
                 .ToArray();
@@ -1236,12 +1301,13 @@ public sealed class ThreadToolset : IAgentToolset
         }
 
         // keyword モード: 平坦リスト (= 検索結果は数件〜数十件と想定、グルーピング不要)。
-        var boards = picked.Select(b => new
+        var boards = picked.Select(x => new
         {
-            name      = b.BoardName,
-            dir       = b.DirectoryName,
-            category  = b.CategoryName,
-            board_url = b.Url,
+            site      = x.Site.DisplayName,
+            name      = x.Board.BoardName,
+            dir       = x.Board.DirectoryName,
+            category  = x.Board.CategoryName,
+            board_url = x.Board.Url,
         }).ToArray();
 
         return JsonSerializer.Serialize(new
@@ -1257,6 +1323,91 @@ public sealed class ThreadToolset : IAgentToolset
             boards,
         }, JsonOpts);
     }
+
+    /// <summary>板一覧を持たない掲示板 (したらば / reddit) の板をキーワードで検索する (各掲示板の板検索。ネットワークを使う)。
+    /// 複数キーワードはそれぞれ検索して、同じ板は 1 件にまとめる。</summary>
+    private async Task<string> SearchBoardsAsync(string argsJson, CancellationToken ct)
+    {
+        TryParseObject(argsJson, out var args);
+        var keywords = CollectKeywords(args);
+        if (keywords.Count == 0) return ErrorJson("keyword または keywords が指定されていません");
+
+        var searchable = BbsRegistry.All.Where(p => p.SupportsBoardSearch).ToList();
+        var targets    = searchable;
+        if (TryGetSiteArg(args, out var siteArg))
+        {
+            var site = FindSite(siteArg);
+            if (site is null || !site.SupportsBoardSearch)
+                return ErrorJson($"site \"{siteArg}\" は板検索に対応していません。指定できる値: {string.Join(", ", searchable.Select(p => $"{p.Id} ({p.DisplayName})"))}。" +
+                                 "板一覧を持つ掲示板の板は list_boards で探すこと。");
+            targets = new List<IBbsProvider> { site };
+        }
+
+        var limit = DefaultListLimit;
+        if (args.ValueKind == JsonValueKind.Object &&
+            args.TryGetProperty("limit", out var limEl) && TryGetIntLoose(limEl, out var lim))
+            limit = Math.Clamp(lim, 1, MaxBoardSearchLimit);
+
+        var boards = new List<object>();
+        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var errors = new List<string>();
+        foreach (var p in targets)
+            foreach (var kw in keywords)
+            {
+                try
+                {
+                    var hits = await _dataLoader.SearchBoardsAsync(p, kw, ct).ConfigureAwait(false);
+                    foreach (var h in hits.Take(limit))
+                    {
+                        if (!seen.Add(h.Board.Url)) continue;
+                        boards.Add(new
+                        {
+                            site        = p.DisplayName,
+                            keyword     = kw,
+                            name        = h.Board.BoardName,
+                            description = h.Description,
+                            members     = h.Members,
+                            board_url   = h.Board.Url,
+                        });
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    errors.Add($"{p.DisplayName}「{kw}」: {ex.Message}");
+                }
+            }
+
+        return JsonSerializer.Serialize(new
+        {
+            keywords,
+            sites    = targets.Select(p => p.DisplayName).ToArray(),
+            returned = boards.Count,
+            errors,
+            hint     = boards.Count > 0
+                ? "board_url を list_threads / open_board_in_app にそのまま渡せる。"
+                : "見つからなかった。別の語 (英語名・略称・関連語など) で再検索する。",
+            boards,
+        }, JsonOpts);
+    }
+
+    /// <summary>site 引数 (空でない文字列) を取り出す。</summary>
+    private static bool TryGetSiteArg(JsonElement args, out string site)
+    {
+        site = "";
+        if (args.ValueKind != JsonValueKind.Object ||
+            !args.TryGetProperty("site", out var el) || el.ValueKind != JsonValueKind.String) return false;
+        site = (el.GetString() ?? "").Trim();
+        return site.Length > 0;
+    }
+
+    /// <summary>site 引数 (提供者 ID または表示名、大小無視) から掲示板を引く。</summary>
+    private static IBbsProvider? FindSite(string s)
+        => BbsRegistry.All.FirstOrDefault(p => string.Equals(p.Id, s, StringComparison.OrdinalIgnoreCase)
+                                            || string.Equals(p.DisplayName, s, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>site 引数に指定できる値の一覧 (説明文・エラー用)。</summary>
+    private static string SiteList() => string.Join(", ", BbsRegistry.All.Select(p => $"{p.Id} ({p.DisplayName})"));
 
     private async Task<string> ListThreadsAsync(string argsJson, CancellationToken ct)
     {
@@ -1288,6 +1439,9 @@ public sealed class ThreadToolset : IAgentToolset
 
         var board   = _dataLoader.ResolveBoard(host, dir);
         var threads = await _dataLoader.ListThreadsAsync(board, ct).ConfigureAwait(false);
+        var provider = BbsRegistry.ResolveOrDefault(board.Host);
+        // スナップショット取得型 (reddit / 4chan / ふたば) の key はレス番号や英数字 ID で、作成時刻ではない
+        var keyIsEpoch = provider is not ISnapshotThreadProvider;
 
         IEnumerable<ThreadInfo> filtered = threads;
         if (!isScanMode)
@@ -1301,7 +1455,7 @@ public sealed class ThreadToolset : IAgentToolset
 
         IEnumerable<ThreadInfo> ordered = sortMode switch
         {
-            "momentum"   => matchedList.OrderByDescending(t => ComputeMomentum(t.Key, t.PostCount)),
+            "momentum"   => matchedList.OrderByDescending(t => ComputeMomentum(t, keyIsEpoch)),
             "post_count" => matchedList.OrderByDescending(t => t.PostCount),
             _            => matchedList,   // default = subject.txt 順 (= 板の既定の並び)
         };
@@ -1315,7 +1469,7 @@ public sealed class ThreadToolset : IAgentToolset
             key         = t.Key,
             title       = t.Title,
             post_count  = t.PostCount,
-            momentum    = ComputeMomentum(t.Key, t.PostCount),   // 勢い = 1 日あたりレス数の概算
+            momentum    = ComputeMomentum(t, keyIsEpoch),   // 勢い = 1 日あたりレス数の概算
             order       = t.Order,
             thread_url  = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host)
                               .ThreadUrl(board.Host, board.DirectoryName, t.Key),
@@ -1332,9 +1486,12 @@ public sealed class ThreadToolset : IAgentToolset
 
         return JsonSerializer.Serialize(new
         {
+            site      = provider.DisplayName,
             board_url = board.Url,
             board     = board.BoardName ?? board.DirectoryName,
             total_threads = totalAll,
+            // reddit のように一覧が板の一部 (最新 / 人気の一部) しか返さない掲示板
+            list_note = provider.ThreadListIsComplete ? null : "この掲示板のスレ一覧は板の全スレではなく一部 (並び順の上位) だけ。見つからないスレがあっても板に無いとは限らない。",
             matched,
             returned = list.Length,
             truncated,
@@ -1346,12 +1503,16 @@ public sealed class ThreadToolset : IAgentToolset
         }, JsonOpts);
     }
 
-    /// <summary>勢い (= 1 日あたりレス数の概算) を計算する。スレ <paramref name="key"/> は作成 epoch(秒)。
+    /// <summary>勢い (= 1 日あたりレス数の概算) を計算する。作成時刻は <see cref="ThreadInfo.CreatedEpoch"/>
+    /// (4chan / ふたば / reddit 等、key が epoch でない掲示板) を優先し、無ければ 5ch 系 (<paramref name="keyIsEpoch"/>) に限り key を epoch とみなす。
     /// 勢い = post_count ÷ 経過日数。作成直後の異常値を避けるため経過は最低 1 分でクランプする。
-    /// key が数値でない / 取得不能なら 0 を返す。</summary>
-    private static int ComputeMomentum(string key, int postCount)
+    /// 作成時刻が取れなければ 0 を返す。</summary>
+    private static int ComputeMomentum(ThreadInfo t, bool keyIsEpoch)
     {
-        if (!long.TryParse(key, out var createdSec) || createdSec <= 0) return 0;
+        var postCount = t.PostCount;
+        long createdSec;
+        if (t.CreatedEpoch is long created && created > 0) createdSec = created;
+        else if (!keyIsEpoch || !long.TryParse(t.Key, out createdSec) || createdSec <= 0) return 0;
         // 5ch お知らせスレは unixtime が 9 で始まる擬似的な将来日付 (2260 年代 = 9e9 秒以降)
         // で建てられる。勢い計算上はゼロ扱いにする。9 桁の 9xxxxxxxx (1998 年代) はここでは除外。
         if (createdSec >= 9_000_000_000L) return 0;
@@ -1505,7 +1666,7 @@ public sealed class ThreadToolset : IAgentToolset
                 u.Contains("yyyy",       StringComparison.OrdinalIgnoreCase));
 
             var errMsg = "有効なスレッドエントリが 1 件もありません。" +
-                         "正しい thread_url の形式は https://<host>/test/read.cgi/<板dir>/<数字key>/ で、key は数字のみ。" +
+                         "thread_url には list_threads の結果の thread_url をそのまま使うこと (形式は掲示板ごとに違う)。" +
                          (invalids.Count > 0 ? $" 受け取って解釈できなかった値の例: [{string.Join(", ", invalids.Take(3))}]" : "");
 
             if (suspiciousPlaceholder)
@@ -1513,12 +1674,11 @@ public sealed class ThreadToolset : IAgentToolset
                 errMsg += " ⚠ URL に \"thread_id\" のような placeholder 文字列が含まれています。" +
                           "**list_threads を呼ばずに想像で URL を作っていませんか?** " +
                           "必ず先に list_threads(board_url=...) を呼んで実在のスレ一覧を取得し、" +
-                          "その結果の thread_url をそのまま使ってください。" +
-                          "scheme は /test/read.cgi/ を必ず含み、key は 10 桁前後の epoch 数字です。";
+                          "その結果の thread_url をそのまま使ってください。";
             }
             else
             {
-                errMsg += " URL に /test/read.cgi/ が含まれているか、key が数字か再確認してください。";
+                errMsg += " ツール結果の URL を書き換えずに渡しているか再確認してください。";
             }
             return ErrorJson(errMsg);
         }
@@ -1548,7 +1708,9 @@ public sealed class ThreadToolset : IAgentToolset
         if (_attached is null) return "";
         var ctx = _attached;
         var sb = new StringBuilder();
+        sb.Append("- 掲示板: ").AppendLine(BbsRegistry.ResolveOrDefault(ctx.Board.Host).DisplayName);
         sb.Append("- 総レス数: ").Append(ctx.Posts.Count).AppendLine(" 件");
+        sb.Append("- レス番号: ").AppendLine(NumberingNote(ctx));
         if (ctx.LastReadPostNumber is long lr)
             sb.Append("- 既読位置: >>").AppendLine(lr.ToString());
         else
@@ -1559,7 +1721,7 @@ public sealed class ThreadToolset : IAgentToolset
             var newEnd = ctx.Posts[^1].Number;
             if (newEnd >= mark)
                 sb.Append("- 新着レス: >>").Append(mark).Append('-').Append(newEnd)
-                  .Append(" (").Append(newEnd - mark + 1).AppendLine(" 件) [このアプリ起動以降の差分取得で増えた範囲]");
+                  .Append(" (").Append(ctx.Posts.Count(p => p.Number >= mark)).AppendLine(" 件) [このアプリ起動以降の差分取得で増えた範囲]");
             else
                 sb.AppendLine("- 新着レス: 範囲不整合 (mark > tail)");
         }

@@ -582,7 +582,8 @@ public sealed partial class MainViewModel
                 dataLoader:               dataLoader,
                 openThreadInAppAsync:     openThread,
                 openBoardInAppAsync:      openBoard,
-                openThreadListInAppAsync: openThreadList);
+                openThreadListInAppAsync: openThreadList,
+                quoteRepliesOn:           site => IsQuoteRepliesOn(CurrentConfig, site));
         }
         var savedIdx = _threadIndex.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
         return new ThreadToolset(
@@ -597,7 +598,8 @@ public sealed partial class MainViewModel
             attachedLastRead:         savedIdx?.LastReadPostNumber,
             attachedMarkPostNumber:   tab.MarkPostNumber,
             attachedOwnPostNumbers:   tab.OwnPostNumbers,
-            attachedHasReplyToOwn:    tab.HasReplyToOwn);
+            attachedHasReplyToOwn:    tab.HasReplyToOwn,
+            quoteRepliesOn:           site => IsQuoteRepliesOn(CurrentConfig, site));
     }
 
     /// <summary>AI チャットウィンドウの「タイトル領域」用文字列。attached あれば そのスレタイ、無ければ汎用ラベル。</summary>

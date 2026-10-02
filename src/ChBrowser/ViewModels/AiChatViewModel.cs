@@ -117,7 +117,7 @@ public sealed partial class AiChatViewModel : ObservableObject
     {
         var attached = _threadToolset is { HasAttached: true };
         var sb = new StringBuilder();
-        sb.Append("これは 5ch 専用ブラウザ「ChBrowser」内蔵の AI です。");
+        sb.Append("これは掲示板ブラウザ「ChBrowser」内蔵の AI です (5ch / したらば / まちBBS / エッヂ / reddit / 4chan / ふたば 等に対応)。");
         sb.Append(attached
             ? $"現在「{ThreadTitle}」というスレッドを文脈にしています。"
             : "特定スレッドには非アタッチです。");
@@ -125,7 +125,7 @@ public sealed partial class AiChatViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(_aiBoardGuide))
         {
             sb.Append("\n\n# 板/スレの使い分け (ユーザ提供メモ)\n");
-            sb.Append("関連スレを探すときの板選びにこのメモを優先的に参考にすること。板名は list_boards で実 URL に解決する。\n");
+            sb.Append("関連スレを探すときの板選びにこのメモを優先的に参考にすること。板名は list_boards (したらば / reddit は search_boards) で実 URL に解決する。\n");
             sb.Append(_aiBoardGuide.Trim());
         }
         return sb.ToString();

@@ -245,7 +245,7 @@ public sealed class McpHttpServer : IDisposable
                 name    = "ChBrowser",
                 version = ServerVersion,
             },
-            instructions = "ChBrowser (5ch 専用ブラウザ) のスレッド読み取り・板/スレ横断・アプリ操作ツール群です。" +
+            instructions = "ChBrowser (5ch / したらば / まちBBS / エッヂ / reddit / 4chan / ふたば 等に対応した掲示板ブラウザ) のスレッド読み取り・板/スレ横断・アプリ操作ツール群です。" +
                            "thread_url 省略時は ChBrowser で現在表示中のスレが対象になります。",
         };
         return JsonSerializer.Serialize(result, JsonOpts);

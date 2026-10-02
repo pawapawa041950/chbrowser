@@ -58,7 +58,7 @@ public sealed class ThreadDataLoader
     /// MainViewModel の <c>BoardCategories</c> をフラットに展開する callback を呼ぶだけ。</summary>
     public IReadOnlyList<Board> ListBoardsSnapshot() => _flatBoardsProvider();
 
-    /// <summary>「(host, dir, key)」を AddressBarParser で取り出す。5ch.io / bbspink.com 系のみ受理。</summary>
+    /// <summary>「(host, dir, key)」を AddressBarParser で取り出す (対応している全掲示板のスレ URL を受理)。</summary>
     public bool TryParseThreadUrl(string url, out string host, out string dir, out string key)
     {
         host = dir = key = "";
@@ -77,6 +77,12 @@ public sealed class ThreadDataLoader
         host = t.Host; dir = t.Directory;
         return true;
     }
+
+    /// <summary>板一覧を持たない掲示板 (したらば / reddit) の板をキーワードで検索する (<see cref="ChBrowser.Services.Bbs.IBbsProvider.SearchBoardsAsync"/>)。
+    /// 通常の閲覧と同じ HTTP クライアントを使う。</summary>
+    public Task<IReadOnlyList<ChBrowser.Services.Bbs.BoardSearchHit>> SearchBoardsAsync(
+        ChBrowser.Services.Bbs.IBbsProvider provider, string keyword, CancellationToken ct = default)
+        => provider.SearchBoardsAsync(_subject.Http, keyword, ct);
 
     /// <summary>板のスレ一覧を取得。ディスクキャッシュ優先、無ければサーバ取得。</summary>
     public async Task<IReadOnlyList<ThreadInfo>> ListThreadsAsync(Board board, CancellationToken ct = default)
