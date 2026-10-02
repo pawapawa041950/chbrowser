@@ -589,6 +589,7 @@ public sealed partial class MainViewModel
             var finalState = ComputeMarkState(existing, stateHint: null);
             NotifyThreadListLogMark(board, info.Key, finalState);
             existing.State = finalState;
+            if (existing.IsTranslationOn) _ = TranslateMissingAsync(existing);   // スレ全体の翻訳が ON なら新着も訳す
             return;
         }
 
@@ -669,5 +670,6 @@ public sealed partial class MainViewModel
         var newTabState = ComputeMarkState(tab, stateHint: null);
         NotifyThreadListLogMark(board, info.Key, newTabState);
         tab.State = newTabState;
+        if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);   // スレ全体の翻訳が ON (保存済みの設定) なら未訳のレスを訳す
     }
 }
