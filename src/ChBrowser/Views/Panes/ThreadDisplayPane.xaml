@@ -99,11 +99,82 @@
                 Background="{StaticResource PaneHeaderBackground}"
                 BorderBrush="{StaticResource PaneBorderBrush}"
                 BorderThickness="0,0,0,1">
-            <DockPanel Margin="4,2">
-                <TextBlock DockPanel.Dock="Left" Text="スレッド表示" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
-                <!-- ボタン群は右端に固定。SearchBoxToggle を DockPanel の last child (= 残り幅を fill)
-                     にすることで、ペイン幅が狭くても × ボタンが画面内に確実に残る。 -->
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+            <!-- ヘッダ 1 行: 見出し (左) / 検索欄・ボタン群 (右)。幅はボタン群 → 見出しの前半 → 検索欄 → 見出しの後半の順に配る (HeaderStripPanel) -->
+            <ctrl:HeaderStripPanel Margin="4,2">
+                <!-- 見出し: 「板名 ： スレタイ」、タブが無ければ「スレッド表示」。板名はリンク (押すとスレッド一覧ペインでその板を開く)。
+                     幅が足りなければスレタイ → (検索欄) → 板名の順に縮む (ボタンは縮めない)。 -->
+                <TextBlock ctrl:HeaderStripPanel.Priority="1" Text="スレッド表示" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <Button ctrl:HeaderStripPanel.Priority="1" Click="BoardLinkButton_Click" Cursor="Hand"
+                        Content="{Binding SelectedTab.TitleBoard}"
+                        ToolTip="スレッド一覧ペインでこの板を開く">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <TextBlock x:Name="LinkText" Padding="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                                       Foreground="#1F4E8C" TextTrimming="CharacterEllipsis" Background="Transparent"
+                                       Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <TextBlock ctrl:HeaderStripPanel.Priority="3" Padding="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           Text="{Binding SelectedTab.TitleThread, StringFormat=' ： {0}'}"
+                           ToolTip="{Binding SelectedTab.TitleThread}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <!-- 絞り込み検索: 開くと幅 200 を取り、見出しの後半 (板名 / スレタイ) を縮めて出る (見出しの前半とボタンは縮めない)。
+                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                <ctrl:SearchBoxToggle Margin="0,0,6,0"
+                                      ctrl:HeaderStripPanel.Priority="2" ctrl:HeaderStripPanel.AlignRight="True"
+                                      HintText="本文 / 名前行に文字列を含むレスだけ表示 (空欄でフィルタ解除)"
+                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                    <ctrl:SearchBoxToggle.Style>
+                        <Style TargetType="ctrl:SearchBoxToggle">
+                            <Style.Triggers>
+                                <Trigger Property="IsExpanded" Value="True">
+                                    <Setter Property="ctrl:HeaderStripPanel.PreferredWidth" Value="200" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ctrl:SearchBoxToggle.Style>
+                </ctrl:SearchBoxToggle>
+                <!-- ボタン群は右端に固定。幅は最優先でもらう (ペインが狭くても見出し・検索欄の側が縮む)。 -->
+                <StackPanel ctrl:HeaderStripPanel.Priority="0" ctrl:HeaderStripPanel.AlignRight="True" Orientation="Horizontal"
                             HorizontalAlignment="Right">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
@@ -475,23 +546,7 @@
 
                 </StackPanel>
 
-                <!-- 絞り込み検索: ヘッダの「タイトル」と「ボタン群」の間の残りスペースを fill する。
-                     ペイン幅が狭くなっても × ボタン (= SearchBoxToggle 内で Dock=Right) が画面内に残る。
-                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
-                <ctrl:SearchBoxToggle Margin="0,0,6,0"
-                                      HintText="本文 / 名前行に文字列を含むレスだけ表示 (空欄でフィルタ解除)"
-                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
-                    <ctrl:SearchBoxToggle.Style>
-                        <Style TargetType="ctrl:SearchBoxToggle">
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
-                                    <Setter Property="IsEnabled" Value="False" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ctrl:SearchBoxToggle.Style>
-                </ctrl:SearchBoxToggle>
-            </DockPanel>
+            </ctrl:HeaderStripPanel>
         </Border>
 
         <TabControl Grid.Row="1"

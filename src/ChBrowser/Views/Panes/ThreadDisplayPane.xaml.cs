@@ -35,7 +35,15 @@ public partial class ThreadDisplayPane : UserControl
     /// <summary>ツールバー 🌐: AI 翻訳のメニューを出す (AI NG のしきい値ボタンと同じ出し方)。</summary>
     private void TranslateMenuButton_Click(object sender, RoutedEventArgs e) => AiNgThresholdButton_Click(sender, e);
 
-    // ---- 人気のレス (👍) の件数メニュー (Popup) ----
+    /// <summary>ヘッダの板名 (リンク): スレッド一覧ペインでその板を開く (開いていればそのタブを選んで更新)。</summary>
+    private void BoardLinkButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ThreadPaneGroupViewModel g || Vm is not { } main) return;
+        if (g.SelectedTab is not { } tab) return;
+        _ = main.LoadThreadListAsync(new BoardViewModel(tab.Board));
+    }
+
+    // ---- フィルター (人気のレス / 画像) の件数メニュー (Popup) ----
 
     /// <summary>Popup が閉じた時刻。開いている Popup の外 (= 👍 ボタン) を押すと、先に Popup が閉じてから Click が来るので、
     /// その Click で開き直さないように使う。</summary>

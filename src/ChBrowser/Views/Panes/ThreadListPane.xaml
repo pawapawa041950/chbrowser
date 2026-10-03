@@ -81,11 +81,51 @@
                 Background="{StaticResource PaneHeaderBackground}"
                 BorderBrush="{StaticResource PaneBorderBrush}"
                 BorderThickness="0,0,0,1">
-            <DockPanel Margin="4,2">
-                <TextBlock DockPanel.Dock="Left" Text="スレッド一覧" Padding="2,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold" />
-                <!-- ボタン群は右端固定。SearchBoxToggle はその間 (= last child fill) に配置して
-                     ペイン幅が狭くても × ボタンが画面内に残るようにする。 -->
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+            <!-- ヘッダ 1 行: 見出し (左) / 検索欄・ボタン群 (右)。幅はボタン群 → 見出しの前半 → 検索欄 → 見出しの後半の順に配る (HeaderStripPanel) -->
+            <ctrl:HeaderStripPanel Margin="4,2">
+                <!-- 見出し: 板タブなら「掲示板名 ： 板名」、それ以外のタブはタブの見出し、タブが無ければ「スレッド一覧」。
+                     幅が足りなければ板名 → (検索欄) → 掲示板名の順に縮む (ボタンは縮めない)。 -->
+                <TextBlock ctrl:HeaderStripPanel.Priority="1" Padding="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           Text="{Binding SelectedTab.TitleSite, FallbackValue='スレッド一覧', TargetNullValue='スレッド一覧'}" />
+                <TextBlock ctrl:HeaderStripPanel.Priority="3" Padding="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           Text="{Binding SelectedTab.TitleRest, StringFormat=' ： {0}'}"
+                           ToolTip="{Binding SelectedTab.TitleRest}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding SelectedTab.TitleRest}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <!-- 絞り込み検索: 開くと幅 200 を取り、見出しの後半 (板名 / スレタイ) を縮めて出る (見出しの前半とボタンは縮めない)。
+                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
+                <ctrl:SearchBoxToggle Margin="0,0,6,0"
+                                      ctrl:HeaderStripPanel.Priority="2" ctrl:HeaderStripPanel.AlignRight="True"
+                                      HintText="タイトルにこの文字列を含むスレッドだけ表示 (空欄でフィルタ解除)"
+                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
+                    <ctrl:SearchBoxToggle.Style>
+                        <Style TargetType="ctrl:SearchBoxToggle">
+                            <Style.Triggers>
+                                <Trigger Property="IsExpanded" Value="True">
+                                    <Setter Property="ctrl:HeaderStripPanel.PreferredWidth" Value="200" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ctrl:SearchBoxToggle.Style>
+                </ctrl:SearchBoxToggle>
+                <!-- ボタン群は右端固定。幅は最優先でもらう (ペインが狭くても見出し・検索欄の側が縮む)。 -->
+                <StackPanel ctrl:HeaderStripPanel.Priority="0" ctrl:HeaderStripPanel.AlignRight="True" Orientation="Horizontal" HorizontalAlignment="Right">
                     <!-- 更新 (= 選択中のスレ一覧タブを再取得)。タブ種別 (板 / 全ログ / お気に入り) を問わず動作する。
                          SelectedTab が null なら無効化。 -->
                     <Button Click="RefreshThreadListButton_Click"
@@ -185,22 +225,7 @@
                     </Button>
                 </StackPanel>
 
-                <!-- 絞り込み検索: タイトルとボタン群の間の残りスペースを fill (= 最後の child)。
-                     SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
-                <ctrl:SearchBoxToggle Margin="0,0,6,0"
-                                      HintText="タイトルにこの文字列を含むスレッドだけ表示 (空欄でフィルタ解除)"
-                                      Text="{Binding SelectedTab.SearchQuery, UpdateSourceTrigger=PropertyChanged, FallbackValue=''}">
-                    <ctrl:SearchBoxToggle.Style>
-                        <Style TargetType="ctrl:SearchBoxToggle">
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
-                                    <Setter Property="IsEnabled" Value="False" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ctrl:SearchBoxToggle.Style>
-                </ctrl:SearchBoxToggle>
-            </DockPanel>
+            </ctrl:HeaderStripPanel>
         </Border>
 
         <TabControl Grid.Row="1"

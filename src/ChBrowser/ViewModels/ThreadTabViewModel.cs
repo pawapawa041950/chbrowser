@@ -179,7 +179,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     internal System.Threading.CancellationTokenSource? TranslateCts { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TitleThread))]
     private string _header;
+
+    /// <summary>ペインのヘッダに出す見出しの前半: 板名 (押すとスレ一覧ペインでその板を開く)。</summary>
+    public string TitleBoard => Board.BoardName ?? Board.DirectoryName;
+
+    /// <summary>ペインのヘッダに出す見出しの後半: スレタイ (タブの見出しと違い省略しない)。まだ分からなければタブの見出し。</summary>
+    public string TitleThread => string.IsNullOrEmpty(Title) ? Header : Title;
 
     [ObservableProperty]
     private bool _isBusy;

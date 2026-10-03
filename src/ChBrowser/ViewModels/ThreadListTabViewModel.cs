@@ -62,7 +62,14 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     public IRelayCommand CloseCommand { get; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TitleSite))]
     private string _header;
+
+    /// <summary>ペインのヘッダに出す見出しの前半: 板タブなら掲示板名 (例: 5ch / reddit)、それ以外 (全ログ / お気に入り / 検索結果) はタブの見出し。</summary>
+    public string TitleSite => Board is { } b ? ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(b.Host).DisplayName : Header;
+
+    /// <summary>ペインのヘッダに出す見出しの後半: 板タブなら板名、それ以外は空。</summary>
+    public string TitleRest => Board is { } b ? (b.BoardName ?? b.DirectoryName) : "";
 
     [ObservableProperty]
     private bool _isBusy;

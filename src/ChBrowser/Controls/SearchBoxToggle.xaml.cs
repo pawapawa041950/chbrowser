@@ -47,6 +47,12 @@ public partial class SearchBoxToggle : UserControl
         set => SetValue(HintTextProperty, value);
     }
 
+    /// <summary>検索欄を開いているか (読み取り専用)。ヘッダのレイアウト (<see cref="HeaderStripPanel"/>) が開いたときだけ幅を広く取るのに使う。</summary>
+    private static readonly DependencyPropertyKey IsExpandedPropertyKey = DependencyProperty.RegisterReadOnly(
+        nameof(IsExpanded), typeof(bool), typeof(SearchBoxToggle), new PropertyMetadata(false));
+    public static readonly DependencyProperty IsExpandedProperty = IsExpandedPropertyKey.DependencyProperty;
+    public bool IsExpanded => (bool)GetValue(IsExpandedProperty);
+
     public SearchBoxToggle()
     {
         InitializeComponent();
@@ -76,6 +82,7 @@ public partial class SearchBoxToggle : UserControl
     private void UpdateVisibility(bool forceExpand)
     {
         var shouldExpand = forceExpand || !string.IsNullOrEmpty(Text) || _userExpanded;
+        SetValue(IsExpandedPropertyKey, shouldExpand);
         if (shouldExpand)
         {
             if (ExpandedRoot is not null) ExpandedRoot.Visibility = Visibility.Visible;
