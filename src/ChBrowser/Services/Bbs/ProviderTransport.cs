@@ -139,18 +139,20 @@ public interface IProviderAuth
 /// <summary><see cref="IProviderAuth"/> の状態の表示文言 (ステータスバー / 設定画面)。掲示板に依存しない。</summary>
 public static class ProviderAuthDisplay
 {
-    /// <summary>ステータスバー用 (例: 「reddit: u/xxx」「reddit: 未ログイン」)。未確認で前回の名前も無ければ空 (= 項目を出さない)。</summary>
+    /// <summary>ステータスバー用 (例: 「reddit: ログイン中」「reddit: 未ログイン」)。未確認で前回のログインも無ければ空 (= 項目を出さない)。
+    /// <b>ユーザー名は出さない</b> (ステータスバーは常に見えているので、スクリーンショットにアカウント名が写らないように)。
+    /// ユーザー名は設定 → 認証 でだけ見られる (<see cref="SettingsText"/>)。</summary>
     public static string StatusBarText(IProviderAuth auth)
     {
         var s    = auth.State;
         var name = BbsRegistry.FindById(auth.ProviderId)?.DisplayName ?? auth.ProviderId;
         return s.Kind switch
         {
-            AuthStateKind.LoggedIn       => $"{name}: {auth.FormatUserName(s.UserName ?? "")}",
+            AuthStateKind.LoggedIn       => $"{name}: ログイン中",
             AuthStateKind.LoggedOut      => $"{name}: 未ログイン",
             AuthStateKind.NeedsAttention => $"{name}: ブラウザで確認が必要です",
             AuthStateKind.Error          => $"{name}: {s.Message}",
-            _                            => s.UserName is { Length: > 0 } n ? $"{name}: {auth.FormatUserName(n)} (未確認)" : "",
+            _                            => s.UserName is { Length: > 0 } ? $"{name}: ログイン済み (未確認)" : "",
         };
     }
 
