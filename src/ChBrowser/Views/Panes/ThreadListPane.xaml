@@ -187,15 +187,14 @@
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
-                        <Grid Width="16" Height="16">
-                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  StrokeThickness="1.4"
-                                  StrokeLineJoin="Round"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  Fill="Transparent"
-                                  Data="M 3,3 L 11,3 L 13,5 L 13,13 L 3,13 Z M 8,7 L 8,11 M 6,9 L 10,9" />
-                        </Grid>
+                        <!-- ペン (スレッド表示ペインの「書き込み」ボタンと同じアイコン) -->
+                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeLineJoin="Round"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Fill="Transparent"
+                              Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
                     </Button>
 
                     <!-- お気に入りトグル (★) - 板タブのときだけ有効。
