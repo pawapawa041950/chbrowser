@@ -282,6 +282,7 @@ public static partial class WebView2Helper
                 minReplies  = filter?.MinReplies ?? 0,
                 minLikes    = filter?.MinLikes   ?? 0,
                 mediaOnly   = filter?.MediaOnly   == true,
+                matchAll    = filter?.MatchAll    == true,
             },
         }, PostJsonOptions);
         ChBrowser.Services.Logging.LogService.Instance.Write(
@@ -440,6 +441,7 @@ public static partial class WebView2Helper
             minReplies  = filter.MinReplies,
             minLikes    = filter.MinLikes,
             mediaOnly   = filter.MediaOnly,
+            matchAll    = filter.MatchAll,
         }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }

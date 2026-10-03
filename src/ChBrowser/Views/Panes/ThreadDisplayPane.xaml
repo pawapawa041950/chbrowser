@@ -154,20 +154,21 @@
                         </Button.ContextMenu>
                     </Button>
 
-                    <!-- 人気のレス (👍): 押すとメニュー。返信数 N 件以上 / イイネ数 M 件以上 (0 = その条件を使わない、どちらかを満たせば表示)。
+                    <!-- フィルター: 押すとメニュー。返信数 N 件以上 / イイネ数 M 件以上 (0 = その条件を使わない) / 画像・動画 URL を含む。
+                         使っている条件の組み合わせは「どれかを満たす (OR)」か「すべて満たす (AND)」を選ぶ。
                          件数は +/- (押し続けると連続) か直接入力。タブごと・その場限り。イイネの無い掲示板ではイイネの行はグレーアウト。
-                         画像トグルとは OR。条件が効いている間はボタンを押下状態の色にする。
+                         条件が効いている間はボタンを押下状態の色にする。
                          入力欄を置くので ContextMenu ではなく Popup (ContextMenu はキー入力をメニュー操作に取る)。 -->
                     <Grid>
                         <Button x:Name="PopularButton" Click="PopularButton_Click">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
-                                    <Setter Property="ToolTip" Value="人気のレスだけ表示 (返信数 / イイネ数の件数を設定)" />
+                                    <Setter Property="ToolTip" Value="フィルター (返信数 / イイネ数 / 画像・動画で表示するレスを絞る)" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SelectedTab.IsPopularFilterOn}" Value="True">
+                                        <DataTrigger Binding="{Binding SelectedTab.IsFilterOn}" Value="True">
                                             <Setter Property="Background"  Value="#CCE5FF" />
                                             <Setter Property="BorderBrush" Value="#88B0DD" />
-                                            <Setter Property="ToolTip" Value="人気のレスだけ表示中 (押すと件数を変更。両方 0 で解除)" />
+                                            <Setter Property="ToolTip" Value="フィルターで絞り込み中 (押すと条件を変更。「クリア」で解除)" />
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                             <Setter Property="IsEnabled" Value="False" />
@@ -175,7 +176,13 @@
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
-                            <TextBlock Text="👍" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <!-- じょうご (フィルター) のアイコン -->
+                            <Grid Width="16" Height="16">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.3" StrokeLineJoin="Round"
+                                      Fill="Transparent"
+                                      Data="M 2,3 L 14,3 L 9.2,8.6 L 9.2,13.2 L 6.8,14 L 6.8,8.6 Z" />
+                            </Grid>
                         </Button>
                         <Popup x:Name="PopularPopup"
                                PlacementTarget="{Binding ElementName=PopularButton}" Placement="Bottom"
@@ -186,8 +193,8 @@
                                     <DropShadowEffect BlurRadius="6" ShadowDepth="2" Opacity="0.25" />
                                 </Border.Effect>
                                 <StackPanel>
-                                    <TextBlock Text="人気のレスだけ表示" FontWeight="SemiBold" Margin="0,0,0,2" />
-                                    <TextBlock Text="0 はその条件を使わない。両方使うときはどちらかを満たせば表示" FontSize="11" Foreground="#666" Margin="0,0,0,6" />
+                                    <TextBlock Text="フィルター" FontWeight="SemiBold" Margin="0,0,0,2" />
+                                    <TextBlock Text="件数が 0 の条件は使わない" FontSize="11" Foreground="#666" Margin="0,0,0,6" />
                                     <StackPanel Orientation="Horizontal" Margin="0,2">
                                         <StackPanel.Style>
                                             <Style TargetType="StackPanel">
@@ -248,19 +255,27 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
+                                    <CheckBox Content="画像 / 動画 URL を含むレス" Margin="0,6,0,0"
+                                              IsChecked="{Binding SelectedTab.IsMediaFilterOn}"
+                                              ToolTip="本文に画像 / 動画の URL があるレス" />
+                                    <Separator Margin="0,8,0,6" />
+                                    <TextBlock Text="条件を複数使うとき" FontSize="11" Foreground="#666" Margin="0,0,0,2" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton Content="どれかを満たす (OR)" Margin="0,0,12,0"
+                                                     IsChecked="{Binding SelectedTab.FilterMatchAny}"
+                                                     ToolTip="返信数 / イイネ数 / 画像・動画のうち、どれか 1 つでも当てはまるレスを表示" />
+                                        <RadioButton Content="すべて満たす (AND)"
+                                                     IsChecked="{Binding SelectedTab.FilterMatchAll}"
+                                                     ToolTip="使っている条件にすべて当てはまるレスだけ表示" />
+                                    </StackPanel>
                                     <Button Content="クリア" HorizontalAlignment="Right" Margin="0,8,0,0" Padding="12,2"
                                             Command="{Binding SelectedTab.ClearPopularMinCommand}"
-                                            IsEnabled="{Binding SelectedTab.IsPopularFilterOn}"
-                                            ToolTip="返信数・イイネ数とも 0 に戻す (絞り込みを解除)" />
+                                            IsEnabled="{Binding SelectedTab.IsFilterOn}"
+                                            ToolTip="返信数・イイネ数を 0 に、画像・動画を OFF にする (絞り込みを解除)" />
                                 </StackPanel>
                             </Border>
                         </Popup>
                     </Grid>
-                    <ToggleButton Style="{StaticResource ToolbarToggleIconButton}"
-                                  IsChecked="{Binding SelectedTab.IsMediaFilterOn}"
-                                  ToolTip="画像 / 動画 URL を含むレスのみ表示。人気のレスの条件と OR 動作">
-                        <TextBlock Text="🖼" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </ToggleButton>
 
                     <!-- 引用文を返信として扱う: 「>引用文」の行を、その文を書いた前のレスへの返信にする (ツリー・返信数・ポップアップ)。
                          ON / OFF はサイト (掲示板) ごとに保存 (MainViewModel.ToggleQuoteRepliesCommand)。 -->

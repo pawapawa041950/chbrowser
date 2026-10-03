@@ -374,19 +374,34 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private string _statusMessage = "";
 
-    // ---- 「人気のレス」絞り込み (👍 ボタンのメニュー。タブごと・その場限り) ----
-    //   返信数 N 件以上 / イイネ数 M 件以上 (0 はその条件を使わない)。両方使うときはどちらかを満たせば表示 (OR)。
-    //   tree モードでは人気のレスの配下も含めて表示する。
+    // ---- フィルター (ツールバーのフィルターボタンのメニュー。タブごと・その場限り) ----
+    //   返信数 N 件以上 / イイネ数 M 件以上 (0 はその条件を使わない) / 画像・動画 URL を含む。
+    //   使っている条件の組み合わせは OR (どれかを満たす。既定) か AND (すべて満たす) を選べる。
+    //   tree モードでは、返信数かイイネ数の条件があるとき、条件に合うレスの配下も含めて表示する。
 
     /// <summary>表示するレスの返信数の下限 (0 = 返信数では絞らない)。</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn))]
+    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn), nameof(IsFilterOn))]
     private int _popularMinReplies;
 
     /// <summary>表示するレスのイイネ数の下限 (0 = イイネ数では絞らない)。イイネの無い掲示板では使わない。</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn))]
+    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn), nameof(IsFilterOn))]
     private int _popularMinLikes;
+
+    /// <summary>条件の組み合わせ。false = どれかを満たせば表示 (OR、既定)、true = すべて満たすものだけ (AND)。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FilterMatchAny))]
+    private bool _filterMatchAll;
+
+    /// <summary><see cref="FilterMatchAll"/> の裏 (メニューの「どれかを満たす」ラジオボタン用)。</summary>
+    public bool FilterMatchAny
+    {
+        get => !FilterMatchAll;
+        set => FilterMatchAll = !value;
+    }
+
+    partial void OnFilterMatchAllChanged(bool value) => RebuildFilter();
 
     /// <summary>件数の上限 (入力の取り違えで極端な値にならないように)。</summary>
     public const int PopularMaxCount = 9999;
@@ -394,8 +409,11 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>この掲示板のレスにイイネ (評価値) があるか (reddit のスコア / ふたばの「そうだね」)。無ければイイネの行はグレーアウト。</summary>
     public bool SupportsLikes => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host).Voting is not null;
 
-    /// <summary>人気のレスの絞り込みが効いているか (👍 ボタンの押下状態)。</summary>
+    /// <summary>返信数かイイネ数の条件が効いているか。</summary>
     public bool IsPopularFilterOn => PopularMinReplies > 0 || (SupportsLikes && PopularMinLikes > 0);
+
+    /// <summary>フィルターのどれかの条件が効いているか (フィルターボタンの押下状態 / 「クリア」の有効)。</summary>
+    public bool IsFilterOn => IsPopularFilterOn || IsMediaFilterOn;
 
     partial void OnPopularMinRepliesChanged(int value)
     {
@@ -411,7 +429,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         RebuildFilter();
     }
 
-    /// <summary>👍 メニューの +/- (パラメータ "replies+1" / "replies-1" / "likes+1" / "likes-1")。</summary>
+    /// <summary>フィルターメニューの +/- (パラメータ "replies+1" / "replies-1" / "likes+1" / "likes-1")。</summary>
     [RelayCommand]
     private void StepPopularMin(string? spec)
     {
@@ -424,16 +442,19 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         }
     }
 
-    /// <summary>👍 メニューの「クリア」: 返信数・イイネ数とも 0 に戻す (= 人気のレスの絞り込みを解除)。</summary>
+    /// <summary>フィルターメニューの「クリア」: 返信数・イイネ数を 0 に、画像・動画を OFF にする (= 絞り込みを解除)。
+    /// 組み合わせ (OR / AND) の選択はそのまま残す。</summary>
     [RelayCommand]
     private void ClearPopularMin()
     {
         PopularMinReplies = 0;
         PopularMinLikes   = 0;
+        IsMediaFilterOn   = false;
     }
 
-    /// <summary>「画像/動画」フィルタトグル (= 🖼 ボタン)。本文に画像/動画 URL を含むレスのみ表示。</summary>
+    /// <summary>フィルター: 本文に画像 / 動画 URL を含むレス (フィルターメニューのチェック)。</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFilterOn))]
     private bool _isMediaFilterOn;
 
     /// <summary>現在のフィルタ条件。<see cref="SearchQuery"/> / <see cref="PopularMinReplies"/> / <see cref="PopularMinLikes"/> /
@@ -447,13 +468,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
 
     private void RebuildFilter()
     {
-        // SearchQuery と人気 / 画像の条件を 1 つの ThreadFilter にまとめる。
-        // テキストクエリは AND 条件、人気 (返信数 / イイネ数) と画像は互いに OR (= JS 側 postMatchesFilter で合成判定)。
+        // SearchQuery とフィルターメニューの条件を 1 つの ThreadFilter にまとめる。
+        // テキストクエリは常に AND、返信数 / イイネ数 / 画像は選んだ組み合わせ (OR / AND) で合成 (= JS 側 postMatchesFilter)。
         Filter = new ThreadFilter(
             TextQuery:   SearchQuery ?? "",
             MinReplies:  PopularMinReplies,
             MinLikes:    SupportsLikes ? PopularMinLikes : 0,
-            MediaOnly:   IsMediaFilterOn);
+            MediaOnly:   IsMediaFilterOn,
+            MatchAll:    FilterMatchAll);
     }
 
     IReadOnlyCollection<long> IThreadDisplayBinding.OwnPostNumbers => OwnPostNumbers;

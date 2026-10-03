@@ -134,9 +134,10 @@
     // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
     // 評価ルール:
     //   - textQuery (= AND 条件): 本文に含まれていれば match (= 大文字小文字無視)。空なら本文条件なし。
-    //   - 人気のレス (minReplies: 返信数 N 以上 / minLikes: イイネ数 M 以上、0 は条件なし) + mediaOnly (= 互いに OR):
-    //     どれかが ON なら、その条件に match するレスだけ表示。全部 OFF なら条件なし (textQuery のみで判定)。
-    let currentFilter = { textQuery: '', minReplies: 0, minLikes: 0, mediaOnly: false };
+    //   - フィルターメニューの条件 (minReplies: 返信数 N 以上 / minLikes: イイネ数 M 以上 (0 は条件なし) / mediaOnly: 画像・動画):
+    //     使っている条件を matchAll=false なら OR (どれかを満たす)、true なら AND (すべて満たす) で合成する。
+    //     全部 OFF なら条件なし (textQuery のみで判定)。
+    let currentFilter = { textQuery: '', minReplies: 0, minLikes: 0, mediaOnly: false, matchAll: false };
 
     /** C# の ThreadFilter (setFilter / resyncThreadState の filter) を currentFilter の形にする。 */
     function normalizeFilter(f) {
@@ -146,8 +147,12 @@
             minReplies: n(f.minReplies),
             minLikes:   n(f.minLikes),
             mediaOnly:  f.mediaOnly === true,
+            matchAll:   f.matchAll === true,
         };
     }
+
+    /** フィルターメニューの条件 (返信数 / イイネ数 / 画像・動画) のどれかがあるか。 */
+    function conditionFilterOn() { return popularFilterOn() || currentFilter.mediaOnly === true; }
 
     /** 人気のレスの条件があるか。 */
     function popularFilterOn() { return currentFilter.minReplies > 0 || currentFilter.minLikes > 0; }
@@ -162,13 +167,16 @@
         return !currentFilter.textQuery && !popularFilterOn() && !currentFilter.mediaOnly;
     }
 
-    /** 人気のレスの絞り込み用の include 集合を組む。人気 = 返信数 >= minReplies または イイネ数 >= minLikes (0 の条件は使わない)。
-     *   - flat モード: 人気のレス番号のみ
-     *   - tree / dedupTree モード: 人気のレスとその配下 (= 返信チェイン全て) を BFS で展開して含める */
+    /** フィルターメニューの条件に合うレスの include 集合を組む。
+     *  使っている条件 (返信数 >= minReplies / イイネ数 >= minLikes / 画像・動画を含む) を OR か AND (matchAll) で合成する。
+     *   - flat モード: 条件に合うレス番号のみ
+     *   - tree / dedupTree モード: 返信数かイイネ数の条件があるときは、条件に合うレスの配下 (= 返信チェイン全て) も BFS で含める
+     *     (画像・動画だけの絞り込みでは配下を広げない = 従来の 🖼 と同じ) */
     function rebuildPopularIncludeSet() {
         const set = new Set();
-        if (!popularFilterOn()) { popularIncludeCache = set; return; }
+        if (!conditionFilterOn()) { popularIncludeCache = set; return; }
         const minR = currentFilter.minReplies, minL = currentFilter.minLikes;
+        const media = currentFilter.mediaOnly === true, all = currentFilter.matchAll === true;
 
         const reverseIdx = currentReverseIndex && currentReverseIndex.size > 0
             ? currentReverseIndex
@@ -176,15 +184,17 @@
         // popular レスを列挙
         const popularNums = [];
         for (const p of allPosts) {
-            const refs = reverseIdx.get(p.number);
-            const byReplies = minR > 0 && refs && refs.length >= minR;
-            const byLikes   = minL > 0 && (displayScore(p) || 0) >= minL;   // 評価値の無いレス (ふたばの 0 件等) は 0
-            if (byReplies || byLikes) popularNums.push(p.number);
+            const results = [];
+            if (minR > 0) { const refs = reverseIdx.get(p.number); results.push(!!refs && refs.length >= minR); }
+            if (minL > 0) results.push((displayScore(p) || 0) >= minL);   // 評価値の無いレス (ふたばの 0 件等) は 0
+            if (media)    results.push(bodyContainsImage(p.body) || bodyContainsVideo(p.body));
+            const ok = all ? results.every(Boolean) : results.some(Boolean);
+            if (ok) popularNums.push(p.number);
         }
         for (const n of popularNums) set.add(n);
 
-        // tree 系では配下 (= 返信チェイン) を BFS で展開 (戦略の expandsPopularChain で切替)
-        if (vm().expandsPopularChain()) {
+        // tree 系では配下 (= 返信チェイン) を BFS で展開 (戦略の expandsPopularChain で切替)。返信数 / イイネ数の条件があるときだけ
+        if (popularFilterOn() && vm().expandsPopularChain()) {
             const queue = popularNums.slice();
             while (queue.length > 0) {
                 const cur = queue.shift();
@@ -198,7 +208,7 @@
     }
 
     /** 1 レス (= JS の post オブジェクト = postsByNumber の値) がフィルタ条件に match するか。
-     *  textQuery は AND、popularOnly / mediaOnly は互いに OR。 */
+     *  textQuery は常に AND、フィルターメニューの条件は rebuildPopularIncludeSet で合成済みの集合で判定。 */
     function postMatchesFilter(post) {
         if (!post) return true;
 
@@ -217,14 +227,8 @@
             if (haystack.indexOf(q) < 0) return false;
         }
 
-        // (2) 人気のレス / mediaOnly (互いに OR、どちらか ON なら match 必須)
-        const popOn = popularFilterOn();
-        const medOn = currentFilter.mediaOnly === true;
-        if (popOn || medOn) {
-            const popMatch = popOn && popularIncludeCache && popularIncludeCache.has(post.number);
-            const medMatch = medOn && (bodyContainsImage(post.body) || bodyContainsVideo(post.body));
-            if (!popMatch && !medMatch) return false;
-        }
+        // (2) フィルターメニューの条件 (OR / AND は include 集合を組むときに合成済み)
+        if (conditionFilterOn() && !(popularIncludeCache && popularIncludeCache.has(post.number))) return false;
         return true;
     }
 
