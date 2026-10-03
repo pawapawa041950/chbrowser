@@ -495,8 +495,10 @@ public sealed partial class MainViewModel
             var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
             if (info is null) continue; // 落ちた → 除外
 
+            // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
+            // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
             var idx  = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
-            var prev = idx?.LastFetchedPostCount ?? 0;
+            var prev = idx?.NewPostBaseline ?? 0;
             if (info.PostCount > prev) toOpen.Add((board, info));
         }
 
@@ -583,7 +585,7 @@ public sealed partial class MainViewModel
                 existing.HasReplyToOwn = false;
             }
             existing.DatSize = result.DatSize;
-            SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+            SaveFetchedPostCount(board, info.Key, result.Posts.Count, listedPostCount: info.PostCount);
             existing.FetchedPostCount = result.Posts.Count;
             // 最終状態を ComputeMarkState で算定 (= HasReplyToOwn が true なら RepliedToOwn、それ以外は Cached)。
             var finalState = ComputeMarkState(existing, stateHint: null);
@@ -664,7 +666,7 @@ public sealed partial class MainViewModel
         }
 
         tab.DatSize = result.DatSize;
-        SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+        SaveFetchedPostCount(board, info.Key, result.Posts.Count, listedPostCount: info.PostCount);
         tab.FetchedPostCount = result.Posts.Count;
 
         var newTabState = ComputeMarkState(tab, stateHint: null);

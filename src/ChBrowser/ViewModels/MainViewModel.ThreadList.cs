@@ -229,7 +229,8 @@ public sealed partial class MainViewModel
         {
             if (!keysWithLog.Contains(t.Key)) continue;
             var idx     = _threadIndex.Load(board.Host, board.DirectoryName, t.Key);
-            var fetched = idx?.LastFetchedPostCount;
+            // 取得したレス数と、取得時に一覧に載っていた数の大きい方より増えていれば新着 (reddit 等は一覧の数に取れないコメントが含まれる)
+            var fetched = idx?.NewPostBaseline;
             var hasNew  = fetched is int f && t.PostCount > f;
             dict[t.Key] = hasNew ? LogMarkState.Updated : LogMarkState.Cached;
         }

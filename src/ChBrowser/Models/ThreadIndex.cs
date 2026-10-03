@@ -26,9 +26,22 @@ namespace ChBrowser.Models;
 /// 5ch は件数 == 最大番号なので <see cref="LastFetchedPostCount"/> と同じ値になる。無ければ null (旧 idx.json)。</param>
 /// <param name="MyVotes">アプリから送ったレスの評価 (レス番号 → 1 = 賛成 / -1 = 反対 / 0 = 取り消し)。
 /// 取得時点の評価 (<see cref="PostExtra.MyVote"/>) より優先して表示に使う。null は空と同義。</param>
+/// <param name="LastListedPostCount">スレを取得したとき (= 読んだとき) の、スレ一覧に載っていたレス数。分からなければ null。
+/// reddit などは一覧のコメント数 (<c>num_comments</c>) に削除済み・取得しきれないコメントが含まれ、取得できたレス数
+/// (<see cref="LastFetchedPostCount"/>) より常に多い。取得数とだけ比べると新着が無くても毎回「更新あり」になるので、
+/// 新着の判定は「一覧の数がこの値と取得数のどちらよりも増えたか」で行う (<see cref="NewPostBaseline"/>)。</param>
 public sealed record ThreadIndex(
     long?  LastReadPostNumber,
     int?   LastFetchedPostCount,
     long[]? OwnPostNumbers = null,
     long?  LastFetchedPostNumber = null,
-    Dictionary<long, int>? MyVotes = null);
+    Dictionary<long, int>? MyVotes = null,
+    int?   LastListedPostCount = null)
+{
+    /// <summary>新着判定の基準: スレ一覧のレス数がこれより多ければ新着あり。取得したレス数と、取得時に一覧に載っていたレス数の大きい方。
+    /// どちらも無ければ null (= 取得したことが無い)。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int? NewPostBaseline => LastFetchedPostCount is null && LastListedPostCount is null
+        ? null
+        : System.Math.Max(LastFetchedPostCount ?? 0, LastListedPostCount ?? 0);
+}

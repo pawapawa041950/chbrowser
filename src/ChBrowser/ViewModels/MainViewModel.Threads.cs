@@ -186,7 +186,7 @@ public sealed partial class MainViewModel
                 existing.ThreadKey           == info.Key)
             {
                 MaybeActivateThreadTab(existing, activate);
-                await RefreshThreadAsync(existing).ConfigureAwait(true);
+                await RefreshThreadAsync(existing, info.PostCount).ConfigureAwait(true);
                 return;
             }
         }
@@ -261,7 +261,8 @@ public sealed partial class MainViewModel
                 ApplyFetchDelta(tab, prevCount, result, info.Title);
             }
 
-            SaveFetchedPostCount(board, info.Key, result.Posts.Count, result.Posts.Count > 0 ? result.Posts[^1].Number : null);
+            SaveFetchedPostCount(board, info.Key, result.Posts.Count, result.Posts.Count > 0 ? result.Posts[^1].Number : null,
+                                 listedPostCount: info.PostCount);
             // dat 連番ベースの件数を記録 (= 後続の差分取得の境界に使う。NG 透明化では減らない)。
             tab.FetchedPostCount = result.Posts.Count;
 
@@ -319,7 +320,8 @@ public sealed partial class MainViewModel
 
     /// <summary>スレ更新ボタン / スレ一覧で開いているスレを再クリックされた時に呼ばれる。
     /// HTTP Range で差分のみ取得して、増分レスを JS に append する。</summary>
-    public async Task RefreshThreadAsync(ThreadTabViewModel tab)
+    /// <param name="listedPostCount">スレ一覧に載っていたレス数 (一覧から開き直したとき)。分からなければ null。</param>
+    public async Task RefreshThreadAsync(ThreadTabViewModel tab, int? listedPostCount = null)
     {
         if (tab.IsBusy) return;
 
@@ -336,7 +338,7 @@ public sealed partial class MainViewModel
             var result     = await _datClient.FetchStreamingAsync(tab.Board, tab.ThreadKey, noProgress).ConfigureAwait(true);
             ApplyFetchDelta(tab, prevCount, result, tab.Header);
 
-            SaveFetchedPostCount(tab.Board, tab.ThreadKey, result.Posts.Count);
+            SaveFetchedPostCount(tab.Board, tab.ThreadKey, result.Posts.Count, listedPostCount: listedPostCount);
             tab.FetchedPostCount = result.Posts.Count;
 
             // 最終状態算定: HasReplyToOwn は ApplyFetchDelta の delta scan で直前に決まっているので
@@ -771,7 +773,7 @@ public sealed partial class MainViewModel
                 else
                 {
                     var idx     = _threadIndex.Load(board.Host, board.DirectoryName, info.Key);
-                    var fetched = idx?.LastFetchedPostCount;
+                    var fetched = idx?.NewPostBaseline;
                     var hasNew  = fetched is int f && info.PostCount > 0 && info.PostCount > f;
                     state       = hasNew ? LogMarkState.Updated : LogMarkState.Cached;
                 }
@@ -1501,8 +1503,10 @@ public sealed partial class MainViewModel
             t.ThreadKey           == threadKey);
 
     /// <summary>idx.json の <c>LastFetchedPostCount</c> を更新する (取得成功直後に呼ぶ)。
-    /// 既存値があれば <c>with</c> で上書き、無ければ新規作成。</summary>
-    private void SaveFetchedPostCount(Board board, string threadKey, int postCount, long? maxPostNumber = null)
+    /// 既存値があれば <c>with</c> で上書き、無ければ新規作成。
+    /// <paramref name="listedPostCount"/> はスレ一覧に載っていたレス数 (一覧から開いたとき / お気に入りチェック)。
+    /// 分からなければ null で、前回の値を残す (新着判定の基準 <see cref="ThreadIndex.NewPostBaseline"/>)。</summary>
+    private void SaveFetchedPostCount(Board board, string threadKey, int postCount, long? maxPostNumber = null, int? listedPostCount = null)
     {
         var existing = _threadIndex.Load(board.Host, board.DirectoryName, threadKey);
         var updated  = (existing ?? new ThreadIndex(null, null)) with
@@ -1510,6 +1514,7 @@ public sealed partial class MainViewModel
             LastFetchedPostCount  = postCount,
             // 最大番号は分かるときだけ更新 (= 番号以降で差分取得する提供者の境界)。
             LastFetchedPostNumber = maxPostNumber ?? existing?.LastFetchedPostNumber,
+            LastListedPostCount   = listedPostCount is > 0 ? listedPostCount : existing?.LastListedPostCount,
         };
         _threadIndex.Save(board.Host, board.DirectoryName, threadKey, updated);
     }
