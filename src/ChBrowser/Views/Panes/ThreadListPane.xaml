@@ -128,7 +128,7 @@
                 <StackPanel ctrl:HeaderStripPanel.Priority="0" ctrl:HeaderStripPanel.AlignRight="True" Orientation="Horizontal" HorizontalAlignment="Right">
                     <!-- 更新 (= 選択中のスレ一覧タブを再取得)。タブ種別 (板 / 全ログ / お気に入り) を問わず動作する。
                          SelectedTab が null なら無効化。 -->
-                    <Button Click="RefreshThreadListButton_Click"
+                    <Button AutomationProperties.Name="更新" Click="RefreshThreadListButton_Click"
                             ToolTip="このスレ一覧タブを更新">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
@@ -144,7 +144,7 @@
                     </Button>
 
                     <!-- AI 翻訳: このタブのスレタイを訳して表示する (タブごと・その場限り)。ON の間は押下状態の色、翻訳中は ⏳ -->
-                    <Button Click="TranslateTitlesButton_Click">
+                    <Button AutomationProperties.Name="スレタイを翻訳" Click="TranslateTitlesButton_Click">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="ToolTip" Value="スレタイを AI 翻訳する (このタブだけ。もう一度押すと原文に戻す)" />
@@ -175,7 +175,7 @@
                     </Button>
 
                     <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効。 -->
-                    <Button Click="NewThreadButton_Click"
+                    <Button AutomationProperties.Name="新規スレッド" Click="NewThreadButton_Click"
                             ToolTip="この板に新規スレッドを立てる">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">

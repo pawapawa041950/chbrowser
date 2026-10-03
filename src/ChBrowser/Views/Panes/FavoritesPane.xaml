@@ -65,7 +65,7 @@
                        LastChildFill="True">
                 <Border DockPanel.Dock="Bottom" Height="1" Background="{StaticResource PaneBorderBrush}" />
                 <TextBlock DockPanel.Dock="Left" Text="お気に入り" Padding="6,4" FontWeight="SemiBold" />
-                <Button DockPanel.Dock="Right"
+                <Button AutomationProperties.Name="お気に入りチェック" DockPanel.Dock="Right"
                         Style="{StaticResource ToolbarIconButton}"
                         Click="FavCheckUpdates_Click"
                         ToolTip="お気に入りチェック (登録スレに新着があるか確認 → 更新スレを開く)">

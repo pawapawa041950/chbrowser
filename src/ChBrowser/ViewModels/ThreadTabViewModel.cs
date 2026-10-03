@@ -459,6 +459,23 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
         IsMediaFilterOn   = false;
     }
 
+    // ---- スレ表示の件数 (ステータスバー用。スレ表示の JS が postStats で送ってくる) ----
+
+    /// <summary>表示しているレス数 (NG で消したレスは含まない)。まだ届いていなければ 0。</summary>
+    [ObservableProperty] private int  _shownPostTotal;
+    /// <summary>フィルタ (検索欄 / フィルターメニュー) 後に見えているレス数。</summary>
+    [ObservableProperty] private int  _shownPostVisible;
+    /// <summary>フィルタ (検索欄 / フィルターメニュー) が効いているか。</summary>
+    [ObservableProperty] private bool _isPostFilterActive;
+
+    /// <summary>スレ表示から届いた件数を反映する。</summary>
+    public void SetPostStats(int total, int visible, bool filtering)
+    {
+        ShownPostTotal     = total;
+        ShownPostVisible   = visible;
+        IsPostFilterActive = filtering;
+    }
+
     /// <summary>フィルター: 本文に画像 / 動画 URL を含むレス (フィルターメニューのチェック)。</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsFilterOn))]

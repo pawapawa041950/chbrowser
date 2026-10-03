@@ -9,7 +9,7 @@
         <!-- 折りたたみ状態: 🔍 ボタンだけ表示。HorizontalAlignment=Right にして、host が広い領域を渡しても
              右端に張り付く (= 隣の他ボタン群の直左に近い位置に固定される) ようにする。
              host が狭い場合はそのまま自然サイズ (= 28px) を保つ。 -->
-        <Button x:Name="ExpandButton"
+        <Button AutomationProperties.Name="検索" x:Name="ExpandButton"
                 Style="{StaticResource ToolbarIconButton}"
                 HorizontalAlignment="Right"
                 Click="ExpandButton_Click">

@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -163,6 +164,22 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
         EnsureRendered(availableSize.Width);
         var w = double.IsInfinity(availableSize.Width) ? _size.Width : Math.Min(_size.Width, availableSize.Width);
         return new Size(w, _size.Height);
+    }
+
+    /// <summary>UI Automation (読み上げ・自動操作) には <see cref="Text"/> を名前として出す (TextBlock と同じ)。
+    /// これが無いと、アイコンをこのコントロールで描くボタンが名前の無いボタンになる。</summary>
+    protected override AutomationPeer OnCreateAutomationPeer() => new ColorEmojiTextBlockAutomationPeer(this);
+
+    private sealed class ColorEmojiTextBlockAutomationPeer(ColorEmojiTextBlock owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override string GetNameCore()
+        {
+            var name = base.GetNameCore();   // AutomationProperties.Name の指定があればそれ
+            return string.IsNullOrEmpty(name) ? ((ColorEmojiTextBlock)Owner).Text ?? "" : name;
+        }
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Text;
+        protected override string GetClassNameCore() => nameof(ColorEmojiTextBlock);
+        protected override bool IsControlElementCore() => true;
     }
 
     protected override void OnRender(DrawingContext dc)

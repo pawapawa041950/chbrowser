@@ -203,6 +203,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// SelectedThreadTab 切替時 / そのタブの DatSize 更新時に <see cref="OnSelectedThreadTabChanged"/> /
     /// <see cref="OnActiveThreadTabPropertyChanged"/> から書き換える。タブ未選択時は空文字。</summary>
     [ObservableProperty] private string _datSizeStatus = "";
+    /// <summary>ステータスバー: 表示中のスレのレス数 (フィルタ中は「表示 N / M レス」)。</summary>
+    [ObservableProperty] private string _postCountStatus = "";
 
     /// <summary>ステータスバーに出すどんぐり (acorn) の状態テキスト。30 秒ごとに更新。</summary>
     [ObservableProperty] private string _donguriStatus = "🌰 未取得";
@@ -341,6 +343,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         // ステータスバーの「あぼーん N」「dat サイズ」を選択タブのものに更新
         AboneStatus    = value is null ? "あぼーん 0" : $"あぼーん {value.HiddenCount}";
         DatSizeStatus  = value is null ? ""           : FormatDatSize(value.DatSize);
+        PostCountStatus = FormatPostCount(value);
 
         // 旧タブ購読を解除 → 新タブ購読
         if (_statusListenerThreadTab is not null)
@@ -370,6 +373,19 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             SyncStatusFromActivePane();
         if (e.PropertyName == nameof(ThreadTabViewModel.DatSize) && sender is ThreadTabViewModel tab)
             DatSizeStatus = FormatDatSize(tab.DatSize);
+        if (e.PropertyName is nameof(ThreadTabViewModel.ShownPostTotal) or nameof(ThreadTabViewModel.ShownPostVisible)
+                           or nameof(ThreadTabViewModel.IsPostFilterActive) && sender is ThreadTabViewModel t2)
+            PostCountStatus = FormatPostCount(t2);
+    }
+
+    /// <summary>ステータスバーのレス数 (例: 「105 レス」、フィルタ中は「表示 12 / 105 レス」)。スレが無ければ空。
+    /// 件数はスレ表示に出ているレス (NG で消したレスは含まない)。まだ表示から届いていなければ取得済みのレス数。</summary>
+    private static string FormatPostCount(ThreadTabViewModel? tab)
+    {
+        if (tab is null) return "";
+        var total = tab.ShownPostTotal > 0 ? tab.ShownPostTotal : tab.Posts.Count;
+        if (total == 0) return "";
+        return tab.IsPostFilterActive ? $"表示 {tab.ShownPostVisible:N0} / {total:N0} レス" : $"{total:N0} レス";
     }
 
     /// <summary>dat サイズ (バイト) を「N KB」表記に整形。1024 で割って整数 + 桁区切り。</summary>

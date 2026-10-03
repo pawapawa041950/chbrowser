@@ -188,7 +188,7 @@
 
                     <!-- NG 判定 AI のしきい値設定 (= 検索ボックスの右隣)。クリックでしきい値メニューを開く
                          (どこからを NG とみなすか)。実処理は MainViewModel.SetAiNgThresholdCommand。✓ は現在値に付く。 -->
-                    <Button Style="{StaticResource ToolbarIconButton}"
+                    <Button AutomationProperties.Name="NG 判定 AI のしきい値" Style="{StaticResource ToolbarIconButton}"
                             Click="AiNgThresholdButton_Click"
                             ToolTip="攻撃的レスの非表示しきい値 (NG 判定 AI)">
                         <ctrl:ColorEmojiTextBlock Text="🛡️" FontSize="13" TextTrimming="None" IsButtonIcon="True"
@@ -231,7 +231,7 @@
                          条件が効いている間はボタンを押下状態の色にする。
                          入力欄を置くので ContextMenu ではなく Popup (ContextMenu はキー入力をメニュー操作に取る)。 -->
                     <Grid>
-                        <Button x:Name="PopularButton" Click="PopularButton_Click">
+                        <Button AutomationProperties.Name="フィルター" x:Name="PopularButton" Click="PopularButton_Click">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                     <Setter Property="ToolTip" Value="フィルター (返信数 / イイネ数 / 画像・動画で表示するレスを絞る)" />
@@ -369,7 +369,7 @@
 
                     <!-- AI 翻訳: 押すとメニュー (各レスの翻訳ボタンの表示 / このスレを全て翻訳する)。
                          スレ全体の翻訳が ON の間は押下状態の色、実行中は ⏳ -->
-                    <Button Click="TranslateMenuButton_Click">
+                    <Button AutomationProperties.Name="AI 翻訳" Click="TranslateMenuButton_Click">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="ToolTip" Value="AI 翻訳" />
@@ -412,7 +412,7 @@
                     </Button>
 
                     <!-- 差分取得 -->
-                    <Button Style="{StaticResource ToolbarIconButton}"
+                    <Button AutomationProperties.Name="差分取得" Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.RefreshCommand}"
                             ToolTip="このスレの差分を取得 (新着レスを末尾に追加)">
                         <ctrl:ColorEmojiTextBlock Text="🔄" FontSize="13" TextTrimming="None" IsButtonIcon="True"
@@ -420,7 +420,7 @@
                     </Button>
 
                     <!-- 書き込み -->
-                    <Button Style="{StaticResource ToolbarIconButton}"
+                    <Button AutomationProperties.Name="書き込み" Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.WriteCommand}"
                             ToolTip="このスレに書き込む">
                         <!-- 設定「ボタンをカラーで表示する」が ON ならカラー絵文字、OFF なら線画 -->
@@ -440,7 +440,7 @@
                     </Button>
 
                     <!-- 表示モード切替 -->
-                    <Button Command="{Binding SelectedTab.CycleViewModeCommand}">
+                    <Button AutomationProperties.Name="表示モード切替" Command="{Binding SelectedTab.CycleViewModeCommand}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
                                 <Setter Property="ToolTip" Value="表示モードを切替" />
@@ -524,7 +524,7 @@
                     </Button>
 
                     <!-- ログ削除 -->
-                    <Button Style="{StaticResource ToolbarIconButton}"
+                    <Button AutomationProperties.Name="ログを削除" Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.DeleteCommand}"
                             ToolTip="このスレのログを削除してタブを閉じる">
                         <!-- 設定「ボタンをカラーで表示する」が ON ならカラー絵文字、OFF なら線画 -->

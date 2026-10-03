@@ -237,6 +237,22 @@
      *  自分自身の所属 number で判定する (= 同じ post オブジェクトを参照するので結果は一致)。
      *  filter 条件が空ならまとめて class を剥がして早期 return。
      *  最後に <see cref="applySearchHighlightToAll"/> を呼んでマッチ箇所のハイライトも更新する。 */
+    /** ステータスバー用の件数 (レス数 / フィルタ中の表示レス数) を C# に送る。前回と同じなら送らない。
+     *  数えるのは各レスの本体 (id="rN") で、表示中 = 自分も祖先も filter-hidden でないもの。 */
+    let lastPostStatsKey = '';
+    function reportPostStats() {
+        const root = document.getElementById('posts');
+        if (!root || !window.chrome || !window.chrome.webview) return;
+        const primaries = root.querySelectorAll('.post[id^="r"]');
+        let shown = 0;
+        for (let i = 0; i < primaries.length; i++) if (!primaries[i].closest('.filter-hidden')) shown++;
+        const filtering = !isFilterEmpty();
+        const key = primaries.length + '/' + shown + '/' + filtering;
+        if (key === lastPostStatsKey) return;
+        lastPostStatsKey = key;
+        window.chrome.webview.postMessage({ type: 'postStats', total: primaries.length, shown: shown, filtering: filtering });
+    }
+
     function applyFilterToAllPosts() {
         const root = document.getElementById('posts');
         if (!root) return;
@@ -245,6 +261,7 @@
         if (isFilterEmpty()) {
             root.querySelectorAll('.filter-hidden').forEach(function (el) { el.classList.remove('filter-hidden'); });
             applySearchHighlightToAll();
+            reportPostStats();
             return;
         }
         // 1st pass: 各 .post を一旦すべて filter-hidden にし、match した要素だけ控える。
@@ -293,6 +310,7 @@
             else                                  block.classList.add('filter-hidden');
         });
         applySearchHighlightToAll();
+        reportPostStats();
     }
 
     /** スレッド内の全 .post-body 配下のテキストノードを走査し、textQuery に一致する箇所を

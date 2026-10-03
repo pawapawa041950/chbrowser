@@ -155,6 +155,7 @@ public partial class ThreadDisplayPane : UserControl
             case "openUrl":            HandleOpenUrl(payload); break;
             // ↑ HandleOpenUrl 内で 5ch.io スレ URL を検出した場合だけ本アプリの新タブで開く分岐をする。
             case "scrollPosition":     HandleScrollPosition(sender, payload); break;
+            case "postStats":          HandlePostStats(sender, payload); break;
             case "imageMetaRequest":   HandleImageMetaRequest(sender, payload); break;
             case "aiMetadataRequest":  HandleAiMetadataRequest(sender, payload); break;
             case "openInViewer":       HandleOpenInViewer(payload); break;
@@ -1122,6 +1123,16 @@ public partial class ThreadDisplayPane : UserControl
         {
             Debug.WriteLine($"[OpenUrl] failed: {ex.Message}");
         }
+    }
+
+    /// <summary>スレ表示の件数 (レス数 / フィルタ中の表示レス数) をタブに反映する (ステータスバー用)。</summary>
+    private static void HandlePostStats(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv || wv.DataContext is not ThreadTabViewModel tab) return;
+        var total     = payload.TryGetProperty("total", out var t) && t.TryGetInt32(out var tv) ? tv : 0;
+        var shown     = payload.TryGetProperty("shown", out var s) && s.TryGetInt32(out var sv) ? sv : total;
+        var filtering = payload.TryGetProperty("filtering", out var f) && f.ValueKind == JsonValueKind.True;
+        tab.SetPostStats(total, shown, filtering);
     }
 
     private void HandleScrollPosition(object sender, JsonElement payload)

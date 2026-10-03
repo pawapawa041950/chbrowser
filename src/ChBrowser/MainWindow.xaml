@@ -143,6 +143,11 @@
                 <TextBlock Text="{Binding GestureStatus}" Foreground="#1E88E5" FontWeight="SemiBold" />
             </StatusBarItem>
             <StatusBarItem DockPanel.Dock="Right"><TextBlock Text="{Binding DatSizeStatus}" /></StatusBarItem>
+            <!-- 表示中のスレのレス数 (フィルタ中は「表示 N / M レス」) -->
+            <StatusBarItem DockPanel.Dock="Right">
+                <TextBlock Text="{Binding PostCountStatus}"
+                           ToolTip="表示中のスレのレス数 (NG で消したレスは含まない)。検索欄・フィルターで絞り込み中は、見えているレス数 / 全体" />
+            </StatusBarItem>
             <StatusBarItem DockPanel.Dock="Right">
                 <TextBlock Text="{Binding AboneStatus}"
                            Cursor="Hand"
