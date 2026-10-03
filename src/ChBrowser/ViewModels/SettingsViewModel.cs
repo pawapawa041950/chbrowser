@@ -33,6 +33,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _debugDisableRecovery  = false;
     /// <summary>絵文字表示に Noto Color Emoji を使うか (全般カテゴリ)。未ダウンロード時は ON にできない。</summary>
     [ObservableProperty] private bool   _useNotoColorEmoji     = false;
+    /// <summary>ボタンのアイコンをカラーで表示するか (全般カテゴリ)。</summary>
+    [ObservableProperty] private bool   _colorButtonIcons      = true;
     /// <summary>絵文字フォントがダウンロード済みか (表示専用・ConfigStorage には保存しない)。
     /// false の間はチェックボックスを無効化し、ダウンロードボタンを押せる状態にする。</summary>
     [ObservableProperty] private bool   _emojiFontDownloaded   = false;
@@ -459,6 +461,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         EmojiFontStatus              = ChBrowser.Services.Fonts.EmojiFontService.HasPendingUpdate ? "新しい版をダウンロード済み (次回起動時に反映)"
                                      : EmojiFontDownloaded ? "ダウンロード済み" : "未ダウンロード";
         UseNotoColorEmoji            = initial.UseNotoColorEmoji;
+        ColorButtonIcons             = initial.ColorButtonIcons;
         UserAgentOverride            = initial.UserAgentOverride;
         TimeoutSec                   = initial.TimeoutSec;
         EddiAuthToken                = initial.PostAuthTokens is { } authTokens && authTokens.TryGetValue("eddi", out var eddiToken) ? eddiToken : "";
@@ -627,6 +630,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RestoreOpenTabsOnStartup = RestoreOpenTabsOnStartup,
         DebugDisableRecovery        = DebugDisableRecovery,
         UseNotoColorEmoji           = UseNotoColorEmoji,
+        ColorButtonIcons            = ColorButtonIcons,
         UserAgentOverride           = UserAgentOverride,
         TimeoutSec                  = TimeoutSec,
         PostAuthTokens              = MergeAuthToken(_initialConfig.PostAuthTokens, "eddi", EddiAuthToken),

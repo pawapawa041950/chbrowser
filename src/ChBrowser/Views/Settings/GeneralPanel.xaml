@@ -75,6 +75,10 @@
         <TextBlock Text="{Binding EmojiFontStatus}"
                    Foreground="#666"
                    Margin="0,0,0,4" />
+        <CheckBox Content="ボタンをカラーで表示する"
+                  IsChecked="{Binding ColorButtonIcons, Mode=TwoWay}"
+                  Margin="0,8,0,4"
+                  ToolTip="ツールバー等のボタンのアイコン (🔍 🔄 🌐 ✏️ 🗑️ など) をカラーの絵文字で表示する。OFF ならモノクロ" />
 
         <!-- (デバッグ) スレ表示真っ白現象の分析用。ON の間だけ自動リカバリを止めて分析ログを出力する。 -->
         <Separator Margin="0,20,0,12" />

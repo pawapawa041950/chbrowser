@@ -69,7 +69,7 @@
                         Style="{StaticResource ToolbarIconButton}"
                         Click="FavCheckUpdates_Click"
                         ToolTip="お気に入りチェック (登録スレに新着があるか確認 → 更新スレを開く)">
-                    <TextBlock Text="🔄" FontSize="13"
+                    <ctrl:ColorEmojiTextBlock Text="🔄" FontSize="13" TextTrimming="None" IsButtonIcon="True"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Button>
                 <!-- 絞り込み検索: タイトル / 🔄 ボタンの間の残りスペースを fill (= last child)。

@@ -43,6 +43,14 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
             FrameworkPropertyMetadataOptions.Inherits | FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
             OnInputChanged));
 
+    /// <summary>ボタンのアイコンか。true なら設定「ボタンをカラーで表示する」(<see cref="ButtonIconSettings"/>) が OFF のときモノクロで描く
+    /// (タブ見出しなどの絵文字は false のまま = 常にカラー)。</summary>
+    public static readonly DependencyProperty IsButtonIconProperty = DependencyProperty.Register(
+        nameof(IsButtonIcon), typeof(bool), typeof(ColorEmojiTextBlock),
+        new FrameworkPropertyMetadata(false,
+            FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
+            OnInputChanged));
+
     public static readonly DependencyProperty TextTrimmingProperty = DependencyProperty.Register(
         nameof(TextTrimming), typeof(TextTrimming), typeof(ColorEmojiTextBlock),
         new FrameworkPropertyMetadata(TextTrimming.CharacterEllipsis,
@@ -54,6 +62,7 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
     public Brush       Foreground   { get => (Brush)GetValue(ForegroundProperty);        set => SetValue(ForegroundProperty, value); }
     public FontFamily  FontFamily   { get => (FontFamily)GetValue(FontFamilyProperty);   set => SetValue(FontFamilyProperty, value); }
     public TextTrimming TextTrimming { get => (TextTrimming)GetValue(TextTrimmingProperty); set => SetValue(TextTrimmingProperty, value); }
+    public bool        IsButtonIcon { get => (bool)GetValue(IsButtonIconProperty);        set => SetValue(IsButtonIconProperty, value); }
 
     private static void OnInputChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         => ((ColorEmojiTextBlock)d)._cacheKey = null;
@@ -66,8 +75,17 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
 
     public ColorEmojiTextBlock()
     {
-        Loaded   += (_, _) => ColorEmojiTextRenderer.SettingsChanged += OnSettingsChanged;
-        Unloaded += (_, _) => ColorEmojiTextRenderer.SettingsChanged -= OnSettingsChanged;
+        Loaded += (_, _) =>
+        {
+            ColorEmojiTextRenderer.SettingsChanged += OnSettingsChanged;
+            ButtonIconSettings.Instance.Changed    += OnSettingsChanged;
+            OnSettingsChanged();   // 非表示の間に設定が変わっていても描き直す
+        };
+        Unloaded += (_, _) =>
+        {
+            ColorEmojiTextRenderer.SettingsChanged -= OnSettingsChanged;
+            ButtonIconSettings.Instance.Changed    -= OnSettingsChanged;
+        };
     }
 
     private void OnSettingsChanged()
@@ -102,11 +120,16 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
         var active   = ChBrowser.Services.Fonts.EmojiFontService.Active;
         var fontPath = ChBrowser.Services.Fonts.EmojiFontService.FilePath ?? "";
 
-        var key = (text, FontSize, fg, fam, ellipsis, widthKey, dpi, active, fontPath);
+        // ボタンのアイコンで、設定「ボタンをカラーで表示する」が OFF ならモノクロ (= WPF の文字描画)
+        var mono = IsButtonIcon && !ButtonIconSettings.Instance.Colored;
+
+        var key = (text, FontSize, fg, fam, ellipsis, widthKey, dpi, active, fontPath, mono);
         if (key.Equals(_cacheKey) && (_bmp is not null || _fallback is not null)) return;
         _cacheKey = key;
 
-        if (ColorEmojiTextRenderer.TryRender(text, fam, FontSize, fg, maxWidth, ellipsis, dpi, out var bmp, out var size))
+        if (mono)
+            BuildFallback(text, fam, fg, maxWidth, ellipsis, dpi);
+        else if (ColorEmojiTextRenderer.TryRender(text, fam, FontSize, fg, maxWidth, ellipsis, dpi, out var bmp, out var size))
         {
             _bmp      = bmp;
             _fallback = null;

@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ctrl="clr-namespace:ChBrowser.Controls"
              mc:Ignorable="d">
     <Grid>
         <!-- 折りたたみ状態: 🔍 ボタンだけ表示。HorizontalAlignment=Right にして、host が広い領域を渡しても
@@ -12,7 +13,7 @@
                 Style="{StaticResource ToolbarIconButton}"
                 HorizontalAlignment="Right"
                 Click="ExpandButton_Click">
-            <TextBlock Text="🔍" FontSize="13"
+            <ctrl:ColorEmojiTextBlock Text="🔍" FontSize="13" TextTrimming="None" IsButtonIcon="True"
                        HorizontalAlignment="Center" VerticalAlignment="Center" />
         </Button>
 

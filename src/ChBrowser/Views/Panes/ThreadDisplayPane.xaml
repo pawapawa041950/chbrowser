@@ -191,7 +191,7 @@
                     <Button Style="{StaticResource ToolbarIconButton}"
                             Click="AiNgThresholdButton_Click"
                             ToolTip="攻撃的レスの非表示しきい値 (NG 判定 AI)">
-                        <TextBlock Text="🛡" FontSize="13"
+                        <ctrl:ColorEmojiTextBlock Text="🛡️" FontSize="13" TextTrimming="None" IsButtonIcon="True"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                         <Button.ContextMenu>
                             <ContextMenu>
@@ -397,9 +397,9 @@
                                           ToolTip="日本語以外のレスを全て翻訳する (新着も自動で翻訳)。もう一度選ぶと原文に戻す" />
                             </ContextMenu>
                         </Button.ContextMenu>
-                        <TextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
+                        <ctrl:ColorEmojiTextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" TextTrimming="None" IsButtonIcon="True">
+                            <ctrl:ColorEmojiTextBlock.Style>
+                                <Style TargetType="ctrl:ColorEmojiTextBlock">
                                     <Setter Property="Text" Value="🌐" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding SelectedTab.IsTranslating}" Value="True">
@@ -407,15 +407,15 @@
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                            </ctrl:ColorEmojiTextBlock.Style>
+                        </ctrl:ColorEmojiTextBlock>
                     </Button>
 
                     <!-- 差分取得 -->
                     <Button Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.RefreshCommand}"
                             ToolTip="このスレの差分を取得 (新着レスを末尾に追加)">
-                        <TextBlock Text="🔄" FontSize="13"
+                        <ctrl:ColorEmojiTextBlock Text="🔄" FontSize="13" TextTrimming="None" IsButtonIcon="True"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
 
@@ -423,13 +423,20 @@
                     <Button Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.WriteCommand}"
                             ToolTip="このスレに書き込む">
-                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              StrokeThickness="1.4"
-                              StrokeLineJoin="Round"
-                              StrokeStartLineCap="Round"
-                              StrokeEndLineCap="Round"
-                              Fill="Transparent"
-                              Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
+                        <!-- 設定「ボタンをカラーで表示する」が ON ならカラー絵文字、OFF なら線画 -->
+                        <Grid>
+                            <ctrl:ColorEmojiTextBlock Text="✏️" FontSize="13" TextTrimming="None"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Visibility="{Binding Colored, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}" />
+                            <Path Visibility="{Binding Monochrome, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Fill="Transparent"
+                                  Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
+                        </Grid>
                     </Button>
 
                     <!-- 表示モード切替 -->
@@ -520,10 +527,17 @@
                     <Button Style="{StaticResource ToolbarIconButton}"
                             Command="{Binding SelectedTab.DeleteCommand}"
                             ToolTip="このスレのログを削除してタブを閉じる">
-                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              StrokeThickness="1.2"
-                              StrokeLineJoin="Round"
-                              Data="M6,3 L10,3 L10,5 L6,5 Z M3,5 L13,5 M5,5 L5,16 L11,16 L11,5 M7,8 L7,13 M9,8 L9,13" />
+                        <!-- 設定「ボタンをカラーで表示する」が ON ならカラー絵文字、OFF なら線画 -->
+                        <Grid>
+                            <ctrl:ColorEmojiTextBlock Text="🗑️" FontSize="13" TextTrimming="None"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Visibility="{Binding Colored, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}" />
+                            <Path Visibility="{Binding Monochrome, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.2"
+                                  StrokeLineJoin="Round"
+                                  Data="M6,3 L10,3 L10,5 L6,5 Z M3,5 L13,5 M5,5 L5,16 L11,16 L11,5 M7,8 L7,13 M9,8 L9,13" />
+                        </Grid>
                     </Button>
 
                     <!-- お気に入りトグル (★) -->

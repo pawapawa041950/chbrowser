@@ -27,6 +27,10 @@ public sealed record AppConfig
     /// 反映は開き直しから (各 WebView シェルの再構築が必要)。Android と同系統の絵文字デザインになる。</summary>
     public bool UseNotoColorEmoji { get; init; } = false;
 
+    /// <summary>ツールバー等のボタンのアイコン (絵文字) をカラーで表示するか。既定 ON。
+    /// OFF なら絵文字はモノクロ、書き込み (ペン) / 削除 (ごみ箱) は線画のアイコンになる。即時反映。タブ見出しの絵文字は対象外。</summary>
+    public bool ColorButtonIcons { get; init; } = true;
+
     /// <summary>(デバッグ用) ON の間だけ「スレ表示真っ白」現象の分析ログを出力し、
     /// バグ発生時の自動リカバリ (ProcessFailed→Reload / 内部 reload→resync) を止める。
     /// 既定 OFF。通常運用では使わない。即時反映 (= <see cref="ChBrowser.Services.Logging.DebugFlags"/> と同期)。</summary>

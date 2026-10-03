@@ -139,7 +139,7 @@
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
-                        <TextBlock Text="🔄" FontSize="13"
+                        <ctrl:ColorEmojiTextBlock Text="🔄" FontSize="13" TextTrimming="None" IsButtonIcon="True"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
 
@@ -160,9 +160,9 @@
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
-                        <TextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
+                        <ctrl:ColorEmojiTextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" TextTrimming="None" IsButtonIcon="True">
+                            <ctrl:ColorEmojiTextBlock.Style>
+                                <Style TargetType="ctrl:ColorEmojiTextBlock">
                                     <Setter Property="Text" Value="🌐" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding SelectedTab.IsTranslatingTitles}" Value="True">
@@ -170,8 +170,8 @@
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                            </ctrl:ColorEmojiTextBlock.Style>
+                        </ctrl:ColorEmojiTextBlock>
                     </Button>
 
                     <!-- 板アクション (新規スレ立て) - 板タブのときだけ有効。 -->
@@ -188,13 +188,20 @@
                             </Style>
                         </Button.Style>
                         <!-- ペン (スレッド表示ペインの「書き込み」ボタンと同じアイコン) -->
-                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                              StrokeThickness="1.4"
-                              StrokeLineJoin="Round"
-                              StrokeStartLineCap="Round"
-                              StrokeEndLineCap="Round"
-                              Fill="Transparent"
-                              Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
+                        <!-- 設定「ボタンをカラーで表示する」が ON ならカラー絵文字、OFF なら線画 -->
+                        <Grid>
+                            <ctrl:ColorEmojiTextBlock Text="✏️" FontSize="13" TextTrimming="None"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Visibility="{Binding Colored, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}" />
+                            <Path Visibility="{Binding Monochrome, Source={x:Static ctrl:ButtonIconSettings.Instance}, Converter={StaticResource BoolToVis}}"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.4"
+                                  StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Fill="Transparent"
+                                  Data="M 3,13 L 3,16 L 6,16 L 14,8 L 11,5 L 3,13 M 11,5 L 13,3 L 16,6 L 14,8" />
+                        </Grid>
                     </Button>
 
                     <!-- お気に入りトグル (★) - 板タブのときだけ有効。

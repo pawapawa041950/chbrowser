@@ -191,6 +191,8 @@ public partial class App : Application
             fontsDir:   System.IO.Path.Combine(_imageCache.CacheRootDir, "fonts"),
             virtualUrl: $"https://{ImageCacheService.VirtualHostName}/fonts/NotoColorEmoji-COLRv1.ttf",
             enabled:    _currentConfig.UseNotoColorEmoji);
+        // ボタンのアイコンをカラーで表示するか (画面を作る前に決めておく)
+        ChBrowser.Controls.ButtonIconSettings.Instance.Colored = _currentConfig.ColorButtonIcons;
         // Phase 3: CORS proxy 用に HttpClient を登録 (動画サムネ抽出時の crossOrigin リクエストを横取り)。
         // MonazillaClient.Http を流用 (= 既存設定 Timeout / UA がそのまま効く)。
         WebView2Helper.RegisterHttpClient(_monazilla.Http);
@@ -941,6 +943,9 @@ public partial class App : Application
         // ビューアサムネサイズ
         if (_imageViewerVm is not null)
             _imageViewerVm.ThumbnailSize = Math.Clamp(config.ViewerThumbnailSize, 32, 256);
+
+        // ボタンのアイコンをカラーで表示するか (即時: 表示中のボタンが描き直される)
+        ChBrowser.Controls.ButtonIconSettings.Instance.Colored = config.ColorButtonIcons;
 
         // 絵文字フォント利用 ON/OFF。変わったらシェルキャッシュを破棄して各ペインを再構築
         // (= スレ表示は開き直しで反映、3 ペインは即再描画)。
