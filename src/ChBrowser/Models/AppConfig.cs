@@ -119,9 +119,8 @@ public sealed record AppConfig
     /// 6 以上 = 実質オフ (= 何も隠さない)。既定 4 (= 4 と 5 を隠す)。スレ表示ペインのボタンで変更。</summary>
     public int NgAiThreshold { get; init; } = 4;
 
-    /// <summary>NG 判定の同時実行数 (= 並行で投げる LLM リクエスト本数)。サーバ (llama.cpp / vLLM) の
-    /// 並列デコードを効かせて高速化するためのもの。サーバ側を <c>--parallel</c> でこの値以上にして起動すると効く。
-    /// 既定 4。1 で従来の逐次相当。</summary>
+    /// <summary>(旧設定・移行用) NG 判定の同時実行数。今は LLM プロファイルの同時実行数 (<see cref="LlmProfile.Concurrency"/>) を使う。
+    /// 同時実行数が未設定のプロファイルを読み込んだとき 1 回だけ移す (<see cref="LlmProfileMigration.FillConcurrency"/>)。</summary>
     public int NgAiConcurrency { get; init; } = 4;
 
     /// <summary>NG 判定リクエストに「リーズニング無効化のための一般的な設定一式」を付加するか。
@@ -139,7 +138,7 @@ public sealed record AppConfig
     public string TranslateModel { get; init; } = "";
     /// <summary>(旧設定・移行用) AI 翻訳のコンテキストサイズ (トークン数)。0 なら AI の設定を使う。1 回に送るレスの量もこれで決まる。</summary>
     public int TranslateContextSize { get; init; } = 0;
-    /// <summary>AI 翻訳の同時実行数 (並行で投げる LLM リクエスト本数、全スレ合計)。既定 2。</summary>
+    /// <summary>(旧設定・移行用) AI 翻訳の同時実行数。今は LLM プロファイルの同時実行数 (<see cref="LlmProfile.Concurrency"/>) を使う。</summary>
     public int TranslateConcurrency { get; init; } = 2;
     /// <summary>AI 翻訳のリクエストにリーズニング無効化設定一式を付加するか (<see cref="NgAiDisableReasoning"/> と同じ)。既定 true。</summary>
     public bool TranslateDisableReasoning { get; init; } = true;

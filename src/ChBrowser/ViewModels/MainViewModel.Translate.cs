@@ -15,7 +15,7 @@ namespace ChBrowser.ViewModels;
 ///
 /// <list type="bullet">
 /// <item><description>1 回の推論で 1 レスだけ訳す (<see cref="AiTranslator.TranslateOneAsync"/>)。同時に投げるリクエスト数は
-///   全スレ合計で <see cref="AppConfig.TranslateConcurrency"/> まで。訳している最中のレスは JS へ loading として知らせ、
+///   使う LLM プロファイルの同時実行数まで (NG 判定 AI 等と共有)。訳している最中のレスは JS へ loading として知らせ、
 ///   そのレスの 🌐 ボタンを読み込み中の表示にする。</description></item>
 /// <item><description>訳文はスレのログの隣 (<c>&lt;key&gt;.tr.json</c>) に保存し、同じレスを何度も LLM に送らない。
 ///   スレ全体の翻訳の ON / OFF と、翻訳で表示しているレスも保存する (= 開き直しても同じ見た目)。</description></item>

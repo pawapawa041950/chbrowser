@@ -30,12 +30,6 @@
             <TextBlock Text="使う LLM プロファイル" Style="{StaticResource FieldLabel}" />
             <ComboBox ItemsSource="{Binding LlmProfileChoices}" DisplayMemberPath="Label" SelectedValuePath="Id"
                           SelectedValue="{Binding TranslateLlmProfileId, Mode=TwoWay}" Width="320" HorizontalAlignment="Left" Margin="0,0,0,6" />
-            <TextBlock Text="同時実行数 (並列リクエスト本数)" Style="{StaticResource FieldLabel}" Margin="0,6,0,0" />
-            <TextBox Text="{Binding TranslateConcurrency, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                     Width="120" HorizontalAlignment="Left"
-                     ToolTip="翻訳のリクエストを何本並行で投げるか (全スレ合計、既定 2)。" />
-            <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
-                       Text="※ サーバを --parallel この値以上で起動しないと並列化の効果は出ません (1〜16)。" />
 
             <CheckBox Content="リーズニングOFFオプションを付加する" Margin="0,10,0,0"
                       IsChecked="{Binding TranslateDisableReasoning, Mode=TwoWay}" />

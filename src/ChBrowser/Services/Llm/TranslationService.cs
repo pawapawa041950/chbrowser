@@ -14,7 +14,8 @@ namespace ChBrowser.Services.Llm;
 ///
 /// <list type="bullet">
 /// <item><description>接続: 設定 → AI翻訳 で選んだ LLM プロファイル (<see cref="LlmSettings.TranslateFromConfig"/>)。</description></item>
-/// <item><description>同時に投げるリクエスト数: 全画面合計で <see cref="AppConfig.TranslateConcurrency"/> まで (<see cref="WithSlotAsync{T}"/>)。</description></item>
+/// <item><description>同時に投げるリクエスト数: 使う LLM プロファイルの同時実行数まで (<see cref="WithSlotAsync{T}"/>)。
+///   枠はプロファイル単位で NG 判定 AI 等とも共有する (<see cref="LlmConcurrency"/>)。</description></item>
 /// <item><description>スレタイの訳は、原文 → 訳の対応を <c>cache/title-translations.json</c> に残し、同じタイトルを何度も送らない
 ///   (タイトルは短く、同じスレが何度も一覧に出るため)。</description></item>
 /// </list></summary>
@@ -33,9 +34,6 @@ public sealed class TranslationService
     private readonly LlmClient       _llm;
     private readonly Func<AppConfig> _config;
     private readonly string          _titleCachePath;
-
-    private SemaphoreSlim? _gate;
-    private int            _gateSize;
 
     private Dictionary<string, string>? _titles;   // 原文 → 訳 (挿入順 = 古い順)
     private bool _titlesDirty;
@@ -57,20 +55,8 @@ public sealed class TranslationService
 
     private bool DisableReasoning => _config().TranslateDisableReasoning;
 
-    /// <summary>全画面共通の同時実行の上限 (設定が変わったら次の要求から新しい上限)。</summary>
-    private SemaphoreSlim Gate
-    {
-        get
-        {
-            var n = Math.Clamp(_config().TranslateConcurrency, 1, 16);
-            if (_gate is null || _gateSize != n)
-            {
-                _gate     = new SemaphoreSlim(n);
-                _gateSize = n;
-            }
-            return _gate;
-        }
-    }
+    /// <summary>同時実行の枠 (使う LLM プロファイル単位で共有。設定が変わったら次の要求から新しい上限)。</summary>
+    private SemaphoreSlim Gate => LlmConcurrency.Gate(Settings);
 
     /// <summary>同時実行の枠を 1 つ取ってから <paramref name="body"/> を実行する (枠が空くまで待つ)。
     /// 枠を取った後にしたい処理 (読み込み中の表示など) がある呼び出し元向け。</summary>

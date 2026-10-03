@@ -24,11 +24,6 @@ public sealed partial class MainViewModel
     [ObservableProperty]
     private int _aiNgThreshold = 4;
 
-    /// <summary>NG 判定の有効な同時実行数 (= 並行で投げる LLM リクエスト本数)。設定値
-    /// (<see cref="AppConfig.NgAiConcurrency"/>) を 1..16 にクランプして使う。
-    /// サーバ側を <c>--parallel</c> でこの値以上にして起動すると並列デコードで高速化する。</summary>
-    private int AiNgConcurrency => Math.Clamp(CurrentConfig.NgAiConcurrency, 1, 16);
-
     /// <summary>ステータスバー用の AI-NG 判定進捗。判定中は「AING判定 N件」、完了で「AING判定完了」、
     /// OFF / 未設定 / 対象なしでは空文字 (= 非表示)。</summary>
     [ObservableProperty]
@@ -148,10 +143,11 @@ public sealed partial class MainViewModel
                 return;
             }
 
-            // 同時実行数 (AiNgConcurrency) を上限に並行して判定する (= サーバの並列デコードで高速化)。
+            // 使う LLM プロファイルの同時実行数を上限に並行して判定する (= サーバの並列デコードで高速化)。
+            // 枠はプロファイル単位で AI 翻訳等とも共有する (同じ LLM サーバに上限以上を投げない)。
             // 状態更新 (AiScores / 進捗表示) は UI スレッドの継続上で行われる (ConfigureAwait(true)) ため
             // 直列化されるが、念のため lock で保護する。完了時にまとめて 1 回だけ保存する (途中保存しない)。
-            using var gate = new SemaphoreSlim(AiNgConcurrency);
+            var gate = ChBrowser.Services.Llm.LlmConcurrency.Gate(settings);
             var judgedCount = 0;
             long maxJudgedNo = 0;
             var sync = new object();

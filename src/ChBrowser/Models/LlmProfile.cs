@@ -13,6 +13,8 @@ namespace ChBrowser.Models;
 /// <param name="Model">モデル名。</param>
 /// <param name="ContextSize">コンテキストサイズ (トークン数)。</param>
 /// <param name="SupportsImages">画像を入力できるモデルか。</param>
+/// <param name="Concurrency">このプロファイルに同時に投げるリクエストの上限 (1〜<see cref="MaxConcurrency"/>)。NG 判定 AI と AI 翻訳が同じプロファイルを使うときは合計でこの数まで
+/// (= LLM サーバの並列数に合わせる)。0 は未設定 (旧設定からの移行前) で、読み込み時に <see cref="LlmProfileMigration.FillConcurrency"/> が埋める。</param>
 public sealed record LlmProfile(
     string Id,
     string Name,
@@ -20,9 +22,20 @@ public sealed record LlmProfile(
     string ApiKey,
     string Model,
     int    ContextSize,
-    bool   SupportsImages = false)
+    bool   SupportsImages = false,
+    int    Concurrency    = 0)
 {
     public static string NewId() => Guid.NewGuid().ToString("N");
+
+    /// <summary>新しく作るプロファイルの同時実行数。</summary>
+    public const int DefaultConcurrency = 2;
+
+    /// <summary>同時実行数の上限 (vLLM 等の並列処理の強いサーバ向けに大きめ)。</summary>
+    public const int MaxConcurrency = 128;
+
+    /// <summary>実際に使う同時実行数 (未設定なら既定値、1〜<see cref="MaxConcurrency"/> に収める)。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int EffectiveConcurrency => Concurrency <= 0 ? DefaultConcurrency : Math.Clamp(Concurrency, 1, MaxConcurrency);
 
     /// <summary>接続先 (URL とモデル名) が入っているか。</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -78,5 +91,26 @@ public static class LlmProfileMigration
             // 旧設定では NG 判定 AI は接続先が入っていれば動いていた (空なら機能オフ)
             NgAiEnabled           = ng is not null,
         };
+    }
+
+    /// <summary>同時実行数が未設定 (0) のプロファイルに値を入れる (2026-10: NG 判定 AI / AI 翻訳ごとの設定からプロファイルの設定へ移した)。
+    /// NG 判定 AI / AI 翻訳が使っているプロファイルは旧設定の値 (両方なら大きい方)、どちらも使っていなければ既定値。</summary>
+    public static AppConfig FillConcurrency(AppConfig c, out bool changed)
+    {
+        changed = false;
+        if (c.LlmProfiles is not { Length: > 0 } list || list.All(p => p.Concurrency > 0)) return c;
+        changed = true;
+        var ngId = LlmSettings.ResolveProfile(c, c.NgAiLlmProfileId)?.Id;
+        var trId = LlmSettings.ResolveProfile(c, c.TranslateLlmProfileId)?.Id;
+        LlmProfile Fill(LlmProfile p)
+        {
+            if (p.Concurrency > 0) return p;
+            var olds = new List<int>();
+            if (p.Id == ngId) olds.Add(c.NgAiConcurrency);
+            if (p.Id == trId) olds.Add(c.TranslateConcurrency);
+            var v = olds.Count > 0 ? olds.Max() : LlmProfile.DefaultConcurrency;
+            return p with { Concurrency = Math.Clamp(v, 1, LlmProfile.MaxConcurrency) };
+        }
+        return c with { LlmProfiles = list.Select(Fill).ToArray() };
     }
 }

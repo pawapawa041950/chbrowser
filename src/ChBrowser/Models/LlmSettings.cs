@@ -5,12 +5,16 @@ namespace ChBrowser.Models;
 /// <summary>LLM 接続設定のスナップショット。使うプロファイル (<see cref="LlmProfile"/>) を解決して
 /// <see cref="ChBrowser.Services.Llm.LlmClient"/> に渡すための値オブジェクト。</summary>
 /// <param name="SupportsImages">画像を入力できるモデルか (プロファイルの設定)。</param>
-public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int ContextSize, bool SupportsImages = false)
+/// <param name="ProfileId">元のプロファイルの Id (同時実行数の枠をプロファイル単位で共有するため。<see cref="ChBrowser.Services.Llm.LlmConcurrency"/>)。</param>
+/// <param name="Concurrency">このプロファイルに同時に投げるリクエストの上限 (1〜<see cref="LlmProfile.MaxConcurrency"/>)。</param>
+public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int ContextSize, bool SupportsImages = false,
+                                 string ProfileId = "", int Concurrency = LlmProfile.DefaultConcurrency)
 {
     public static LlmSettings Empty { get; } = new("", "", "", 0);
 
     public static LlmSettings FromProfile(LlmProfile? p)
-        => p is null ? Empty : new(p.ApiUrl ?? "", p.ApiKey ?? "", p.Model ?? "", p.ContextSize, p.SupportsImages);
+        => p is null ? Empty : new(p.ApiUrl ?? "", p.ApiKey ?? "", p.Model ?? "", p.ContextSize, p.SupportsImages,
+                                   p.Id ?? "", p.EffectiveConcurrency);
 
     /// <summary>Id でプロファイルを引く。空・見つからないならデフォルトのプロファイル (それも無ければ最初のもの、無ければ null)。</summary>
     public static LlmProfile? ResolveProfile(AppConfig c, string? id)

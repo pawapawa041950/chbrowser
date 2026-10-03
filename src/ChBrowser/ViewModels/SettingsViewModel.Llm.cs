@@ -75,7 +75,7 @@ public sealed partial class SettingsViewModel
     {
         var name = "プロファイル" + (LlmProfiles.Count + 1);
         while (LlmProfiles.Any(p => p.Name == name)) name += "+";
-        var item = new LlmProfileItem(new LlmProfile(LlmProfile.NewId(), name, "", "", "", 8192));
+        var item = new LlmProfileItem(new LlmProfile(LlmProfile.NewId(), name, "", "", "", 8192, Concurrency: LlmProfile.DefaultConcurrency));
         AddProfileItem(item);
         if (LlmProfiles.Count == 1) DefaultLlmProfileId = item.Id;
         SelectedLlmProfile = item;
@@ -161,6 +161,8 @@ public sealed partial class LlmProfileItem : ObservableObject
     [ObservableProperty] private string _model;
     [ObservableProperty] private int    _contextSize;
     [ObservableProperty] private bool   _supportsImages;
+    /// <summary>同時実行数 (1〜<see cref="LlmProfile.MaxConcurrency"/>)。</summary>
+    [ObservableProperty] private int    _concurrency;
     /// <summary>デフォルトのプロファイルか (一覧の ★ 表示用。保存はしない)。</summary>
     [ObservableProperty] private bool   _isDefault;
     /// <summary>接続確認の結果 (表示専用)。"OK — …" / "NG — …" / "確認中…" / "未確認"。</summary>
@@ -178,6 +180,7 @@ public sealed partial class LlmProfileItem : ObservableObject
         _model          = p.Model ?? "";
         _contextSize    = p.ContextSize;
         _supportsImages = p.SupportsImages;
+        _concurrency    = p.EffectiveConcurrency;
     }
 
     partial void OnNameChanged(string value)       => OnPropertyChanged(nameof(DisplayName));
@@ -187,7 +190,8 @@ public sealed partial class LlmProfileItem : ObservableObject
     public override string ToString() => DisplayName;
 
     public LlmProfile ToProfile()
-        => new(Id, (Name ?? "").Trim(), (ApiUrl ?? "").Trim(), ApiKey ?? "", (Model ?? "").Trim(), Math.Max(0, ContextSize), SupportsImages);
+        => new(Id, (Name ?? "").Trim(), (ApiUrl ?? "").Trim(), ApiKey ?? "", (Model ?? "").Trim(), Math.Max(0, ContextSize), SupportsImages,
+               Math.Clamp(Concurrency, 1, LlmProfile.MaxConcurrency));
 }
 
 /// <summary>「使うプロファイル」の選択肢 1 件 (Id 空 = デフォルトのプロファイルを使う)。</summary>

@@ -69,7 +69,13 @@
                 <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}" Margin="0,0,0,6" />
                 <TextBlock Text="Context Size (トークン数)" Style="{StaticResource FieldLabel}" />
                 <TextBox Text="{Binding ContextSize, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
-                         Width="120" HorizontalAlignment="Left" Margin="0,0,0,8" />
+                         Width="120" HorizontalAlignment="Left" Margin="0,0,0,6" />
+                <TextBlock Text="同時実行数 (並列リクエスト本数)" Style="{StaticResource FieldLabel}" />
+                <TextBox Text="{Binding Concurrency, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                         Width="120" HorizontalAlignment="Left"
+                         ToolTip="このプロファイルに同時に投げるリクエストの上限 (1〜128)。NG 判定 AI と AI 翻訳が同じプロファイルを使うときは合計でこの数までです。" />
+                <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,8"
+                           Text="※ NG 判定 AI と AI 翻訳で使います (1〜128)。サーバ側の並列数 (llama.cpp の --parallel、vLLM の --max-num-seqs) がこの値より小さいと、超えた分はサーバで順番待ちになります。" />
                 <CheckBox Content="画像を入力できる" IsChecked="{Binding SupportsImages, Mode=TwoWay}"
                           ToolTip="画像 (ビジョン) の入力に対応したモデルなら ON にします" />
 

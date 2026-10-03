@@ -36,7 +36,9 @@ public sealed class ConfigStorage
             var config = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
             // 旧形式の LLM 設定をプロファイル形式へ (1 回だけ。移したらすぐ保存して Id を固定する)
             config = ChBrowser.Models.LlmProfileMigration.Migrate(config, out var migrated);
-            if (migrated) Save(config);
+            // 同時実行数を NG 判定 AI / AI 翻訳の設定からプロファイルの設定へ (未設定のプロファイルだけ。1 回だけ)
+            config = ChBrowser.Models.LlmProfileMigration.FillConcurrency(config, out var filled);
+            if (migrated || filled) Save(config);
             return config;
         }
         catch (Exception ex)

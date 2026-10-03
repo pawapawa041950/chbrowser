@@ -46,12 +46,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool   _separateWorkerModel    = false;
     [ObservableProperty] private bool   _allowParallelWorkers   = false;
     // NG 判定 AI (攻撃的レスの自動非表示・AI エージェントとは別系統)
-    /// <summary>NG 判定の同時実行数 (= 並行で投げる LLM リクエスト本数)。サーバを --parallel この値以上で起動すると並列デコードで高速化。既定 4。</summary>
+    /// <summary>(旧設定・画面には出さない) NG 判定の同時実行数。今は LLM プロファイルの同時実行数を使う。移行元として config.json に残すため持ち回る。</summary>
     [ObservableProperty] private int    _ngAiConcurrency        = 4;
     /// <summary>NG 判定リクエストにリーズニング無効化設定一式を付加するか。既定 ON。</summary>
     [ObservableProperty] private bool   _ngAiDisableReasoning   = true;
 
     // AI 翻訳 (接続は「LLM」カテゴリのプロファイル)
+    /// <summary>(旧設定・画面には出さない) AI 翻訳の同時実行数。今は LLM プロファイルの同時実行数を使う。移行元として残すため持ち回る。</summary>
     [ObservableProperty] private int    _translateConcurrency      = 2;
     [ObservableProperty] private bool   _translateDisableReasoning = true;
     // MCP サーバ (内蔵ツールを外部 MCP クライアントへ公開・localhost HTTP)
