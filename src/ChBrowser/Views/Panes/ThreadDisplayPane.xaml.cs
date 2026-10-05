@@ -35,6 +35,28 @@ public partial class ThreadDisplayPane : UserControl
     /// <summary>ツールバー 🌐: AI 翻訳のメニューを出す (AI NG のしきい値ボタンと同じ出し方)。</summary>
     private void TranslateMenuButton_Click(object sender, RoutedEventArgs e) => AiNgThresholdButton_Click(sender, e);
 
+    /// <summary>🌐 メニューが開く瞬間: 訳文が無いスレでは「本スレッドの翻訳文をすべて破棄」をグレーアウト。</summary>
+    private void TranslateMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        var has = DataContext is ThreadPaneGroupViewModel { SelectedTab: { } tab } && tab.Translations.Count > 0;
+        foreach (var mi in cm.Items.OfType<MenuItem>())
+            if (mi.Tag as string == "discardAll") mi.IsEnabled = has;
+    }
+
+    /// <summary>🌐 メニュー「本スレッドの翻訳文をすべて破棄」: 確認してから、このスレの訳文を全て消して原文に戻す。</summary>
+    private void DiscardAllTranslations_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ThreadPaneGroupViewModel g || Vm is not { } main) return;
+        if (g.SelectedTab is not { } tab || tab.Translations.Count == 0) return;
+        var res = MessageBox.Show(Window.GetWindow(this) ?? Application.Current.MainWindow!,
+            $"このスレの翻訳文 ({tab.Translations.Count} レス分) をすべて破棄して原文の表示に戻します。\n" +
+            "「このスレを全て翻訳する」も OFF になります。よろしいですか？",
+            "翻訳文の破棄", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (res != MessageBoxResult.OK) return;
+        main.DiscardAllTranslations(tab);
+    }
+
     /// <summary>ヘッダの板名 (リンク): スレッド一覧ペインでその板を開く (開いていればそのタブを選んで更新)。</summary>
     private void BoardLinkButton_Click(object sender, RoutedEventArgs e)
     {
@@ -874,6 +896,11 @@ public partial class ThreadDisplayPane : UserControl
                     mi.Header = ctx.Wv.DataContext is ThreadTabViewModel ttab && ttab.TranslatedShown.Contains(ctx.Number)
                         ? "原文に戻す" : "このレスを翻訳";
                     break;
+                case "trDelete":
+                    // 訳文があるレスだけ。訳している最中は消せない
+                    mi.IsEnabled = ctx.Wv.DataContext is ThreadTabViewModel dtab
+                                   && dtab.Translations.ContainsKey(ctx.Number) && !dtab.TranslatingPosts.Contains(ctx.Number);
+                    break;
                 case "ngName":
                     mi.Header    = "名前 — "       + (string.IsNullOrEmpty(ctx.Name)    ? "(空)"   : ctx.Name);
                     mi.IsEnabled = !string.IsNullOrEmpty(ctx.Name);
@@ -898,6 +925,15 @@ public partial class ThreadDisplayPane : UserControl
         if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
         if (tab.TranslatedShown.Contains(ctx.Number)) main.ShowOriginal(tab, ctx.Number);
         else _ = main.TranslatePostAsync(tab, ctx.Number);
+    }
+
+    /// <summary>レス番号メニュー「翻訳文の削除」: そのレスの訳文を消して原文に戻す。</summary>
+    private void PostNoDeleteTranslation_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (Vm is not { } main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        main.DeleteTranslation(tab, ctx.Number);
     }
 
     /// <summary>各レスの名前行の 🌐 ボタン (JS の translatePost): 翻訳 / 原文に戻す の切り替え。</summary>

@@ -1590,7 +1590,7 @@
         if (Array.isArray(shown)) for (const n of shown) if (typeof n === 'number') translatedShown.add(n);
     }
 
-    /** updateTranslations: 届いた訳文を取り込み、翻訳 / 原文を切り替えたレスの本文を描き直す。 */
+    /** updateTranslations: 届いた訳文を取り込み、翻訳 / 原文を切り替えたレス・訳文を捨てたレス (removed) の本文を描き直す。 */
     function applyTranslationUpdate(msg) {
         const affected = new Set();
         const buttonsOnly = new Set();
@@ -1604,6 +1604,7 @@
             }
         for (const n of msg.show || []) { translatedShown.add(n); affected.add(n); }
         for (const n of msg.hide || []) { translatedShown.delete(n); affected.add(n); }
+        for (const n of msg.removed || []) { translations.delete(n); translatedShown.delete(n); affected.add(n); }
         const buttons = new Set([...affected, ...buttonsOnly]);
         for (const n of msg.loading || []) { translatePending.add(n); buttons.add(n); }
         for (const n of msg.loaded  || []) { translatePending.delete(n); buttons.add(n); }

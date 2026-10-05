@@ -101,10 +101,11 @@ public sealed partial class MainViewModel
 
     private static void PushTranslation(ThreadTabViewModel tab, IReadOnlyDictionary<long, string>? translations = null,
                                         IReadOnlyList<long>? show = null, IReadOnlyList<long>? hide = null,
-                                        IReadOnlyList<long>? loading = null, IReadOnlyList<long>? loaded = null)
+                                        IReadOnlyList<long>? loading = null, IReadOnlyList<long>? loaded = null,
+                                        IReadOnlyList<long>? removed = null)
         => tab.TranslationUpdate = new TranslationUpdateMessage(
             translations ?? new Dictionary<long, string>(), show ?? Array.Empty<long>(), hide ?? Array.Empty<long>(),
-            loading ?? Array.Empty<long>(), loaded ?? Array.Empty<long>());
+            loading ?? Array.Empty<long>(), loaded ?? Array.Empty<long>(), removed);
 
     private static void SetTranslateStatus(ThreadTabViewModel tab, string message) => tab.StatusMessage = message;
 
@@ -288,6 +289,37 @@ public sealed partial class MainViewModel
         if (!tab.TranslatedShown.Remove(number)) return;
         PushTranslation(tab, hide: new[] { number });
         SaveTranslation(tab);
+    }
+
+    // ---- 訳文の破棄 (おかしな訳を消して、訳し直せるようにする) ----
+
+    /// <summary>そのレスの訳文を消して原文の表示に戻す (レス番号 ▸ メニュー「翻訳文の削除」)。
+    /// 次に 🌐 / 「このレスを翻訳」を押すと LLM に送り直す。スレ全体の翻訳が ON なら、次の差分取得で訳し直す。</summary>
+    public void DeleteTranslation(ThreadTabViewModel tab, long number)
+    {
+        if (tab.TranslatingPosts.Contains(number)) return;   // 訳している最中は消さない (直後に訳文が届いて戻ってしまうため)
+        if (!tab.Translations.Remove(number)) return;
+        tab.TranslatedShown.Remove(number);
+        PushTranslation(tab, removed: new[] { number });
+        SaveTranslation(tab);
+        SetTranslateStatus(tab, $"レス {number} の翻訳文を削除しました");
+    }
+
+    /// <summary>このスレの訳文を全て消して原文の表示に戻す (🌐 メニュー「本スレッドの翻訳文をすべて破棄」)。
+    /// 実行中のスレ全体の翻訳は止め、「このスレを全て翻訳する」も OFF にする (ON のままだと次の差分取得ですぐ全部訳し直すため)。</summary>
+    public void DiscardAllTranslations(ThreadTabViewModel tab)
+    {
+        tab.TranslateCts?.Cancel();
+        tab.IsTranslationOn = false;
+        var removed = tab.Translations.Keys.Where(n => !tab.TranslatingPosts.Contains(n)).ToList();
+        foreach (var n in removed)
+        {
+            tab.Translations.Remove(n);
+            tab.TranslatedShown.Remove(n);
+        }
+        PushTranslation(tab, removed: removed);
+        SaveTranslation(tab);
+        SetTranslateStatus(tab, $"このスレの翻訳文を破棄しました ({removed.Count} レス)");
     }
 
     // ---- スレ一覧ペイン: スレタイの翻訳 (タブごと・その場限り) ----

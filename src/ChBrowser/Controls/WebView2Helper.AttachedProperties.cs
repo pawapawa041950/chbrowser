@@ -332,7 +332,7 @@ public static partial class WebView2Helper
     {
         if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.TranslationUpdateMessage m) return;
         var json = JsonSerializer.Serialize(new { type = "updateTranslations", translations = m.Translations, show = m.Show, hide = m.Hide,
-                                                  loading = m.Loading, loaded = m.Loaded }, PostJsonOptions);
+                                                  loading = m.Loading, loaded = m.Loaded, removed = m.Removed }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

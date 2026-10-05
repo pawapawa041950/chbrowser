@@ -48,6 +48,8 @@
             <MenuItem Tag="reply" Header="返信"                  Click="PostNoReply_Click" />
             <MenuItem Tag="own"   Header="自分の書き込みにする"  Click="PostNoToggleOwn_Click" />
             <MenuItem Tag="translate" Header="このレスを翻訳"   Click="PostNoTranslate_Click" />
+            <MenuItem Tag="trDelete"  Header="翻訳文の削除"     Click="PostNoDeleteTranslation_Click"
+                      ToolTip="このレスの訳文を消して原文に戻す (次に翻訳するときは AI に送り直す)" />
             <Separator />
             <MenuItem Header="NG 登録">
                 <MenuItem Tag="ngName"    Click="PostNoNgName_Click" />
@@ -367,7 +369,7 @@
                         <TextBlock Text="❝" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
 
-                    <!-- AI 翻訳: 押すとメニュー (各レスの翻訳ボタンの表示 / このスレを全て翻訳する)。
+                    <!-- AI 翻訳: 押すとメニュー (各レスの翻訳ボタンの表示 / このスレを全て翻訳する / 訳文の破棄)。
                          スレ全体の翻訳が ON の間は押下状態の色、実行中は ⏳ -->
                     <Button AutomationProperties.Name="AI 翻訳" Click="TranslateMenuButton_Click">
                         <Button.Style>
@@ -383,7 +385,7 @@
                             </Style>
                         </Button.Style>
                         <Button.ContextMenu>
-                            <ContextMenu>
+                            <ContextMenu Opened="TranslateMenu_Opened">
                                 <MenuItem Header="各レスごとに翻訳ボタンを表示する"
                                           IsCheckable="False"
                                           IsChecked="{Binding SelectedTab.PostTranslateButtonsOn, Mode=OneWay}"
@@ -395,6 +397,10 @@
                                           IsChecked="{Binding SelectedTab.IsTranslationOn, Mode=OneWay}"
                                           Command="{Binding SelectedTab.ToggleTranslationCommand}"
                                           ToolTip="日本語以外のレスを全て翻訳する (新着も自動で翻訳)。もう一度選ぶと原文に戻す" />
+                                <Separator />
+                                <MenuItem Tag="discardAll" Header="本スレッドの翻訳文をすべて破棄"
+                                          Click="DiscardAllTranslations_Click"
+                                          ToolTip="このスレの訳文を全て消して原文に戻す (「このスレを全て翻訳する」も OFF にする。次に翻訳するときは AI に送り直す)" />
                             </ContextMenu>
                         </Button.ContextMenu>
                         <ctrl:ColorEmojiTextBlock FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" TextTrimming="None" IsButtonIcon="True">

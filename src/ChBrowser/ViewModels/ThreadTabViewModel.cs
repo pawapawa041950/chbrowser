@@ -48,7 +48,8 @@ public sealed class AuthorProfilesMessage
 
 /// <summary>JS の <c>updateTranslations</c> に渡すペイロード。<see cref="Translations"/> は届いた訳文 (レス番号 → 表示用本文)、
 /// <see cref="Show"/> は翻訳で表示するレス、<see cref="Hide"/> は原文に戻すレス、<see cref="Loading"/> / <see cref="Loaded"/> は
-/// 翻訳を始めた / 終えたレス (🌐 ボタンの読み込み中表示)。class なので同じ内容でも毎回送られる。</summary>
+/// 翻訳を始めた / 終えたレス (🌐 ボタンの読み込み中表示)、<see cref="Removed"/> は訳文を捨てたレス (原文に戻し、訳文も忘れる)。
+/// class なので同じ内容でも毎回送られる。</summary>
 public sealed class TranslationUpdateMessage
 {
     public IReadOnlyDictionary<long, string> Translations { get; }
@@ -56,9 +57,11 @@ public sealed class TranslationUpdateMessage
     public IReadOnlyList<long> Hide { get; }
     public IReadOnlyList<long> Loading { get; }
     public IReadOnlyList<long> Loaded { get; }
+    public IReadOnlyList<long> Removed { get; }
     public TranslationUpdateMessage(IReadOnlyDictionary<long, string> translations, IReadOnlyList<long> show, IReadOnlyList<long> hide,
-                                    IReadOnlyList<long> loading, IReadOnlyList<long> loaded)
+                                    IReadOnlyList<long> loading, IReadOnlyList<long> loaded, IReadOnlyList<long>? removed = null)
     {
+        Removed      = removed ?? Array.Empty<long>();
         Translations = translations;
         Show         = show;
         Hide         = hide;
