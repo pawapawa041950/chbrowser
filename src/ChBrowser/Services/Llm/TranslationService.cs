@@ -104,6 +104,18 @@ public sealed class TranslationService
                 {
                     ct.ThrowIfCancellationRequested();
                     var got = await AiTranslator.TranslateTitlesAsync(_llm, Settings, batch, DisableReasoning, ct).ConfigureAwait(true);
+                    // 応答から取れなかったタイトルは 1 件ずつ送り直す (まとめた応答はモデルが形を崩しやすく、同じ組み合わせで
+                    // 送り直しても同じように崩れて、何度押しても訳されないタイトルが残るため。1 件だけなら崩れにくい)
+                    if (batch.Count > 1 && got.Count < batch.Count)
+                    {
+                        for (var k = 0; k < batch.Count; k++)
+                        {
+                            if (got.ContainsKey(k)) continue;
+                            ct.ThrowIfCancellationRequested();
+                            var single = await AiTranslator.TranslateTitlesAsync(_llm, Settings, new[] { batch[k] }, DisableReasoning, ct).ConfigureAwait(true);
+                            if (single.TryGetValue(0, out var tr1)) got[k] = tr1;
+                        }
+                    }
                     int now;
                     lock (_titlesLock)
                     {

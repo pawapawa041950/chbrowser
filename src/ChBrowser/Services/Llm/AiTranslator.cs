@@ -203,10 +203,34 @@ public static class AiTranslator
             }
             catch (System.Text.Json.JsonException) { }
         }
+
+        // 崩れた JSON (モデルが 1 か所でも崩すと全体が読めない: 「{"i":3":"…"」のようなキーの崩れ、閉じの「"}]」が「】」になる等):
+        // {"i":n ごとに区切り、その後ろの「"t":"訳"」(崩れていても) を拾う
+        var items = LooseItemRe.Matches(text);
+        for (var k = 0; k < items.Count; k++)
+        {
+            var start = items[k].Index + items[k].Length;
+            var end   = k + 1 < items.Count ? items[k + 1].Index : text.Length;
+            var tm    = LooseTextRe.Match(text[start..end]);
+            if (!tm.Success) continue;
+            var t = LooseTrailRe.Replace(tm.Groups["t"].Value, "");
+            if (t.EndsWith('"')) t = t[..^1];
+            try { t = System.Text.Json.JsonSerializer.Deserialize<string>("\"" + t + "\"") ?? t; }   // \" や   などを戻す
+            catch (System.Text.Json.JsonException) { }
+            if (int.TryParse(items[k].Groups[1].Value, out var idx) && t.Trim().Length > 0) list.Add((idx, t.Trim()));
+        }
+        if (list.Count > 0) return list;
+
         foreach (Match m in NumberedLineRe.Matches(text))
             list.Add((int.Parse(m.Groups[1].Value), m.Groups[2].Value));
         return list;
     }
+
+    /// <summary>崩れた JSON の要素の頭 (<c>{"i":3</c> / <c>{"i":"3"</c>)。</summary>
+    private static readonly Regex LooseItemRe  = new(@"\{\s*""i""\s*:\s*""?(\d+)""?", RegexOptions.Compiled);
+    /// <summary>要素の頭の後ろの訳 (<c>,"t":"訳…</c> / キーが崩れた <c>":"訳…</c>)。末尾までを取り、閉じは <see cref="LooseTrailRe"/> で落とす。</summary>
+    private static readonly Regex LooseTextRe  = new(@"^\s*""?\s*(?:,\s*""t""\s*)?[:,]?\s*""(?<t>[\s\S]*)$", RegexOptions.Compiled);
+    private static readonly Regex LooseTrailRe = new(@"[\s\]},]*$", RegexOptions.Compiled);
 
     private static readonly Regex NumberedLineRe = new(@"^\s*(\d+)\s*[.:：)）]\s*(.+?)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
 
