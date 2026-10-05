@@ -144,9 +144,29 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     /// <summary>行を出し直したときの通知 (MainViewModel が、翻訳 ON のタブなら新しい行を訳すのに使う)。</summary>
     public static Action<ThreadListTabViewModel>? ItemsReplaced { get; set; }
 
-    /// <summary>行の送信データ。翻訳 ON なら訳のあるスレタイを訳に置き換える (原文は行に残す)。</summary>
+    /// <summary>「スレッド一覧を全て翻訳する」が OFF の間に、右クリック「スレッドタイトルを翻訳」で訳を出しているタイトル (原文)。</summary>
+    public HashSet<string> TitlesShownTranslated { get; } = new(StringComparer.Ordinal);
+    /// <summary>「スレッド一覧を全て翻訳する」が ON の間に、右クリック「原文に戻す」で原文を出しているタイトル (原文)。</summary>
+    public HashSet<string> TitlesShownOriginal { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>このタイトルを訳で表示しているか (訳が保存されていて、タブ全体の ON / OFF とタイトルごとの切り替えで訳を出す側)。</summary>
+    public bool ShowsTranslatedTitle(string title)
+        => (IsTitleTranslationOn ? !TitlesShownOriginal.Contains(title) : TitlesShownTranslated.Contains(title))
+           && TitleTranslationLookup?.Invoke(title) is not null;
+
+    /// <summary>タブ全体の翻訳の ON / OFF を切り替えたとき: タイトルごとの切り替えは忘れる (全体の状態に揃える)。</summary>
+    public void ResetTitleOverrides()
+    {
+        TitlesShownTranslated.Clear();
+        TitlesShownOriginal.Clear();
+    }
+
+    /// <summary>行の送信データ。訳で表示するスレタイ (<see cref="ShowsTranslatedTitle"/>) を訳に置き換える (原文は行に残す)。</summary>
     private IReadOnlyList<ThreadListRow> BuildRows(IReadOnlyList<ThreadListItem> items, DateTimeOffset now)
-        => ThreadListHtmlBuilder.BuildRows(items, now, IsTitleTranslationOn ? TitleTranslationLookup : null);
+        => ThreadListHtmlBuilder.BuildRows(items, now,
+               IsTitleTranslationOn || TitlesShownTranslated.Count > 0
+                   ? title => ShowsTranslatedTitle(title) ? TitleTranslationLookup?.Invoke(title) : null
+                   : null);
 
     /// <summary>通常の板タブ。</summary>
     public ThreadListTabViewModel(Board board, Action<ThreadListTabViewModel> closeCallback)

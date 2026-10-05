@@ -135,6 +135,20 @@ public sealed class TranslationService
         return done;
     }
 
+    /// <summary>タイトルの訳を消す (おかしな訳を消して訳し直せるようにする)。戻り値: 消した件数。</summary>
+    public int RemoveTitles(IEnumerable<string> titles)
+    {
+        var n = 0;
+        lock (_titlesLock)
+        {
+            foreach (var t in titles)
+                if (Titles.Remove(t)) n++;
+            if (n > 0) _titlesDirty = true;
+        }
+        if (n > 0) SaveTitles();
+        return n;
+    }
+
     private Dictionary<string, string> Titles => _titles ??= LoadTitles();
 
     /// <summary>訳を 1 件足す (<see cref="_titlesLock"/> の中で呼ぶ)。</summary>

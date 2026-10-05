@@ -222,7 +222,7 @@
             host:          tr.dataset.host,
             directoryName: tr.dataset.dir,
             key:           tr.dataset.key,
-            title:         tr.dataset.title,
+            title:         tr.dataset.orig || tr.dataset.title,   // 翻訳表示中でも原文 (コピー・次スレ検索・翻訳の操作は原文で行う)
         });
     });
 

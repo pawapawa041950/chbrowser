@@ -54,6 +54,10 @@
             <Separator />
             <MenuItem Header="次スレ候補検索" Click="ThreadListRowFindNext_Click" />
             <MenuItem Header="ログ削除"       Click="ThreadListRowDeleteLog_Click" />
+            <Separator />
+            <MenuItem Tag="trTitle"  Header="スレッドタイトルを翻訳" Click="ThreadListRowTranslateTitle_Click" />
+            <MenuItem Tag="trDelete" Header="翻訳文の削除"           Click="ThreadListRowDeleteTitleTranslation_Click"
+                      ToolTip="このスレタイの訳を消して原文に戻す (次に翻訳するときは AI に送り直す)" />
         </ContextMenu>
 
         <!-- 板行 (= data-kind="board"、「板一覧以外の取得済み板」集約タブ) を右クリックしたときのメニュー。
@@ -143,11 +147,23 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Button>
 
-                    <!-- AI 翻訳: このタブのスレタイを訳して表示する (タブごと・その場限り)。ON の間は押下状態の色、翻訳中は ⏳ -->
+                    <!-- AI 翻訳: 押すとメニュー (このタブのスレタイを全て翻訳する (タブごと・その場限り) / 訳の破棄)。
+                         全て翻訳が ON の間は押下状態の色、翻訳中は ⏳ -->
                     <Button AutomationProperties.Name="スレタイを翻訳" Click="TranslateTitlesButton_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu Opened="TranslateTitlesMenu_Opened">
+                                <MenuItem Tag="all" Header="スレッド一覧を全て翻訳する" IsCheckable="False"
+                                          Click="TranslateAllTitles_Click"
+                                          ToolTip="このタブの日本語以外のスレタイを全て翻訳する (このタブだけ。もう一度選ぶと原文に戻す。原文はタイトルにマウスを乗せると見られる)" />
+                                <Separator />
+                                <MenuItem Tag="discardAll" Header="スレッド一覧の翻訳文をすべて破棄"
+                                          Click="DiscardAllTitleTranslations_Click"
+                                          ToolTip="このタブのスレタイの訳を全て消して原文に戻す (「スレッド一覧を全て翻訳する」も OFF にする。次に翻訳するときは AI に送り直す)" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarIconButton}">
-                                <Setter Property="ToolTip" Value="スレタイを AI 翻訳する (このタブだけ。もう一度押すと原文に戻す)" />
+                                <Setter Property="ToolTip" Value="スレタイの AI 翻訳" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                         <Setter Property="IsEnabled" Value="False" />
@@ -155,7 +171,7 @@
                                     <DataTrigger Binding="{Binding SelectedTab.IsTitleTranslationOn}" Value="True">
                                         <Setter Property="Background"  Value="#CCE5FF" />
                                         <Setter Property="BorderBrush" Value="#88B0DD" />
-                                        <Setter Property="ToolTip" Value="スレタイを翻訳表示中 (押すと原文に戻す。原文はタイトルにマウスを乗せると見られる)" />
+                                        <Setter Property="ToolTip" Value="スレタイの AI 翻訳 (このタブを翻訳表示中。原文はタイトルにマウスを乗せると見られる)" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>

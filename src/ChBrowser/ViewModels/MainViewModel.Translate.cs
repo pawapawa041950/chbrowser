@@ -328,6 +328,7 @@ public sealed partial class MainViewModel
     /// OFF にすると実行中の翻訳を止めて原文に戻す (訳は残す = 次に ON にしたとき送らない)。</summary>
     public async Task ToggleThreadListTranslationAsync(ThreadListTabViewModel tab)
     {
+        tab.ResetTitleOverrides();
         if (tab.IsTitleTranslationOn)
         {
             tab.TitleTranslateCts?.Cancel();
@@ -346,6 +347,80 @@ public sealed partial class MainViewModel
         tab.ResendItems();   // 保存済みの訳をすぐ出す
         await TranslateTitlesAsync(tab).ConfigureAwait(true);
     }
+
+    /// <summary>スレ一覧の行の右クリック「スレッドタイトルを翻訳」/「原文に戻す」: そのタイトルだけ訳 / 原文を切り替える。
+    /// 訳が保存されていなければ 1 件だけ LLM に送る。</summary>
+    public async Task ToggleTitleTranslationAsync(ThreadListTabViewModel tab, string title)
+    {
+        if (tab.ShowsTranslatedTitle(title))
+        {
+            if (tab.IsTitleTranslationOn) tab.TitlesShownOriginal.Add(title);
+            else tab.TitlesShownTranslated.Remove(title);
+            tab.ResendItems();
+            return;
+        }
+        if (Translation.CachedTitle(title) is null)
+        {
+            if (!IsTranslateConfigured)
+            {
+                tab.StatusMessage = NotConfiguredMessage;
+                StatusMessage     = NotConfiguredMessage;
+                return;
+            }
+            tab.StatusMessage = "スレタイを翻訳中…";
+            try
+            {
+                await Translation.TranslateTitlesAsync(new[] { title }, null, CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (AiTranslateException ex)
+            {
+                tab.StatusMessage = $"スレタイの翻訳に失敗しました: {ex.Message}";
+                return;
+            }
+            if (Translation.CachedTitle(title) is null)
+            {
+                tab.StatusMessage = "スレタイを翻訳できませんでした (AI の応答から訳を取り出せませんでした)";
+                return;
+            }
+            tab.StatusMessage = "スレタイを翻訳しました";
+        }
+        if (tab.IsTitleTranslationOn) tab.TitlesShownOriginal.Remove(title);
+        else tab.TitlesShownTranslated.Add(title);
+        tab.ResendItems();
+    }
+
+    /// <summary>スレ一覧の行の右クリック「翻訳文の削除」: そのタイトルの訳を消して原文に戻す (訳は全タブ共通なので、ほかのタブも原文に戻る)。
+    /// 次に訳すときは LLM に送り直す。「スレッド一覧を全て翻訳する」が ON のタブでは、次に一覧を更新したときに訳し直す。</summary>
+    public void DeleteTitleTranslation(ThreadListTabViewModel tab, string title)
+    {
+        if (Translation.RemoveTitles(new[] { title }) == 0) return;
+        foreach (var t in AllThreadListTabs)
+        {
+            t.TitlesShownTranslated.Remove(title);
+            t.TitlesShownOriginal.Remove(title);
+            t.ResendItems();
+        }
+        tab.StatusMessage = "スレタイの翻訳文を削除しました";
+    }
+
+    /// <summary>このタブのスレタイのうち、訳が保存されているものの数 (🌐 メニュー「…すべて破棄」の有効 / 無効)。</summary>
+    public int CountTranslatedTitles(ThreadListTabViewModel tab)
+        => TabTitles(tab).Count(t => Translation.CachedTitle(t) is not null);
+
+    /// <summary>スレ一覧ペインの 🌐 メニュー「スレッド一覧の翻訳文をすべて破棄」: このタブのスレタイの訳を全て消して原文に戻し、
+    /// 「スレッド一覧を全て翻訳する」も OFF にする (ON のままだと次の更新ですぐ訳し直すため)。ほかのタブの同じタイトルも原文に戻る。</summary>
+    public void DiscardAllTitleTranslations(ThreadListTabViewModel tab)
+    {
+        tab.TitleTranslateCts?.Cancel();
+        tab.IsTitleTranslationOn = false;
+        tab.ResetTitleOverrides();
+        var removed = Translation.RemoveTitles(TabTitles(tab));
+        foreach (var t in AllThreadListTabs) t.ResendItems();
+        tab.StatusMessage = $"スレタイの翻訳文を破棄しました ({removed} 件)";
+    }
+
+    private static IEnumerable<string> TabTitles(ThreadListTabViewModel tab)
+        => tab.Items.Where(i => i.Kind == ThreadListItemKind.Thread).Select(i => i.Info.Title).Distinct(StringComparer.Ordinal);
 
     /// <summary>タブのスレタイのうち、まだ訳が無い日本語以外のものを訳す。訳せた分から表示を更新する。
     /// 実行中に一覧が入れ替わったら (更新 / 続きの読み込み)、終わった後に新しい行も拾う。</summary>

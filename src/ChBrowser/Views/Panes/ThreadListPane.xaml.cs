@@ -59,12 +59,52 @@ public partial class ThreadListPane : UserControl
         _ = main.RefreshThreadListTabAsync(g.SelectedTab);
     }
 
-    /// <summary>🌐: このペインの選択タブのスレタイの AI 翻訳を ON / OFF する (タブごと)。</summary>
+    /// <summary>🌐: スレタイの AI 翻訳のメニューを出す (ボタンの下に)。</summary>
     private void TranslateTitlesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.ContextMenu is null) return;
+        btn.ContextMenu.PlacementTarget = btn;
+        btn.ContextMenu.Placement       = PlacementMode.Bottom;
+        btn.ContextMenu.IsOpen          = true;
+    }
+
+    /// <summary>🌐 メニューが開く瞬間: 「全て翻訳する」のチェック、訳が 1 件も無いタブでは「…すべて破棄」をグレーアウト。</summary>
+    private void TranslateTitlesMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu cm) return;
+        var tab = Group?.SelectedTab;
+        var has = tab is not null && Vm is { } main && main.CountTranslatedTitles(tab) > 0;
+        foreach (var mi in cm.Items.OfType<MenuItem>())
+        {
+            switch (mi.Tag as string)
+            {
+                case "all":        mi.IsChecked = tab?.IsTitleTranslationOn == true; mi.IsEnabled = tab is not null; break;
+                case "discardAll": mi.IsEnabled = has; break;
+            }
+        }
+    }
+
+    /// <summary>🌐 メニュー「スレッド一覧を全て翻訳する」: このペインの選択タブのスレタイの翻訳を ON / OFF する (タブごと)。</summary>
+    private void TranslateAllTitles_Click(object sender, RoutedEventArgs e)
     {
         if (Group is not { } g || Vm is not { } main) return;
         if (g.SelectedTab is null) return;
         _ = main.ToggleThreadListTranslationAsync(g.SelectedTab);
+    }
+
+    /// <summary>🌐 メニュー「スレッド一覧の翻訳文をすべて破棄」: 確認してから、このタブのスレタイの訳を全て消して原文に戻す。</summary>
+    private void DiscardAllTitleTranslations_Click(object sender, RoutedEventArgs e)
+    {
+        if (Group is not { } g || Vm is not { } main) return;
+        if (g.SelectedTab is not { } tab) return;
+        var count = main.CountTranslatedTitles(tab);
+        if (count == 0) return;
+        var res = MessageBox.Show(Window.GetWindow(this) ?? Application.Current.MainWindow!,
+            $"このタブのスレタイの翻訳文 ({count} 件) をすべて破棄して原文の表示に戻します。\n" +
+            "「スレッド一覧を全て翻訳する」も OFF になります (ほかのタブに同じスレタイがあれば、そちらも原文に戻ります)。よろしいですか？",
+            "翻訳文の破棄", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (res != MessageBoxResult.OK) return;
+        main.DiscardAllTitleTranslations(tab);
     }
 
     /// <summary>選択中の板タブの板をお気に入りに追加 / 削除する (トグル)。
@@ -180,11 +220,41 @@ public partial class ThreadListPane : UserControl
         if (Vm is not { } main) return;
 
         var isFav = main.Favorites.FindThread(ctx.Board.Host, ctx.Board.DirectoryName, ctx.ThreadKey) is not null;
+        var tab   = Group?.SelectedTab;
         foreach (var item in TabClickHelper.EnumerateAllMenuItems(cm))
         {
-            if ((item.Tag as string) == "fav")
-                item.Header = isFav ? "お気に入りから削除" : "お気に入りに追加";
+            switch (item.Tag as string)
+            {
+                case "fav":
+                    item.Header = isFav ? "お気に入りから削除" : "お気に入りに追加";
+                    break;
+                case "trTitle":
+                    // 訳で表示中なら「原文に戻す」。日本語のタイトルは訳さないのでグレーアウト
+                    var shown = tab is not null && tab.ShowsTranslatedTitle(ctx.Title);
+                    item.Header    = shown ? "原文に戻す" : "スレッドタイトルを翻訳";
+                    item.IsEnabled = tab is not null && (shown || ChBrowser.Services.Llm.AiTranslator.NeedsTranslation(ctx.Title));
+                    break;
+                case "trDelete":
+                    item.IsEnabled = !string.IsNullOrEmpty(ctx.Title) && main.Translation.CachedTitle(ctx.Title) is not null;
+                    break;
+            }
         }
+    }
+
+    /// <summary>行の右クリック「スレッドタイトルを翻訳」/「原文に戻す」。</summary>
+    private void ThreadListRowTranslateTitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (CtxOf(sender) is not { } ctx || Vm is not { } main) return;
+        if (Group?.SelectedTab is not { } tab || string.IsNullOrEmpty(ctx.Title)) return;
+        _ = main.ToggleTitleTranslationAsync(tab, ctx.Title);
+    }
+
+    /// <summary>行の右クリック「翻訳文の削除」: そのスレタイの訳を消して原文に戻す。</summary>
+    private void ThreadListRowDeleteTitleTranslation_Click(object sender, RoutedEventArgs e)
+    {
+        if (CtxOf(sender) is not { } ctx || Vm is not { } main) return;
+        if (Group?.SelectedTab is not { } tab || string.IsNullOrEmpty(ctx.Title)) return;
+        main.DeleteTitleTranslation(tab, ctx.Title);
     }
 
     private static ThreadListRowContext? CtxOf(object sender)
