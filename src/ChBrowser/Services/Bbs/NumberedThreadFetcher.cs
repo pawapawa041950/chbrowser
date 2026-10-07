@@ -24,8 +24,8 @@ namespace ChBrowser.Services.Bbs;
 /// 差分の 200 空応答は「新着なし」。5ch 用の read.cgi 逆変換 (<c>HtmlToDatConverter</c>) は使わない。</para></summary>
 internal static class NumberedThreadFetcher
 {
-    private const int FirstBatchSize = 10;
-    private const int LaterBatchSize = 50;
+    private const int FirstBatchSize = ChBrowser.Services.Api.DatClient.StreamFirstBatchSize;
+    private const int LaterBatchSize = ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
 
     public static async Task<DatFetchResult> FetchAsync(
         HttpClient                     http,

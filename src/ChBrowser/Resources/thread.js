@@ -2127,8 +2127,25 @@
         // id 付き (正本) と id 無し (ツリー/セクションB の複製・親レス) の両方を装飾対象にする。
         // 旧実装は id 付きのみを対象にしていたため、section B の親レス (= omitId で id 無し) の
         // ID/ワッチョイがクリック可能にならなかった。番号は id が無くても post-no の data-number から得る。
-        const posts = root.querySelectorAll('.post');
-        posts.forEach(function (postEl) {
+        root.querySelectorAll('.post').forEach(decorateMetaPost);
+        // ホバーハンドラを取り付け (level 0 = 最上位ペイン直下のレス)。
+        attachMetaHoverHandlers(root, 0);
+    }
+
+    /** decorateMeta の対象を「elements (とその中) のレス」だけにした版。appendPosts のバッチごとの装飾に使う
+     *  (毎バッチ document 全体のレスをなめ直すと、レスが多いスレでは 1 バッチごとに数十 ms かかり、分けて送るほど遅くなるため)。 */
+    function decorateMetaIn(elements) {
+        for (const el of elements) {
+            if (!el.isConnected) continue;   // 後のバッチで作り直されて外れた要素
+            if (el.classList.contains('post')) decorateMetaPost(el);
+            el.querySelectorAll('.post').forEach(decorateMetaPost);
+            attachMetaHoverHandlers(el, 0);
+        }
+    }
+
+    /** 1 レス分の要素に ID / ワッチョイの装飾を付ける (装飾済みなら何もしない)。 */
+    function decorateMetaPost(postEl) {
+        {
             if (postEl.dataset.metaDecorated === '1') return;
             let num;
             if (postEl.id && postEl.id[0] === 'r') {
@@ -2188,9 +2205,7 @@
                 }
             }
             postEl.dataset.metaDecorated = '1';
-        });
-        // ホバーハンドラを取り付け (level 0 = 最上位ペイン直下のレス)。
-        attachMetaHoverHandlers(root, 0);
+        }
     }
 
     /** decorateMeta が付けた `.watchoi-link` / `.id-link` を全て解除して text node に戻す。
@@ -2236,26 +2251,33 @@
         return set;
     }
 
-    /** numbers のレスだけ (画面上の全箇所)、decorateMeta の装飾を外して再装飾できる状態に戻す (clearMetaDecorations の対象限定版)。 */
-    function clearMetaDecorationsFor(numbers) {
-        for (const [, nos] of collectByNumber(postNoEls, numbers)) {
+    /** numbers のレス (画面上の全箇所) の ID / ワッチョイ装飾を、今の件数に合わせて書き換える。
+     *  既に装飾が付いているものは件数まわり ([N/M]・一覧・"多い" の赤化) だけをその場で書き換える (付け直すより大幅に軽い)。
+     *  装飾が無いのに今は複数件になったもの (1 件 → 2 件) は、装飾済みの印を外して後の decorateMeta で付けさせる。 */
+    function refreshMetaCounts(numbers) {
+        for (const [num, nos] of collectByNumber(postNoEls, numbers)) {
+            const p = postsByNumber.get(num);
+            if (!p) continue;
+            const idList = p.id ? (currentIdMap.get(p.id) || []) : [];
+            const w = extractWatchoi(p.name);
+            const wList = w ? (currentWatchoiMap.get(w) || []) : [];
             for (const no of nos) {
                 const postEl = no.closest('.post');
                 const header = no.parentElement;
-                if (!postEl || postEl.dataset.metaDecorated !== '1' || !header) continue;
-                const parents = new Set();
-                header.querySelectorAll('.watchoi-link, .id-link').forEach(function (el) {
-                    if (!el.parentNode) return;
-                    parents.add(el.parentNode);
-                    el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
-                });
-                header.querySelectorAll('.id-count').forEach(function (el) {
-                    if (!el.parentNode) return;
-                    parents.add(el.parentNode);
-                    el.parentNode.removeChild(el);
-                });
-                parents.forEach(function (n) { n.normalize(); });
-                delete postEl.dataset.metaDecorated;
+                if (!postEl || !header || postEl.dataset.metaDecorated !== '1') continue;
+                const idLink = header.querySelector(':scope > .post-meta .id-link');
+                const wLink  = header.querySelector(':scope > .post-name .watchoi-link');
+                if ((idList.length > 1 && !idLink) || (wList.length > 1 && !wLink)) {
+                    delete postEl.dataset.metaDecorated;   // 1 件 → 複数件: 装飾を新しく付ける
+                    continue;
+                }
+                if (idLink) {
+                    idLink.dataset.idList = idList.join(',');
+                    idLink.classList.toggle('id-many', idList.length >= ID_HIGHLIGHT_THRESHOLD);
+                    const counter = header.querySelector(':scope > .post-meta .id-count');
+                    if (counter) counter.textContent = ' [' + (idList.indexOf(num) + 1) + '/' + idList.length + ']';
+                }
+                if (wLink) wLink.dataset.watchoiList = wList.join(',');
             }
         }
     }
@@ -2303,7 +2325,9 @@
      *  マウスがポップアップ外へ出たら mouseleave / mousemove セーフティネットで閉じる)。
      *  click モードでも「外側クリックで閉じる」は持たない (= hover ポップアップと閉じ方を統一)。 */
     function attachMetaHoverHandlers(scopeRoot, level) {
-        scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]').forEach(function (el) {
+        // 取り付け済みのリンクには付けない (以前は呼ばれるたびに全リンクへ付け直していて、バッチごとに同じハンドラが積み重なっていた)
+        scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]:not([data-meta-hover])').forEach(function (el) {
+            el.dataset.metaHover = '1';
             el.addEventListener('mouseenter', function () {
                 if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
@@ -2321,7 +2345,8 @@
                 openMetaListPopup(el, el.dataset.watchoiList, level);
             });
         });
-        scopeRoot.querySelectorAll('.id-link[data-id-list]').forEach(function (el) {
+        scopeRoot.querySelectorAll('.id-link[data-id-list]:not([data-meta-hover])').forEach(function (el) {
+            el.dataset.metaHover = '1';
             el.addEventListener('mouseenter', function () {
                 if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
@@ -2499,13 +2524,28 @@
         const now = performance.now();
         if (settleTimer == null) settleFirstAt = now;
         else clearTimeout(settleTimer);
-        settleTimer = setTimeout(runSettle, now - settleFirstAt >= 1500 ? 0 : 250);
+        const forced = now - settleFirstAt >= 1500;   // 届き続けている途中の定期更新
+        settleTimer = setTimeout(function () { runSettle(!forced); }, forced ? 0 : 250);
     }
-    function runSettle() {
+    /** 件数が変わり、ID / ワッチョイの装飾を付け直すレス番号 (appendPosts が積み、runSettle がまとめて付け直す)。 */
+    const metaRegroupPending = new Set();
+
+    /** idle = true: 届くのが止まった後 (全部の後処理)。false: 届き続けている途中の定期更新 (重い ID 装飾の付け直しは後回し)。 */
+    function runSettle(idle) {
         settleTimer = null;
+        if (idle) {
+            // 件数が変わったグループの装飾を最新の件数に合わせる
+            if (metaRegroupPending.size > 0) {
+                refreshMetaCounts(metaRegroupPending);
+                metaRegroupPending.clear();
+            }
+            // 外したものの付け直し + 念のため全体 (insertHtmlIntoContainer を通らずに入った要素があっても拾う。装飾済みは飛ばすので軽い)
+            decorateMeta();
+        }
         updateRichScrollbar();
         updateMarkScrollbarMarker();
         if (isFilterEmpty()) applyFilterToAllPosts();   // フィルタなし: 表示件数 (postStats) の報告など
+        if (!userHasScrolled) tryScrollToTarget();      // 届き終わった最終レイアウトで読了位置へ
     }
 
     /** ビューポート thumb の位置/サイズを scrollY と scrollHeight から計算して反映。 */
@@ -4821,10 +4861,14 @@
         });
         attachAnchorHandlers(tmp, 0);
         while (tmp.firstChild) {
+            if (tmp.firstChild.nodeType === 1) insertedSinceDecorate.push(tmp.firstChild);
             if (before) container.insertBefore(tmp.firstChild, before);
             else        container.appendChild(tmp.firstChild);
         }
     }
+
+    /** insertHtmlIntoContainer で入れた要素 (appendPosts のバッチ末に ID / ワッチョイの装飾をこれだけに付ける)。 */
+    let insertedSinceDecorate = [];
 
     /** p の primary を、現モード戦略の HTML 生成関数で作って root 末尾に append。
      *  モード固有の HTML 形は ViewModeStrategy.buildPrimaryHtml に委譲。 */
@@ -5177,11 +5221,14 @@
         markNewPosts();
         if (isFilterEmpty()) scheduleSettle();   // フィルタなし: 隠すレスは無いので後回しでよい
         else applyFilterToAllPosts();             // フィルタあり: 新着を即座に絞り込む
-        // 同 ID/ワッチョイの件数が変わったグループ (= 今回のレスと同じ ID/ワッチョイ) だけ装飾をやり直す。
-        // (しきい値の変化 "5 件超え → 赤化" や [N/M] の M に追従。関係ないレスの装飾はそのまま)
+        // ID / ワッチョイの装飾: 今回入った要素はすぐ付ける。件数が変わったグループ (= 今回のレスと同じ ID/ワッチョイ) の
+        // 既存レスの付け直し (しきい値の変化 "5 件超え → 赤化" や [N/M] の M に追従) は、届き終わってから後処理でまとめて行う
+        // (reddit は ID = 投稿者名で 1 人数十件になり、バッチごとに付け直すとそれだけで重い)。
         recomputeMetaMaps();
-        clearMetaDecorationsFor(metaGroupMembers(batch));
-        decorateMeta(root);
+        for (const n of metaGroupMembers(batch)) metaRegroupPending.add(n);
+        const inserted = insertedSinceDecorate;
+        insertedSinceDecorate = [];
+        decorateMetaIn(inserted);
         scheduleSettle();
 
         // 差分前に記録した読書位置 (%) を、組み替え後の新しいラベル位置基準で復帰させる
@@ -5197,12 +5244,22 @@
             }
         }
         // 未スクロール (= スレを開いた直後に差分が来た等) は比例復帰の対象外で、保存済み読了位置への
-        // 復帰をここで行う。フィルタ / ラベル配置 / 再装飾まで終えた確定レイアウトで 1 回だけ合わせる
-        // (以前はバッチの途中でも 1 回合わせていたが、全レスの位置を読むので重く、最後の 1 回で足りる)。
+        // 復帰をここで行う。フィルタ / ラベル配置 / 再装飾まで終えた確定レイアウトで合わせる。
+        // 位置合わせはページ全体のレイアウトを要するので、バッチが続けて来る間は 1 秒に 1 回まで (読了位置まで届いた最初の 1 回はすぐ)。
+        // 届き終わった後の最終的な位置合わせは後処理 (runSettle) が行う。
         else if (!userHasScrolled) {
-            tryScrollToTarget();
+            const now = performance.now();
+            const reached = pendingScrollTarget != null && allPosts.length > 0
+                            && allPosts[allPosts.length - 1].number >= pendingScrollTarget;
+            if (reached && (!scrollAlignedAt || now - scrollAlignedAt >= 1000)) {
+                scrollAlignedAt = now;
+                tryScrollToTarget();
+            }
         }
     };
+
+    /** appendPosts が最後に読了位置へ合わせた時刻 (0 = まだ)。 */
+    let scrollAlignedAt = 0;
 
     window.setViewMode = function (mode) {
         const next = mode || 'flat';

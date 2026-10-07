@@ -90,8 +90,8 @@ public sealed class ThreadMeta
 /// </list></summary>
 internal static class SnapshotThreadFetcher
 {
-    private const int FirstBatchSize = 10;
-    private const int LaterBatchSize = 50;
+    private const int FirstBatchSize = ChBrowser.Services.Api.DatClient.StreamFirstBatchSize;
+    private const int LaterBatchSize = ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
 
     public static async Task<DatFetchResult> FetchAsync(
         HttpClient                     http,

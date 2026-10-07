@@ -23,6 +23,25 @@ public sealed partial class MainViewModel
     private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch, bool isIncremental = false)
     {
         if (batch.Count == 0) return;
+        // 大きな塊 (差分取得でまとめて届いた数千件 / ローカルログからの初回表示) は分けて送る。1 通で送るとスレ表示が
+        // その描画を終えるまで (数千件で 0.5〜2 秒) 固まるが、分ければ 1 通ごとの処理は短く、その間に画面の描画や操作が挟まる。
+        // 件数は取得のストリーミングと同じ (まだ何も出ていなければ最初は少なく = すぐ表示が始まる)。
+        // 分けても NG の連鎖あぼーんは前の塊で隠したレスを HiddenPostNumbers で引き継ぐので結果は同じ。
+        // ただし重複なしツリーの差分は分けない: この表示は差分を受け取るたびに「以降新レス」の区画を丸ごと作り直すため、
+        // 分けると区画の作り直しが塊の数だけ走り、かえって遅くなる (2,400 件の差分で 1 回 0.5 秒 → 分割で合計 9 秒)。
+        var bulkDelta = isIncremental && tab.ViewMode is ThreadViewMode.DedupTree or ThreadViewMode.DedupTree2;
+        var first = tab.Posts.Count == 0 ? DatClient.StreamFirstBatchSize : DatClient.StreamLaterBatchSize;
+        if (batch.Count > first && !bulkDelta)
+        {
+            for (var i = 0; i < batch.Count; )
+            {
+                var size = i == 0 ? first : DatClient.StreamLaterBatchSize;
+                var n    = Math.Min(size, batch.Count - i);
+                AppendPostsWithNg(tab, batch.Skip(i).Take(n).ToList(), isIncremental);
+                i += n;
+            }
+            return;
+        }
         // dat の 1 レス目はスレタイトルを保持している。アドレスバーから直接スレを開いた経路では
         // タブ作成時 Title が空文字なので、最初にこのメソッドに来た batch の中で 1 レス目を見つけたら
         // タイトル / タブヘッダを埋める。お気に入り登録の Title もここで揃う。

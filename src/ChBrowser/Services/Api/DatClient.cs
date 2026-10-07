@@ -23,8 +23,11 @@ public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize);
 /// </summary>
 public sealed class DatClient
 {
-    private const int StreamFirstBatchSize = 10;   // 初回はとにかく速く表示開始
-    private const int StreamLaterBatchSize = 50;   // 2 回目以降は IPC オーバーヘッド削減のためまとめる
+    /// <summary>スレ表示へレスを送る 1 通の件数: 初回 (= まだ 1 件も出ていない) はとにかく速く表示開始するため少なく。
+    /// 取得のストリーミング (5ch 系 / reddit・4chan 等の番号付きログ) とスレ表示への送り分け (MainViewModel.AppendPostsWithNg) で共通。</summary>
+    public const int StreamFirstBatchSize = 10;
+    /// <summary>2 回目以降の 1 通の件数。まとめるほど送信の回数は減るが、1 通の描画が長くなりスレ表示が固まる。</summary>
+    public const int StreamLaterBatchSize = 50;
     private const int StreamReadBufferSize = 8192;
 
     private readonly MonazillaClient _client;
