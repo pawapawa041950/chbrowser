@@ -457,7 +457,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         {
             attachments.Add(new PostAttachment(fb, Width: Int(rv, "width"), Height: Int(rv, "height"), Kind: "video"));
         }
-        foreach (var a in attachments) { lines.Add(a.Url); mdLines.Add("<" + a.Url + ">"); }
+        foreach (var a in attachments) { lines.Add(a.Url); mdLines.Add(a.Url); }   // 裸の URL (自動リンクになる)
 
         // リンク投稿: 先の URL (画像直リンクならそのまま画像として出る)。ギャラリー / 動画 / 自分自身へのリンクは除く
         var link = Str(d, "url_overridden_by_dest") ?? Str(d, "url");
@@ -466,7 +466,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         {
             var abs = link.StartsWith("/", StringComparison.Ordinal) ? Origin + link : link;
             lines.Add(abs);
-            mdLines.Add("<" + abs + ">");
+            mdLines.Add(abs);
             if (Str(d, "post_hint") == "image") attachments.Add(new PostAttachment(link, Kind: "image"));
         }
         if (Str(d, "removed_by_category") is { Length: > 0 } removed)

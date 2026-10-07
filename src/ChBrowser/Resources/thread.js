@@ -1586,14 +1586,17 @@
         try { built = buildBodyAndMedia(displayBodyOf(p)); }
         finally { renderingQuoteTargets = null; }
         let body = built.body;
+        // 画像・動画のサムネイル (media) は常に原文の本文の URL から作る (訳しても画像は変わらない。訳文から作ると、
+        // 訳文で URL の書き方が変わったり (Markdown の <URL> 等) 落ちたりしたときにサムネイルが消えるため)
+        let media = built.media;
+        if (!showingOriginal) media = buildBodyAndMedia(p.body || '').media;
         // 本文を Markdown で書く掲示板のレスは、整形した HTML (C# 側で描画・無害化済み) を本文の代わりに出す。
-        // 訳文を表示しているときは訳文 (整形なし)。画像・動画のサムネイル (media) は今までどおり本文の URL から作る。
         if (showingOriginal && p.ext && typeof p.ext.bodyHtml === 'string' && p.ext.bodyHtml.length > 0)
             body = '<div class="post-md">' + p.ext.bodyHtml + '</div>';
         else if (!showingOriginal && translationHtml.has(p.number))
             body = '<div class="post-md">' + translationHtml.get(p.number) + '</div>';   // 記法を保って訳した訳文も整形して出す
         if (parentLine) body = parentLine + (body ? '<br>' + body : '');
-        return { body: body, media: built.media };
+        return { body: body, media: media };
     }
 
     /** 各レスの 🌐 ボタン (名前行の末尾)。🌐 メニューで ON なら全レスに、OFF でも訳文のあるレス・翻訳中のレス (.has-tr) には出す。
