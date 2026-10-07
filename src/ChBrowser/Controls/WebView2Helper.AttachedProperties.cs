@@ -214,26 +214,44 @@ public static partial class WebView2Helper
             + $", binding.MarkPostNumber={markPostNumber?.ToString() ?? "null"}"
             + $", binding.ScrollTargetPostNumber={scrollTarget?.ToString() ?? "null"}");
 
-        var json = JsonSerializer.Serialize(new
+        // 大きな batch (差分取得でまとめて届いた数千件 / ローカルログからの初回表示) は塊に分けて送る。1 通で送ると
+        // スレ表示がその描画を終えるまで (数千件で 0.5〜2 秒) 固まるが、分ければ 1 通ごとの処理は短く、その間に画面の描画や
+        // 操作が挟まる。件数は取得のストリーミングと同じ (スレ表示がまだ空なら最初は少なく = すぐ表示が始まる)。
+        // 続きの塊があることは hasMore で伝え、塊ごとに描くか最後にまとめて描くかはスレ表示 (表示モード) 側が決める。
+        // 分けるのはここ (送り方) だけで、ViewModel のバッチは 1 回の届け分のまま (続けてプロパティを書き換えると
+        // binding の更新がまとめられて前の分が届かないことがあるため)。
+        var tab   = wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel;
+        var posts = data.Posts;
+        var empty = tab is not null && tab.Posts.Count == posts.Count;   // このバッチがスレ表示の最初の分
+        for (var i = 0; i < posts.Count; )
         {
-            type             = "appendPosts",
-            posts            = data.Posts,
-            scrollTarget,
-            markPostNumber,
-            incremental      = data.IsIncremental,
-            ownPostNumbers   = ownPosts,
-            // アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。取得時点の評価より優先して表示する
-            myVotes          = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.MyVotes,
-            // AI 翻訳: このバッチのレスの訳文と、翻訳で表示するレス (レス描画の時点で訳文で出す。全体は resync で送る)
-            translations     = TranslationsFor(wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel, data.Posts),
-            translatedShown  = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel) is { } trTab
-                                   ? data.Posts.Where(pp => trTab.TranslatedShown.Contains(pp.Number)).Select(pp => pp.Number).ToArray()
-                                   : System.Array.Empty<long>(),
-            // 提供者依存のスレ表示設定 (レス番号の表示可否 / アンカー規則等)。JS はレス描画の前に適用する。
-            provider         = (wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel)?.ProviderConfig,
-        }, PostJsonOptions);
+            var size  = i == 0 && empty ? ChBrowser.Services.Api.DatClient.StreamFirstBatchSize
+                                        : ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
+            var n     = Math.Min(size, posts.Count - i);
+            var chunk = n == posts.Count ? posts : posts.Skip(i).Take(n).ToList();
+            i += n;
+            var json = JsonSerializer.Serialize(new
+            {
+                type             = "appendPosts",
+                posts            = chunk,
+                scrollTarget,
+                markPostNumber,
+                incremental      = data.IsIncremental,
+                hasMore          = i < posts.Count,
+                ownPostNumbers   = ownPosts,
+                // アプリから送ったレスの評価 (レス番号 → 1 / -1 / 0)。取得時点の評価より優先して表示する
+                myVotes          = tab?.MyVotes,
+                // AI 翻訳: この塊のレスの訳文と、翻訳で表示するレス (レス描画の時点で訳文で出す。全体は resync で送る)
+                translations     = TranslationsFor(tab, chunk),
+                translatedShown  = tab is not null
+                                       ? chunk.Where(pp => tab.TranslatedShown.Contains(pp.Number)).Select(pp => pp.Number).ToArray()
+                                       : System.Array.Empty<long>(),
+                // 提供者依存のスレ表示設定 (レス番号の表示可否 / アンカー規則等)。JS はレス描画の前に適用する。
+                provider         = tab?.ProviderConfig,
+            }, PostJsonOptions);
 
-        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+            _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+        }
     }
 
     /// <summary>appendPosts 1 バッチ分の訳文 (バッチ内のレスの分だけ。毎バッチ全体を送らない)。</summary>

@@ -21,7 +21,8 @@ public enum ThreadViewMode
 
 /// <summary>JS の <c>appendPosts</c> に渡すペイロード (Phase 20)。
 /// <see cref="IsIncremental"/> = true なら、dedup-tree モードでこの batch 以降を「末尾 incremental block」として
-/// 既存ツリーとは別レンダリングにする (= 既読下に新着を表示するため)。</summary>
+/// 既存ツリーとは別レンダリングにする (= 既読下に新着を表示するため)。
+/// 大きな batch は送るとき (WebView2Helper.AppendBatch) に塊へ分けて送る。</summary>
 public sealed record AppendBatchData(IReadOnlyList<Post> Posts, bool IsIncremental);
 
 /// <summary>JS の <c>updateOwnPosts</c> に渡すペイロード — 自分マークのトグル結果を 1 件ずつ通知する。

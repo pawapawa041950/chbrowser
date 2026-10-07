@@ -2533,6 +2533,12 @@
     /** idle = true: 届くのが止まった後 (全部の後処理)。false: 届き続けている途中の定期更新 (重い ID 装飾の付け直しは後回し)。 */
     function runSettle(idle) {
         settleTimer = null;
+        if (!idle) {
+            // 途中の定期更新の後にも、届くのが止まった後の後処理を必ず予約する (この後にバッチが来なければこれが最後の後処理になる。
+            // 来れば scheduleSettle が取り消して予約し直す)
+            settleFirstAt = performance.now();
+            settleTimer = setTimeout(function () { runSettle(true); }, 250);
+        }
         if (idle) {
             // 件数が変わったグループの装飾を最新の件数に合わせる
             if (metaRegroupPending.size > 0) {
@@ -4898,6 +4904,7 @@
         attachAnchorHandlers(wrapper, 0);
 
         parentEl.appendChild(wrapper);
+        insertedSinceDecorate.push(wrapper);   // バッチ末の ID / ワッチョイ装飾の対象
         return true;
     }
 
@@ -5087,10 +5094,23 @@
      *           タブ閉じ / アプリ再起動でリセットされる)。
      *   - incremental: dat 差分追加フラグ。session-new (= is-new 太字対象) の積算 + dedupTree の section B
      *                  再構築経路の振り分けに使う。 */
-    window.appendPosts = function (batch, scrollTarget, mark, incremental) {
+    window.appendPosts = function (batch, scrollTarget, mark, incremental, hasMore) {
         if (!Array.isArray(batch) || batch.length === 0) return;
         const root = document.getElementById('posts');
         if (!root) return;
+
+        // 差分 (incremental) を塊ごとではなく最後にまとめて描く表示モード (= usesBulkDeltaRebuild: 差分を受けるたびに
+        // 「以降新レス」の区画を丸ごと作り直す) では、続きの塊 (hasMore) を溜めておき、最後の塊でまとめて 1 回だけ描く
+        // (塊ごとに描くと区画の作り直しが塊の数だけ走り、2,400 件の差分で合計 9 秒かかった)。
+        // 塊ごとに描くモード (flat / tree) は届いた塊をすぐ描く (1 通ごとの処理が短く、固まらない)。
+        if (incremental === true && hasMore === true && vm().usesBulkDeltaRebuild()) {
+            for (const p of batch) pendingBulkDelta.push(p);
+            return;
+        }
+        if (pendingBulkDelta.length > 0) {
+            batch = pendingBulkDelta.concat(batch);
+            pendingBulkDelta = [];
+        }
 
         debugLog('appendPosts: batch=' + batch.length
             + ' (numbers ' + batch[0].number + '..' + batch[batch.length-1].number + ')'
@@ -5258,6 +5278,9 @@
         }
     };
 
+    /** 最後にまとめて描くために溜めている差分の塊 (appendPosts の hasMore 参照)。 */
+    let pendingBulkDelta = [];
+
     /** appendPosts が最後に読了位置へ合わせた時刻 (0 = まだ)。 */
     let scrollAlignedAt = 0;
 
@@ -5321,7 +5344,7 @@
                     }
                     if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
                     mergeTranslations(msg.translations, msg.translatedShown);
-                    window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental);
+                    window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental, msg.hasMore === true);
                     break;
                 case 'updateOwnPosts':
                     // 自分マークの増分トグル (post-no メニュー → ToggleOwnPost 経由)。
@@ -5373,6 +5396,7 @@
                         }
                         loadMyVotes(msg.myVotes);
                         votePending.clear();
+                        pendingBulkDelta = [];   // 全体を送り直すので、溜めていた差分の塊は捨てる (全体に含まれている)
                         translations = new Map();
                         translatedShown = new Set();
                         translatePending = new Set(Array.isArray(msg.translatingPosts) ? msg.translatingPosts : []);
