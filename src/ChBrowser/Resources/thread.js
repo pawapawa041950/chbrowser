@@ -85,6 +85,28 @@
     /** num → 当該レスを >>参照しているレス番号配列。renderCurrentViewMode で全再構築、
      *  appendPosts (flat) で増分更新。返信数バッジ生成のために常に最新を保つ。 */
     let currentReverseIndex = new Map();
+
+    /** レス番号つきの要素 (レス番号 .post-no / 翻訳ボタン .post-tr-btn) の生きたコレクション。
+     *  「番号 n の要素」を属性セレクタで 1 件ずつ document 全体から探すと、レスが多いスレでは 1 回ごとに全体を
+     *  なめることになり、翻訳・差分取得のたびに何百回も走って固まる。対象の番号をまとめてから 1 回だけなめる。 */
+    const postNoEls = document.getElementsByClassName('post-no');
+    const trBtnEls  = document.getElementsByClassName('post-tr-btn');
+
+    /** コレクションのうち data-number が numbers に入っている要素を、番号 → 要素の配列で返す (1 回の走査)。
+     *  返す配列は固定 (呼び出し側が DOM を書き換えても崩れない)。 */
+    function collectByNumber(collection, numbers) {
+        const map = new Map();
+        if (!numbers || numbers.size === 0) return map;
+        for (let i = 0; i < collection.length; i++) {
+            const el = collection[i];
+            const n = parseInt(el.dataset.number, 10);
+            if (!numbers.has(n)) continue;
+            let list = map.get(n);
+            if (!list) map.set(n, list = []);
+            list.push(el);
+        }
+        return map;
+    }
     let viewMode = 'flat';
 
     // スクロール対象レス番号。setPosts / appendPosts のメッセージから受け取り、
@@ -1359,14 +1381,23 @@
     /** updateAuthorProfiles: 届いた投稿者のアイコンを、画面上の全箇所 (本体 / ツリーの重複表示 / ポップアップ) に差し込む。 */
     function applyAuthorProfiles(obj) {
         if (!obj || typeof obj !== 'object') return;
+        const imgs = new Map();
         for (const name of Object.keys(obj)) {
             authorProfiles.set(name, obj[name]);
             const img = avatarImgHtml(name);
-            if (!img) continue;
-            for (const el of document.querySelectorAll('.post-avatar[data-author="' + CSS.escape(name) + '"]')) {
-                el.innerHTML = img;
-                el.classList.remove('empty');
-            }
+            if (img) imgs.set(name, img);
+        }
+        if (imgs.size === 0) return;
+        // アイコン欄の走査は 1 回だけ (投稿者ごとに document 全体を探すと、差分で数百人分届いたときに数秒固まる)
+        const els = document.getElementsByClassName('post-avatar');
+        const targets = [];
+        for (let i = 0; i < els.length; i++) {
+            const img = imgs.get(els[i].dataset.author);
+            if (img) targets.push([els[i], img]);
+        }
+        for (const [el, img] of targets) {
+            el.innerHTML = img;
+            el.classList.remove('empty');
         }
     }
 
@@ -1551,22 +1582,30 @@
              + '" title="' + title + '" role="button">' + (loading ? '<span class="tr-spin"></span>' : '\u{1F310}') + '</span>';
     }
 
-    /** レス n の 🌐 ボタンを、画面上の全箇所で描き直す。 */
-    function refreshTrButtons(n) {
-        const p = postsByNumber.get(n);
-        if (!p) return;
-        const html = buildTrButtonHtml(p);
-        for (const el of document.querySelectorAll('.post-tr-btn[data-number="' + n + '"]')) el.outerHTML = html;
+    /** numbers のレスの 🌐 ボタンを、画面上の全箇所で描き直す。 */
+    function refreshTrButtons(numbers) {
+        for (const [n, els] of collectByNumber(trBtnEls, numbers)) {
+            const p = postsByNumber.get(n);
+            if (!p) continue;
+            const html = buildTrButtonHtml(p);
+            for (const el of els) el.outerHTML = html;
+        }
     }
 
-    /** レス n の本文と媒体を、画面上の全箇所 (本体 / ツリーの重複表示) で描き直す (翻訳 / 原文の切り替え)。
+    /** numbers のレスの本文と媒体を、画面上の全箇所 (本体 / ツリーの重複表示) で描き直す (翻訳 / 原文の切り替え)。
      *  見出し・返信ツリーは触らない。差し替えた本文にはアンカーのポップアップ・画像の遅延読み込みを付け直す。 */
-    function rerenderPostBody(n) {
+    function rerenderPostBodies(numbers) {
+        for (const [n, nos] of collectByNumber(postNoEls, numbers)) {
+            rerenderPostBodyAt(n, nos);
+        }
+    }
+
+    function rerenderPostBodyAt(n, nos) {
         const p = postsByNumber.get(n);
         if (!p) return;
         const ext = buildExtHeaderParts(p);
         const parts = buildPostBodyParts(p, ext.parentLine);
-        for (const no of document.querySelectorAll('.post-no[data-number="' + n + '"]')) {
+        for (const no of nos) {
             const post = no.closest('.post');
             if (!post) continue;
             const body  = post.querySelector(':scope > .post-body');
@@ -1608,8 +1647,8 @@
         const buttons = new Set([...affected, ...buttonsOnly]);
         for (const n of msg.loading || []) { translatePending.add(n); buttons.add(n); }
         for (const n of msg.loaded  || []) { translatePending.delete(n); buttons.add(n); }
-        for (const n of affected) rerenderPostBody(n);
-        for (const n of buttons) refreshTrButtons(n);
+        rerenderPostBodies(affected);
+        refreshTrButtons(buttons);
         if (affected.size > 0 && !isFilterEmpty()) applySearchHighlightToAll();
     }
 
@@ -1966,13 +2005,16 @@
             const sectionA = allPosts.slice(0, markIdx);
             // section A の per-post 挿入。reverseIndex は p ごとに親側に p を加算して成長させる
             // (= streaming 経路と同じ)。section B のレスは加算しないので reverseIndex は section A 内に閉じる。
-            for (const p of sectionA) replayPostIntoDom(p);
+            const sink = new Set();
+            for (const p of sectionA) replayPostIntoDom(p, sink);
             // 描画後、reverseIndex を全レス基準に戻して section A 各 primary の「返信 N 件」バッジを正しい件数にする。
             currentReverseIndex = buildReverseIndex();
-            for (const p of sectionA) updateReplyCountBadge(p.number);
+            updateReplyCountBadges(new Set(sectionA.map(function (p) { return p.number; })));
             rebuildSectionB();
         } else {
-            for (const p of allPosts) replayPostIntoDom(p);
+            const sink = new Set();
+            for (const p of allPosts) replayPostIntoDom(p, sink);
+            updateReplyCountBadges(sink);
         }
 
         // ケース2 (dedupTree2 モードのフル描画): A の完全ツリーの後ろに、ラベル以降のレスを
@@ -2000,7 +2042,8 @@
     /** appendPosts と renderCurrentViewMode の両方が使う共通の per-post 復元ロジック。
      *  順序: 親側 reverseIndex を p で加算 → DOM 挿入 → 親の返信バッジ更新。
      *  reverseIndex を p の挿入「前」に加算しておくのは embedUnderParentReverse の overflow 計算の母数として参照されるため。 */
-    function replayPostIntoDom(p) {
+    /** badgeSink を渡すと、返信数バッジの更新をその場でせず番号を積むだけにする (呼び出し側が最後にまとめて更新する)。 */
+    function replayPostIntoDom(p, badgeSink) {
         const seen = new Set();
         for (const r of postRefs(p)) {
             const inRange = existingNumbersInRange(r.from, r.to, INLINE_EXPAND_RANGE_LIMIT + 1);
@@ -2015,7 +2058,8 @@
             }
         }
         insertPostIncremental(p);
-        for (const n of seen) updateReplyCountBadge(n);
+        if (badgeSink) { for (const n of seen) badgeSink.add(n); }
+        else updateReplyCountBadges(seen);
     }
 
     /** 「最新リフレッシュ (= 直近の delta batch group) で届いたレス」を is-new クラスでマークする。
@@ -2179,6 +2223,41 @@
         root.querySelectorAll('.post[data-meta-decorated="1"]').forEach(function (postEl) {
             delete postEl.dataset.metaDecorated;
         });
+    }
+
+    /** batch のレスと同じ ID / ワッチョイを持つレス番号 (= 件数が変わり装飾をやり直すグループ) を集める。recomputeMetaMaps の後に呼ぶ。 */
+    function metaGroupMembers(batch) {
+        const set = new Set();
+        for (const p of batch) {
+            if (p.id) for (const n of currentIdMap.get(p.id) || []) set.add(n);
+            const w = extractWatchoi(p.name);
+            if (w) for (const n of currentWatchoiMap.get(w) || []) set.add(n);
+        }
+        return set;
+    }
+
+    /** numbers のレスだけ (画面上の全箇所)、decorateMeta の装飾を外して再装飾できる状態に戻す (clearMetaDecorations の対象限定版)。 */
+    function clearMetaDecorationsFor(numbers) {
+        for (const [, nos] of collectByNumber(postNoEls, numbers)) {
+            for (const no of nos) {
+                const postEl = no.closest('.post');
+                const header = no.parentElement;
+                if (!postEl || postEl.dataset.metaDecorated !== '1' || !header) continue;
+                const parents = new Set();
+                header.querySelectorAll('.watchoi-link, .id-link').forEach(function (el) {
+                    if (!el.parentNode) return;
+                    parents.add(el.parentNode);
+                    el.parentNode.replaceChild(document.createTextNode(el.textContent), el);
+                });
+                header.querySelectorAll('.id-count').forEach(function (el) {
+                    if (!el.parentNode) return;
+                    parents.add(el.parentNode);
+                    el.parentNode.removeChild(el);
+                });
+                parents.forEach(function (n) { n.normalize(); });
+                delete postEl.dataset.metaDecorated;
+            }
+        }
     }
 
     /** TreeWalker で text node を走査し、regex マッチ部分を element で包む。
@@ -2346,11 +2425,9 @@
         const imageTrack   = sb.querySelector('.track-image');
         const videoTrack   = sb.querySelector('.track-video');
         if (!popularTrack || !urlTrack || !imageTrack || !videoTrack) return;
-        popularTrack.innerHTML = '';
-        urlTrack.innerHTML     = '';
-        imageTrack.innerHTML   = '';
-        videoTrack.innerHTML   = '';
-
+        // 位置 (offsetTop) を先に全部読み、目印の DOM はその後でまとめて作る。読み書きを交互にすると、書くたびに
+        // ページ全体のレイアウトがやり直しになり、レスが多いスレでは目印の数 × ページ全体の重さになる。
+        const marks = [];
         const reverseIdx = buildReverseIndex();
         for (const post of allPosts) {
             const refs     = reverseIdx.get(post.number);
@@ -2364,7 +2441,14 @@
 
             const el = document.getElementById('r' + post.number);
             if (!el) continue;
-            const topPercent = (el.offsetTop / scrollHeight * 100) + '%';
+            marks.push({ top: (el.offsetTop / scrollHeight * 100) + '%', popular: popular, refs: refs, hasUrl: hasUrl, hasImage: hasImage, hasVideo: hasVideo });
+        }
+        const popFrag = document.createDocumentFragment(), urlFrag = document.createDocumentFragment();
+        const imgFrag = document.createDocumentFragment(), vidFrag = document.createDocumentFragment();
+        for (const mk of marks) {
+            const topPercent = mk.top, popular = mk.popular, refs = mk.refs;
+            const hasUrl = mk.hasUrl, hasImage = mk.hasImage, hasVideo = mk.hasVideo;
+            const popularTrack = popFrag, urlTrack = urlFrag, imageTrack = imgFrag, videoTrack = vidFrag;
 
             if (popular) {
                 const m = document.createElement('div');
@@ -2399,7 +2483,29 @@
                 videoTrack.appendChild(m);
             }
         }
+        popularTrack.replaceChildren(popFrag);
+        urlTrack.replaceChildren(urlFrag);
+        imageTrack.replaceChildren(imgFrag);
+        videoTrack.replaceChildren(vidFrag);
         updateScrollThumb(); // DOM 高さが変わった可能性があるので thumb も再計算
+    }
+
+    // ---------- レスが届き終わってからの後処理 (まとめて 1 回) ----------
+    // 差分取得では 50 件ずつ appendPosts が続けて来る。スレ全体をなめ直す処理はバッチごとにやらず、
+    // 届くのが止まって 0.25 秒たったら 1 回だけ行う (届き続けていても 1.5 秒に 1 回は更新して、表示が古いままにならないようにする)。
+    let settleTimer = null;
+    let settleFirstAt = 0;
+    function scheduleSettle() {
+        const now = performance.now();
+        if (settleTimer == null) settleFirstAt = now;
+        else clearTimeout(settleTimer);
+        settleTimer = setTimeout(runSettle, now - settleFirstAt >= 1500 ? 0 : 250);
+    }
+    function runSettle() {
+        settleTimer = null;
+        updateRichScrollbar();
+        updateMarkScrollbarMarker();
+        if (isFilterEmpty()) applyFilterToAllPosts();   // フィルタなし: 表示件数 (postStats) の報告など
     }
 
     /** ビューポート thumb の位置/サイズを scrollY と scrollHeight から計算して反映。 */
@@ -3354,21 +3460,17 @@
      *  途中の番号が DOM に存在しない (= 通常はないが防御的) ものはスキップ。
      *  すべて存在しない場合は null。 */
     function findBottommostPrimaryInRange(N) {
-        let best = null;
-        let bestY = -Infinity;
-        const sy = window.scrollY || window.pageYOffset || 0;
-        // 実在するレス番号だけを昇順に辿る (4chan / ふたば等の 9 桁の疎な番号で 1 から数えると数億回になり固まる)
-        for (const n of sortedPostNumbers) {
-            if (n > N) break;
-            const el = document.getElementById('r' + n);
-            if (!el) continue;
-            const absY = el.getBoundingClientRect().top + sy;
-            if (absY > bestY) {
-                bestY = absY;
-                best = el;
-            }
+        // 通常の流れのレイアウトでは「文書順で後ろ」=「上端が下」(入れ子の返信も親より後ろ・下) なので、位置を読まずに
+        // 文書順で一番後ろの要素を選ぶ (全レスの位置を読むとレスが多いスレで重い)。フィルタで隠れているレスは対象外。
+        // querySelectorAll は文書順に返すので、後ろから見て最初に条件 (番号 <= N・隠れていない) に合うものが答え。
+        const primaries = document.querySelectorAll('#posts .post[id^="r"]');
+        for (let i = primaries.length - 1; i >= 0; i--) {
+            const el = primaries[i];
+            const n = parseInt(el.id.slice(1), 10);
+            if (isNaN(n) || n > N || el.closest('.filter-hidden')) continue;
+            return el;
         }
-        return best;
+        return null;
     }
 
     /** 保存された読了 prefix (= pendingScrollTarget) が「前回スレを末尾まで読み終えていた」を意味するか。
@@ -4611,12 +4713,19 @@
      *  dedupTree 系 section B に再描画される id 無しの祖先コピー)。primary だけ更新すると、コピー側の
      *  data-replies に NG で消したレス番号が残り、post-no ホバーで「返信元レスが見つかりません」だけの
      *  ポップアップが出てしまう (= 中身が無いのに post-no の操作を邪魔する)。 */
-    function updateReplyCountBadge(num) {
+    function updateReplyCountBadge(num) { updateReplyCountBadges(new Set([num])); }
+
+    /** numbers のレスの「返信 N 件」バッジと post-no の色を、画面上の全箇所でまとめて更新する (要素の走査は 1 回)。 */
+    function updateReplyCountBadges(numbers) {
+        for (const [num, nos] of collectByNumber(postNoEls, numbers)) updateReplyCountBadgeAt(num, nos);
+    }
+
+    function updateReplyCountBadgeAt(num, nos) {
         const replies = currentReverseIndex.get(num) || [];
         const count = replies.length;
         const tier  = replyTierClass(count);
 
-        document.querySelectorAll('.post-no[data-number="' + num + '"]').forEach(function (postNo) {
+        nos.forEach(function (postNo) {
             const header = postNo.parentElement;
             if (!header || !header.classList.contains('post-header')) return;
 
@@ -4679,7 +4788,7 @@
             const n = parseInt(el.dataset.number, 10);
             if (!isNaN(n)) remaining.add(n);
         });
-        remaining.forEach(function (n) { updateReplyCountBadge(n); });
+        updateReplyCountBadges(new Set(remaining));
 
         // 4) スクロールバー / セクションマーク等の再計算
         if (typeof updateRichScrollbar       === 'function') updateRichScrollbar();
@@ -4992,6 +5101,8 @@
         // 差分取得 (= isDelta) batch を、per-post 経路 ではなく末尾の section B 一括再構築経路にするか。
         // dedupTree のみ true (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を表現するため)。
         const useDedupBulkRebuild = (vm().usesBulkDeltaRebuild() && isDelta);
+        // 返信数バッジは 1 レスごとに更新せず、バッチの最後にまとめて更新する (要素の走査を 1 回にする)
+        const badgeNums = new Set();
 
         // 1 レスずつ: 内部状態を更新して replayPostIntoDom で「reverseIndex → DOM 挿入 → 親バッジ更新」を実施。
         // dedupTree-delta だけは DOM 挿入を rebuildSectionB に任せるので、ここでは reverseIndex とバッジだけ更新する。
@@ -5027,9 +5138,9 @@
                 }
                 // section A の凍結対象は「ツリー構造」のみ。返信数バッジ / post-no 色は構造に影響しないので、
                 // 参照された既存レス (凍結済み section B 内の id 付きレス含む) を差分更新する。
-                for (const n of seen) updateReplyCountBadge(n);
+                for (const n of seen) badgeNums.add(n);
             } else {
-                replayPostIntoDom(p);
+                replayPostIntoDom(p, badgeNums);
             }
         }
 
@@ -5054,19 +5165,24 @@
             }
         });
 
+        updateReplyCountBadges(badgeNums);
+
+        // バッチごとの後処理は「今回届いた分」に関わるものだけにする。スレ全体をなめ直す処理 (スクロールバーの目印・
+        // フィルタなしのときの表示件数等) は、レスが届き終わってから 1 回だけ行う (scheduleSettle)。
+        // 50 件ごとに全体をやり直すと、レスが多いスレほど 1 回が重くなり、届くあいだずっと固まるため。
+        // スクロール位置合わせ (tryScrollToTarget) は最後に 1 回 (= フィルタ・装飾まで終えた最終レイアウトで)。
         observeImageSlots(root);
-        tryScrollToTarget();
-        updateRichScrollbar();
         updateNewPostsMarkBand();
         updateThreadEndMarkBand();
-        updateMarkScrollbarMarker();
         markNewPosts();
-        applyFilterToAllPosts();
-        // 増分追加で同 ID/ワッチョイの件数が変わるので、既存装飾を破棄して全体を再装飾する。
-        // (新規装飾だけだと、既に decoration 済の post も "5 件超え → 赤化" 等のしきい値変化に追従できない)
-        clearMetaDecorations(root);
+        if (isFilterEmpty()) scheduleSettle();   // フィルタなし: 隠すレスは無いので後回しでよい
+        else applyFilterToAllPosts();             // フィルタあり: 新着を即座に絞り込む
+        // 同 ID/ワッチョイの件数が変わったグループ (= 今回のレスと同じ ID/ワッチョイ) だけ装飾をやり直す。
+        // (しきい値の変化 "5 件超え → 赤化" や [N/M] の M に追従。関係ないレスの装飾はそのまま)
         recomputeMetaMaps();
+        clearMetaDecorationsFor(metaGroupMembers(batch));
         decorateMeta(root);
+        scheduleSettle();
 
         // 差分前に記録した読書位置 (%) を、組み替え後の新しいラベル位置基準で復帰させる
         // (= promoteOnNewRefresh による section A の高さ変化で生じる scroll ずれを吸収する)。
@@ -5081,9 +5197,8 @@
             }
         }
         // 未スクロール (= スレを開いた直後に差分が来た等) は比例復帰の対象外で、保存済み読了位置への
-        // 復帰は前半の tryScrollToTarget が担う。しかしそれは applyFilterToAllPosts / updateNewPostsMarkBand /
-        // 再装飾より前に走るため、その後の section A 高さ変化で揃えた位置がずれる。確定レイアウトで
-        // もう一度合わせ直す (tryScrollToTarget は userHasScrolled 時は即 return するので二重呼び出しは安価)。
+        // 復帰をここで行う。フィルタ / ラベル配置 / 再装飾まで終えた確定レイアウトで 1 回だけ合わせる
+        // (以前はバッチの途中でも 1 回合わせていたが、全レスの位置を読むので重く、最後の 1 回で足りる)。
         else if (!userHasScrolled) {
             tryScrollToTarget();
         }

@@ -360,11 +360,24 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>スレの状態のお知らせ (ふたば: 「27年6月頃消えます」、スナップショット取得で meta.json に保存) をスレの状態表示の後ろに付ける。</summary>
+    /// <summary>スレの状態のお知らせ (ふたば: 「27年6月頃消えます」、スナップショット取得で meta.json に保存) をスレの状態表示の後ろに付ける。
+    /// 1 回の取得で全部を取り切れなかったスレ (reddit: 「続き」の展開回数の上限・API 回数制限で打ち切った) には「続きあり」を付ける。</summary>
     private void AppendThreadNotice(ThreadTabViewModel tab)
     {
-        if (_datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.Notice is { Length: > 0 } notice)
+        var meta = _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey);
+        UpdateTruncatedNote(tab, meta);
+        if (meta?.Notice is { Length: > 0 } notice)
             tab.StatusMessage = $"{tab.StatusMessage} — {notice}";
+    }
+
+    private const string TruncatedNote = " — 続きあり (未取得のレスがあります。もう一度更新すると続きを取得します)";
+
+    /// <summary>状態表示の「続きあり」を、今回の取得で取り切れたかに合わせて付け外しする (同じ表示に何度も付け足さない)。</summary>
+    private void UpdateTruncatedNote(ThreadTabViewModel tab, ChBrowser.Services.Bbs.ThreadMeta? meta = null)
+    {
+        meta ??= _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey);
+        var status = (tab.StatusMessage ?? "").Replace(TruncatedNote, "");
+        tab.StatusMessage = meta?.Truncated == true ? status + TruncatedNote : status;
     }
 
     private ChBrowser.Services.Bbs.AuthorProfileCache? _authorProfileCache;

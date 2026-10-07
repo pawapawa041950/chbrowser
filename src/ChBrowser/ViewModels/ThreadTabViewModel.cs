@@ -181,6 +181,70 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>実行中の翻訳の取り消し (OFF にしたとき / タブを閉じたとき)。</summary>
     internal System.Threading.CancellationTokenSource? TranslateCts { get; set; }
 
+    /// <summary>スレ全体の翻訳の順番待ち (先頭から訳す)。翻訳中に届いた新着は先頭に入る (= 今読んでいる新着を先に訳す)。</summary>
+    internal LinkedList<ChBrowser.Services.Llm.TranslateItem> TranslateQueue { get; } = new();
+    /// <summary><see cref="TranslateQueue"/> に入っているか、取り出して訳している最中 (枠待ち含む) のレス番号。</summary>
+    internal HashSet<long> TranslateQueued { get; } = new();
+    /// <summary>今回のスレ全体の翻訳で訳せなかったレス (同じ実行の中では送り直さない)。</summary>
+    internal HashSet<long> TranslateFailed { get; } = new();
+    /// <summary>今回のスレ全体の翻訳で訳せたレスの数 (進み具合の表示用)。</summary>
+    internal int TranslateDone { get; set; }
+    /// <summary>レスごとの「翻訳が必要か」(日本語でない・訳す文字がある) の判定結果。差分取得のたびに全レスを判定し直さないため。</summary>
+    internal Dictionary<long, bool> TranslateNeeds { get; } = new();
+
+    // ---- 訳文の送信をまとめる ----
+    // 1 レス訳すたびに「翻訳中 → 訳文 → 翻訳中の解除」を 1 通ずつ送ると、レスが多いスレではページ側の処理が追いつかず
+    // 固まったようになるため、0.1 秒分をまとめて 1 通で送る。
+
+    private readonly Dictionary<long, string> _pendingTr = new();
+    /// <summary>レス番号 → 最後に指示された表示 (1 = 訳文を表示 / 2 = 原文に戻す / 3 = 訳文を捨てる)。</summary>
+    private readonly Dictionary<long, int> _pendingVis = new();
+    /// <summary>レス番号 → 最後に指示された読み込み中表示 (true = 翻訳中 / false = 解除)。</summary>
+    private readonly Dictionary<long, bool> _pendingLoading = new();
+    private System.Windows.Threading.DispatcherTimer? _trFlushTimer;
+    private const int VisShow = 1, VisHide = 2, VisRemoved = 3;
+
+    /// <summary>訳文・表示の切り替えを送る (0.1 秒分をまとめて <see cref="TranslationUpdate"/> で 1 通にする)。
+    /// 1 回の呼び出しの中は「訳文 → 表示 / 原文 → 捨てる → 翻訳中 → 翻訳中の解除」の順に適用される (ページ側と同じ順)。</summary>
+    public void QueueTranslationUpdate(IReadOnlyDictionary<long, string>? translations, IReadOnlyList<long>? show, IReadOnlyList<long>? hide,
+                                       IReadOnlyList<long>? loading, IReadOnlyList<long>? loaded, IReadOnlyList<long>? removed)
+    {
+        if (translations is not null)
+        {
+            // 捨てる指示の後に新しい訳文が来た: まとめるとページ側で「訳文 → 捨てる」の順になり新しい訳文まで消えるので、先に送る
+            if (translations.Keys.Any(n => _pendingVis.TryGetValue(n, out var v) && v == VisRemoved)) FlushTranslationUpdate();
+            foreach (var (n, body) in translations) _pendingTr[n] = body;
+        }
+        foreach (var n in show ?? Array.Empty<long>()) _pendingVis[n] = VisShow;
+        foreach (var n in hide ?? Array.Empty<long>()) _pendingVis[n] = VisHide;
+        foreach (var n in removed ?? Array.Empty<long>()) { _pendingTr.Remove(n); _pendingVis[n] = VisRemoved; }
+        foreach (var n in loading ?? Array.Empty<long>()) _pendingLoading[n] = true;
+        foreach (var n in loaded ?? Array.Empty<long>()) _pendingLoading[n] = false;
+
+        if (_trFlushTimer is null)
+        {
+            _trFlushTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            _trFlushTimer.Tick += (_, _) => FlushTranslationUpdate();
+        }
+        if (!_trFlushTimer.IsEnabled) _trFlushTimer.Start();
+    }
+
+    /// <summary>まとめている訳文・表示の切り替えをすぐ送る。</summary>
+    public void FlushTranslationUpdate()
+    {
+        _trFlushTimer?.Stop();
+        if (_pendingTr.Count == 0 && _pendingVis.Count == 0 && _pendingLoading.Count == 0) return;
+        List<long> Vis(int v) => _pendingVis.Where(kv => kv.Value == v).Select(kv => kv.Key).ToList();
+        TranslationUpdate = new TranslationUpdateMessage(
+            new Dictionary<long, string>(_pendingTr), Vis(VisShow), Vis(VisHide),
+            _pendingLoading.Where(kv => kv.Value).Select(kv => kv.Key).ToList(),
+            _pendingLoading.Where(kv => !kv.Value).Select(kv => kv.Key).ToList(),
+            Vis(VisRemoved));
+        _pendingTr.Clear();
+        _pendingVis.Clear();
+        _pendingLoading.Clear();
+    }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TitleThread))]
     private string _header;

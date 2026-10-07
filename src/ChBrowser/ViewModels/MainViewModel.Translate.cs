@@ -103,9 +103,7 @@ public sealed partial class MainViewModel
                                         IReadOnlyList<long>? show = null, IReadOnlyList<long>? hide = null,
                                         IReadOnlyList<long>? loading = null, IReadOnlyList<long>? loaded = null,
                                         IReadOnlyList<long>? removed = null)
-        => tab.TranslationUpdate = new TranslationUpdateMessage(
-            translations ?? new Dictionary<long, string>(), show ?? Array.Empty<long>(), hide ?? Array.Empty<long>(),
-            loading ?? Array.Empty<long>(), loaded ?? Array.Empty<long>(), removed);
+        => tab.QueueTranslationUpdate(translations, show, hide, loading, loaded, removed);   // 0.1 秒分をまとめて送る
 
     private static void SetTranslateStatus(ThreadTabViewModel tab, string message) => tab.StatusMessage = message;
 
@@ -116,6 +114,7 @@ public sealed partial class MainViewModel
         if (tab.IsTranslationOn)
         {
             tab.TranslateCts?.Cancel();
+            ClearTranslateQueue(tab);
             tab.IsTranslationOn = false;
             var hide = tab.TranslatedShown.ToList();
             tab.TranslatedShown.Clear();
@@ -161,69 +160,130 @@ public sealed partial class MainViewModel
             }
         }, ct);
 
-    /// <summary>スレ全体の翻訳が ON のとき、まだ訳していないレス (日本語・訳す文字が無いレスを除く) を 1 件ずつ翻訳する
-    /// (上限までは並行)。翻訳中に届いたレスも最後に拾う。接続エラーならそこで止めてステータスに出す。</summary>
+    /// <summary>スレ全体の翻訳が ON のとき、まだ訳していないレス (日本語・訳す文字が無いレスを除く) を順番待ちに入れて 1 件ずつ翻訳する
+    /// (同時に LLM に投げるのは使う LLM プロファイルの同時実行数まで)。
+    /// <para>翻訳中に呼ばれたら (差分取得で新着が届いたとき)、新着を順番待ちの先頭に足すだけで戻る。実行中の翻訳が 1 件終わるたびに
+    /// 順番待ちから次を取るので、新着はすぐ訳され始める (以前は実行中の分が全部終わるまで新着を拾わなかった)。</para>
+    /// 接続エラーならそこで止めてステータスに出す。</summary>
     private async Task TranslateMissingAsync(ThreadTabViewModel tab)
     {
-        if (!tab.IsTranslationOn || tab.IsTranslating || !IsTranslateConfigured) return;
+        if (!tab.IsTranslationOn || !IsTranslateConfigured) return;
+        if (tab.IsTranslating)
+        {
+            if (EnqueueUntranslated(tab, front: true) > 0) SetTranslateStatus(tab, TranslateProgressText(tab));
+            return;
+        }
+
         var cts = new CancellationTokenSource();
         tab.TranslateCts = cts;
         tab.IsTranslating = true;
-        var failed = new HashSet<long>();          // 今回の実行で訳せなかったレス (同じ実行で送り直さない)
-        var done = 0;
-        var saveCounter = 0;
+        tab.TranslateFailed.Clear();
+        tab.TranslateDone = 0;
+        EnqueueUntranslated(tab, front: false);
         string? error = null;
+        var running  = new List<Task>();
+        var lastSave = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            // 同時に走らせる数 = 同時実行数。NG 判定 AI 等と枠を共有していても、空いた枠から順に取る
+            var window = Math.Clamp(Translation.Settings.Concurrency, 1, LlmProfile.MaxConcurrency);
             while (!cts.IsCancellationRequested)
             {
-                var targets = new List<TranslateItem>();
-                foreach (var p in tab.Posts)
+                while (running.Count < window && tab.TranslateQueue.First is { } node)
                 {
-                    if (tab.Translations.ContainsKey(p.Number) || failed.Contains(p.Number) || tab.TranslatingPosts.Contains(p.Number)) continue;
-                    var plain = AiTranslator.ToPlain(p.Body);
-                    if (AiTranslator.NeedsTranslation(plain)) targets.Add(new TranslateItem(p.Number, plain));
+                    tab.TranslateQueue.RemoveFirst();
+                    var it = node.Value;   // TranslateQueued からは訳し終えたときに外す (枠待ちの間に差分取得で二重に積まないため)
+                    if (tab.Translations.ContainsKey(it.Number) || tab.TranslatingPosts.Contains(it.Number))
+                    {
+                        tab.TranslateQueued.Remove(it.Number);
+                        continue;
+                    }
+                    running.Add(TranslateQueuedOneAsync(tab, it, cts, e => error ??= e));
                 }
-                if (targets.Count == 0) break;
-
-                var total = done + targets.Count;
-                SetTranslateStatus(tab, $"翻訳中… {done}/{total} レス");
-                var tasks = targets.Select(async it =>
-                {
-                    try
-                    {
-                        if (cts.IsCancellationRequested) return;
-                        var ok = await TranslateOneAndShowAsync(tab, it.Number, it.Text, cts.Token).ConfigureAwait(true);
-                        if (!ok) failed.Add(it.Number);
-                        done++;
-                        SetTranslateStatus(tab, $"翻訳中… {done}/{total} レス");
-                        if (++saveCounter % 10 == 0) SaveTranslation(tab);
-                    }
-                    catch (AiTranslateException ex)
-                    {
-                        error ??= ex.Message;
-                        cts.Cancel();   // 接続エラー等は残りも失敗するので止める
-                    }
-                    catch (OperationCanceledException) { }
-                }).ToList();
-                await Task.WhenAll(tasks).ConfigureAwait(true);
+                if (running.Count == 0) break;
+                var finished = await Task.WhenAny(running).ConfigureAwait(true);
+                running.Remove(finished);
+                SetTranslateStatus(tab, TranslateProgressText(tab));
+                // 保存は数秒おき (毎回スレ全体の訳文を書き出すと、レスが多いスレでは書き出しだけで重くなるため)
+                if (lastSave.Elapsed.TotalSeconds >= 3) { SaveTranslation(tab); lastSave.Restart(); }
             }
+            await Task.WhenAll(running).ConfigureAwait(true);   // 止めたとき: 走っている分の後始末を待つ
         }
         finally
         {
+            if (cts.IsCancellationRequested) ClearTranslateQueue(tab);
             tab.IsTranslating = false;
             if (ReferenceEquals(tab.TranslateCts, cts)) tab.TranslateCts = null;
             SaveTranslation(tab);
         }
 
+        var done   = tab.TranslateDone;
+        var failed = tab.TranslateFailed.Count;
         if (error is not null)
         {
             SetTranslateStatus(tab, $"翻訳に失敗しました: {error}");
             StatusMessage = $"翻訳に失敗しました: {error}";
         }
         else if (!tab.IsTranslationOn) { /* 途中で OFF にした */ }
-        else if (done == 0) SetTranslateStatus(tab, "翻訳が必要なレスはありません (日本語のレスは翻訳しません)");
-        else SetTranslateStatus(tab, failed.Count > 0 ? $"翻訳しました ({done - failed.Count} レス、{failed.Count} レスは翻訳できませんでした)" : $"翻訳しました ({done} レス)");
+        else if (done == 0 && failed == 0) SetTranslateStatus(tab, "翻訳が必要なレスはありません (日本語のレスは翻訳しません)");
+        else SetTranslateStatus(tab, failed > 0 ? $"翻訳しました ({done} レス、{failed} レスは翻訳できませんでした)" : $"翻訳しました ({done} レス)");
+    }
+
+    /// <summary>順番待ちの 1 件を訳す (<see cref="TranslateMissingAsync"/> から)。接続エラー等は <paramref name="onError"/> に渡して全体を止める。</summary>
+    private async Task TranslateQueuedOneAsync(ThreadTabViewModel tab, TranslateItem it, CancellationTokenSource cts, Action<string> onError)
+    {
+        try
+        {
+            if (cts.IsCancellationRequested) return;
+            var ok = await TranslateOneAndShowAsync(tab, it.Number, it.Text, cts.Token).ConfigureAwait(true);
+            if (ok) tab.TranslateDone++;
+            else    tab.TranslateFailed.Add(it.Number);
+        }
+        catch (AiTranslateException ex)
+        {
+            onError(ex.Message);
+            cts.Cancel();   // 接続エラー等は残りも失敗するので止める
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            tab.TranslateQueued.Remove(it.Number);
+        }
+    }
+
+    /// <summary>まだ訳文が無く翻訳が必要なレスを順番待ちに入れる (番号順)。<paramref name="front"/> なら先頭に (翻訳中に届いた新着)。
+    /// 戻り値: 入れた件数。「翻訳が必要か」の判定はレスごとに 1 回だけ行う。</summary>
+    private static int EnqueueUntranslated(ThreadTabViewModel tab, bool front)
+    {
+        var add = new List<TranslateItem>();
+        foreach (var p in tab.Posts)
+        {
+            var n = p.Number;
+            if (tab.Translations.ContainsKey(n) || tab.TranslateQueued.Contains(n) || tab.TranslatingPosts.Contains(n)
+                || tab.TranslateFailed.Contains(n)) continue;
+            if (tab.TranslateNeeds.TryGetValue(n, out var need) && !need) continue;
+            var plain = AiTranslator.ToPlain(p.Body);
+            need = AiTranslator.NeedsTranslation(plain);
+            tab.TranslateNeeds[n] = need;
+            if (need) add.Add(new TranslateItem(n, plain));
+        }
+        if (front) for (var i = add.Count - 1; i >= 0; i--) tab.TranslateQueue.AddFirst(add[i]);
+        else       foreach (var it in add) tab.TranslateQueue.AddLast(it);
+        foreach (var it in add) tab.TranslateQueued.Add(it.Number);
+        return add.Count;
+    }
+
+    private static void ClearTranslateQueue(ThreadTabViewModel tab)
+    {
+        tab.TranslateQueue.Clear();
+        tab.TranslateQueued.Clear();
+    }
+
+    /// <summary>「翻訳中… 済み/全体 レス」(全体 = 済み + 失敗 + 訳している最中 + 順番待ち)。</summary>
+    private static string TranslateProgressText(ThreadTabViewModel tab)
+    {
+        var finished = tab.TranslateDone + tab.TranslateFailed.Count;
+        return $"翻訳中… {tab.TranslateDone}/{finished + tab.TranslatingPosts.Count + tab.TranslateQueue.Count} レス";
     }
 
     /// <summary>各レスの 🌐 ボタン: 翻訳で表示中なら原文に戻し、そうでなければ翻訳する (保存済みの訳文があればそれを出す)。</summary>

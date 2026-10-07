@@ -591,6 +591,7 @@ public sealed partial class MainViewModel
             var finalState = ComputeMarkState(existing, stateHint: null);
             NotifyThreadListLogMark(board, info.Key, finalState);
             existing.State = finalState;
+            UpdateTruncatedNote(existing);   // 取り切れなかったら「続きあり」(reddit)
             if (existing.IsTranslationOn) _ = TranslateMissingAsync(existing);   // スレ全体の翻訳が ON なら新着も訳す
             return;
         }
