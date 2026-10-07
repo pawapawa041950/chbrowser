@@ -8,8 +8,10 @@ namespace ChBrowser.Services.Storage;
 /// <summary>1 スレ分の AI 翻訳 (<c>&lt;key&gt;.tr.json</c>)。</summary>
 /// <param name="ThreadOn">スレ全体の翻訳が ON (新着も自動で翻訳する)。</param>
 /// <param name="Shown">翻訳で表示しているレス番号 (原文に戻したレスは訳文を残したまま外す)。</param>
-/// <param name="Posts">レス番号 → 訳文 (表示用に整形済み)。</param>
-public sealed record ThreadTranslation(bool ThreadOn, List<long> Shown, Dictionary<long, string> Posts)
+/// <param name="Posts">レス番号 → 訳文 (表示用に整形済み。<paramref name="Markdown"/> のレスは訳した Markdown)。</param>
+/// <param name="Markdown">訳文が Markdown のレス番号 (本文を Markdown で書く掲示板で、記法を保って訳したもの。表示時に整形する)。
+/// 古いファイルには無い (= 全部ふつうの訳文)。</param>
+public sealed record ThreadTranslation(bool ThreadOn, List<long> Shown, Dictionary<long, string> Posts, List<long>? Markdown = null)
 {
     public static ThreadTranslation Empty() => new(false, new List<long>(), new Dictionary<long, string>());
 }
@@ -35,7 +37,7 @@ public sealed class TranslationStorage
             var path = _paths.TranslationPath(host, dir, threadKey);
             if (!File.Exists(path)) return ThreadTranslation.Empty();
             var t = JsonSerializer.Deserialize<ThreadTranslation>(File.ReadAllBytes(path), Options);
-            return t is null ? ThreadTranslation.Empty() : t with { Shown = t.Shown ?? new(), Posts = t.Posts ?? new() };
+            return t is null ? ThreadTranslation.Empty() : t with { Shown = t.Shown ?? new(), Posts = t.Posts ?? new(), Markdown = t.Markdown ?? new() };
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {

@@ -165,6 +165,8 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     // ---- AI 翻訳 ----
     /// <summary>このスレの訳文 (レス番号 → 表示用本文)。<c>.tr.json</c> から復元し、翻訳のたびに増える。appendPosts / resync に同梱する。</summary>
     public Dictionary<long, string> Translations { get; } = new();
+    /// <summary>訳文が Markdown のレス番号 (本文を Markdown で書く掲示板で、記法を保って訳したもの。スレ表示へ送るときに整形する)。</summary>
+    public HashSet<long> TranslationsMarkdown { get; } = new();
     /// <summary>翻訳で表示しているレス番号 (原文に戻したレスは訳文を残したまま外す)。</summary>
     public HashSet<long> TranslatedShown { get; } = new();
     /// <summary>スレ全体の翻訳が ON (ツールバー 🌐 の押下状態。新着も自動で翻訳する)。</summary>

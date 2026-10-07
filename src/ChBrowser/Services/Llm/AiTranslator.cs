@@ -11,7 +11,8 @@ using ChBrowser.Models;
 namespace ChBrowser.Services.Llm;
 
 /// <summary>翻訳するレス 1 件 (<see cref="Text"/> はプレーンテキスト)。</summary>
-public sealed record TranslateItem(long Number, string Text);
+/// <summary>翻訳の順番待ちの 1 件。<see cref="Markdown"/> = true なら <see cref="Text"/> は元の Markdown (記法を保って訳す)。</summary>
+public sealed record TranslateItem(long Number, string Text, bool Markdown = false);
 
 /// <summary>AI 翻訳 (レス本文を日本語に)。1 回の推論で 1 レスだけ訳す (まとめると取り違え・欠落が起きやすいため)。
 ///
@@ -28,6 +29,21 @@ public static class AiTranslator
         "規則:\n" +
         "- ⟦1⟧ のような記号は、リンクやレスへの参照の目印です。書き換えず、訳文の対応する位置にそのまま残してください。\n" +
         "- 改行の位置はできるだけ保ってください。\n" +
+        "- 掲示板らしい口語・スラングは、意味が伝わる自然な日本語の口語にしてください。固有名詞は無理に訳さなくてかまいません。\n" +
+        "- すでに日本語の部分はそのまま残してください。\n" +
+        "- 内容についての注釈・要約・意見は付けないでください。";
+
+    private const string MarkdownSystemPrompt =
+        "あなたは掲示板の書き込みを日本語に翻訳する翻訳者です。\n" +
+        "ユーザーが送る 1 件のレス本文は Markdown で書かれています。文章を自然な日本語に翻訳し、Markdown のまま訳文だけを出力してください " +
+        "(前置き・説明・引用符は不要。全体をコードブロックで囲まないこと)。\n" +
+        "規則:\n" +
+        "- Markdown の記法はそのまま残してください: 強調 (** や *)、取り消し線 (~~)、インラインコード (`)、見出し (#)、" +
+        "箇条書き・番号付きリストの記号、引用の >、表の | と区切り行、区切り線、リンク [文字](URL) の () の中、ネタバレ >!…!<。" +
+        "訳すのは文字の部分だけです (リンクの [] の中の文字は訳してかまいません)。\n" +
+        "- コードブロック (``` で囲まれた部分) とインラインコードの中身は訳さずにそのまま残してください。\n" +
+        "- ⟦1⟧ のような記号は、リンクやレスへの参照の目印です。書き換えず、訳文の対応する位置にそのまま残してください。\n" +
+        "- 改行・空行の位置はそのまま保ってください (段落やリストが崩れないように)。\n" +
         "- 掲示板らしい口語・スラングは、意味が伝わる自然な日本語の口語にしてください。固有名詞は無理に訳さなくてかまいません。\n" +
         "- すでに日本語の部分はそのまま残してください。\n" +
         "- 内容についての注釈・要約・意見は付けないでください。";
@@ -133,6 +149,29 @@ public static class AiTranslator
         text = StripWrapping(text);
         if (string.IsNullOrWhiteSpace(text)) return null;
         return ToDisplayBody(Unmask(text, tokens));
+    }
+
+    /// <summary>Markdown で書かれた 1 レスを、Markdown の記法を保ったまま翻訳する (戻り値: 訳した Markdown。応答が空なら null)。
+    /// 訳文も整形して表示するため (<see cref="ChBrowser.Services.Render.MarkdownBodyRenderer"/>)。表示用の整形 (&lt; の全角化) はしない
+    /// (整形時に生の HTML は文字として出る)。LLM が失敗 (接続エラー等) したら <see cref="AiTranslateException"/>。</summary>
+    public static async Task<string?> TranslateMarkdownAsync(
+        LlmClient llm, LlmSettings settings, string markdown, bool disableReasoning, CancellationToken ct)
+    {
+        var (masked, tokens) = Mask(markdown);
+        var messages = new[]
+        {
+            new LlmChatMessage("system", MarkdownSystemPrompt),
+            new LlmChatMessage("user", masked),
+        };
+        var chat = await llm.ChatStreamAsync(settings, messages, _ => { }, null, ct,
+            disableReasoning ? ChBrowser.Services.Ng.AiNgJudge.ReasoningOff : null).ConfigureAwait(false);
+        if (!chat.Ok) throw new AiTranslateException(chat.Error ?? "翻訳の要求に失敗しました");
+
+        var (text, _) = ChatArchive.SplitThink(chat.Content ?? "");
+        // 全体を囲むコードブロック・引用符を外す。ただし原文がコードブロックで始まるなら、それは本文の一部なので外さない
+        text = markdown.TrimStart().StartsWith("```", StringComparison.Ordinal) ? text.Trim() : StripWrapping(text);
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return Unmask(text, tokens).Replace("\r\n", "\n").Trim();
     }
 
     // ---- スレタイ (短文) をまとめて翻訳 ----

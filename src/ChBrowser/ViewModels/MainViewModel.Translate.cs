@@ -89,6 +89,7 @@ public sealed partial class MainViewModel
         var t = TranslationStore.Load(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey);
         foreach (var (n, body) in t.Posts) tab.Translations[n] = body;
         foreach (var n in t.Shown) if (tab.Translations.ContainsKey(n)) tab.TranslatedShown.Add(n);
+        foreach (var n in t.Markdown ?? new()) if (tab.Translations.ContainsKey(n)) tab.TranslationsMarkdown.Add(n);
         tab.IsTranslationOn = t.ThreadOn;
     }
 
@@ -96,7 +97,8 @@ public sealed partial class MainViewModel
     {
         if (tab.LogDeleted) return;   // 翻訳中にログを削除したスレ: 消した .tr.json を作り直さない
         TranslationStore.Save(tab.Board.Host, tab.Board.DirectoryName, tab.ThreadKey,
-            new ThreadTranslation(tab.IsTranslationOn, tab.TranslatedShown.OrderBy(n => n).ToList(), new Dictionary<long, string>(tab.Translations)));
+            new ThreadTranslation(tab.IsTranslationOn, tab.TranslatedShown.OrderBy(n => n).ToList(), new Dictionary<long, string>(tab.Translations),
+                                  tab.TranslationsMarkdown.Where(tab.Translations.ContainsKey).OrderBy(n => n).ToList()));
     }
 
     private static void PushTranslation(ThreadTabViewModel tab, IReadOnlyDictionary<long, string>? translations = null,
@@ -139,16 +141,21 @@ public sealed partial class MainViewModel
 
     /// <summary>1 レスを翻訳する (同時実行の上限の中で、訳している間は loading を表示)。成功なら訳文を保存して翻訳表示にする。
     /// 戻り値: 訳せたか。LLM が失敗 (接続エラー等) したら <see cref="AiTranslateException"/> をそのまま投げる。</summary>
-    private Task<bool> TranslateOneAndShowAsync(ThreadTabViewModel tab, long number, string plain, CancellationToken ct)
+    private Task<bool> TranslateOneAndShowAsync(ThreadTabViewModel tab, TranslateItem item, CancellationToken ct)
         => Translation.WithSlotAsync(async () =>
         {
+            var number = item.Number;
             tab.TranslatingPosts.Add(number);
             PushTranslation(tab, loading: new[] { number });
             try
             {
-                var body = await Translation.TranslatePostAsync(plain, ct).ConfigureAwait(true);
+                var body = item.Markdown
+                    ? await Translation.TranslateMarkdownPostAsync(item.Text, ct).ConfigureAwait(true)
+                    : await Translation.TranslatePostAsync(item.Text, ct).ConfigureAwait(true);
                 if (body is null) return false;
                 tab.Translations[number] = body;
+                if (item.Markdown) tab.TranslationsMarkdown.Add(number);
+                else               tab.TranslationsMarkdown.Remove(number);
                 tab.TranslatedShown.Add(number);
                 PushTranslation(tab, new Dictionary<long, string> { [number] = body }, show: new[] { number });
                 return true;
@@ -235,7 +242,7 @@ public sealed partial class MainViewModel
         try
         {
             if (cts.IsCancellationRequested) return;
-            var ok = await TranslateOneAndShowAsync(tab, it.Number, it.Text, cts.Token).ConfigureAwait(true);
+            var ok = await TranslateOneAndShowAsync(tab, it, cts.Token).ConfigureAwait(true);
             if (ok) tab.TranslateDone++;
             else    tab.TranslateFailed.Add(it.Number);
         }
@@ -265,12 +272,22 @@ public sealed partial class MainViewModel
             var plain = AiTranslator.ToPlain(p.Body);
             need = AiTranslator.NeedsTranslation(plain);
             tab.TranslateNeeds[n] = need;
-            if (need) add.Add(new TranslateItem(n, plain));
+            if (need) add.Add(TranslateItemFor(tab, p, plain));
         }
         if (front) for (var i = add.Count - 1; i >= 0; i--) tab.TranslateQueue.AddFirst(add[i]);
         else       foreach (var it in add) tab.TranslateQueue.AddLast(it);
         foreach (var it in add) tab.TranslateQueued.Add(it.Number);
         return add.Count;
+    }
+
+    /// <summary>レスを訳すときに送る元。本文を Markdown で書く掲示板で元の Markdown があればそれ (記法を保って訳し、訳文も整形して表示する)、
+    /// それ以外は本文のプレーンテキスト。</summary>
+    private static TranslateItem TranslateItemFor(ThreadTabViewModel tab, Post post, string plain)
+    {
+        var markdownBoard = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host).MarkdownBody is not null;
+        return markdownBoard && post.Ext?.Markdown is { Length: > 0 } md
+            ? new TranslateItem(post.Number, md, Markdown: true)
+            : new TranslateItem(post.Number, plain);
     }
 
     private static void ClearTranslateQueue(ThreadTabViewModel tab)
@@ -327,7 +344,7 @@ public sealed partial class MainViewModel
         bool ok;
         try
         {
-            ok = await TranslateOneAndShowAsync(tab, number, plain, CancellationToken.None).ConfigureAwait(true);
+            ok = await TranslateOneAndShowAsync(tab, TranslateItemFor(tab, post, plain), CancellationToken.None).ConfigureAwait(true);
         }
         catch (AiTranslateException ex)
         {
@@ -360,6 +377,7 @@ public sealed partial class MainViewModel
         if (tab.TranslatingPosts.Contains(number)) return;   // 訳している最中は消さない (直後に訳文が届いて戻ってしまうため)
         if (!tab.Translations.Remove(number)) return;
         tab.TranslatedShown.Remove(number);
+        tab.TranslationsMarkdown.Remove(number);
         PushTranslation(tab, removed: new[] { number });
         SaveTranslation(tab);
         SetTranslateStatus(tab, $"レス {number} の翻訳文を削除しました");
@@ -376,6 +394,7 @@ public sealed partial class MainViewModel
         {
             tab.Translations.Remove(n);
             tab.TranslatedShown.Remove(n);
+            tab.TranslationsMarkdown.Remove(n);
         }
         PushTranslation(tab, removed: removed);
         SaveTranslation(tab);

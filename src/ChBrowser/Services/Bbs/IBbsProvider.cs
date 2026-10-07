@@ -254,6 +254,10 @@ public interface IBbsProvider
     /// クリックでプロフィールのカードを出す。投稿者は名前で識別し、取得にはアカウント ID (<see cref="PostExtra.AuthorId"/>) を使う。</summary>
     bool SupportsAuthorProfiles => false;
 
+    /// <summary>本文の Markdown を整形して表示するか (とその設定)。null なら整形しない (既定)。
+    /// 整形する掲示板は取得時にレスの <see cref="PostExtra.Markdown"/> に元の Markdown を入れる。</summary>
+    ChBrowser.Services.Render.MarkdownBodySpec? MarkdownBody => null;
+
     /// <summary>アカウント ID の集合から投稿者情報を取る。要求回数の予算に配慮して一部だけ問い合わせてよい
     /// (<see cref="AuthorProfileFetch.Asked"/> に実際に問い合わせた ID を入れる。残りは次の機会に取る)。</summary>
     Task<AuthorProfileFetch> FetchAuthorProfilesAsync(HttpClient http, IReadOnlyCollection<string> authorIds, CancellationToken ct)

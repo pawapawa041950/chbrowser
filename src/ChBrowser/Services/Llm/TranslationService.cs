@@ -73,6 +73,10 @@ public sealed class TranslationService
     public Task<string?> TranslatePostAsync(string plain, CancellationToken ct)
         => AiTranslator.TranslateOneAsync(_llm, Settings, plain, DisableReasoning, ct);
 
+    /// <summary>Markdown で書かれたレス本文 1 件を、記法を保ったまま日本語に訳す (訳した Markdown。応答が空なら null)。同時実行の枠は呼び出し元が取る。</summary>
+    public Task<string?> TranslateMarkdownPostAsync(string markdown, CancellationToken ct)
+        => AiTranslator.TranslateMarkdownAsync(_llm, Settings, markdown, DisableReasoning, ct);
+
     // ---- スレタイ ----
 
     /// <summary>保存済みのタイトルの訳 (無ければ null)。</summary>

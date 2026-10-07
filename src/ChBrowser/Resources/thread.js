@@ -78,6 +78,9 @@
     let authorProfiles = new Map();
     /** AI 翻訳: レス番号 → 訳文 (表示用の本文)。appendPosts (そのバッチの分) / resync (全体) / updateTranslations で届く。 */
     let translations = new Map();
+    /** AI 翻訳: 訳文を整形した HTML (レス番号 → HTML)。本文を Markdown で書く掲示板で、記法を保って訳したレスだけ (C# 側で描画・無害化済み)。
+     *  訳文を表示するとき、これがあれば訳文の代わりに出す。 */
+    let translationHtml = new Map();
     /** AI 翻訳: 翻訳で表示しているレス番号。p.body (原文) は変えず、表示だけ訳文にする (ツリー・アンカー・検索は原文で動く)。 */
     let translatedShown = new Set();
     /** AI 翻訳: いま LLM で訳しているレス番号 (🌐 ボタンを読み込み中の表示にする)。 */
@@ -607,6 +610,23 @@
             '.post-vote.pending{opacity:.5}' +
             '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
             '.post-avatar.empty{display:none}' +
+            // 整形した Markdown 本文 (post-md)。色は文字色からの半透明にしてテーマ (明暗) に合わせる
+            '.post-md{white-space:normal}' +   // 本文は改行をそのまま出す (pre-wrap) が、整形した HTML は段落・リスト等で改行する
+            '.post-md>:first-child{margin-top:0}.post-md>:last-child{margin-bottom:0}' +
+            '.post-md p{margin:0 0 .6em}' +
+            '.post-md h1,.post-md h2,.post-md h3,.post-md h4,.post-md h5,.post-md h6{font-size:1.05em;font-weight:bold;margin:.6em 0 .3em}' +
+            '.post-md h1{font-size:1.2em}.post-md h2{font-size:1.12em}' +
+            '.post-md ul,.post-md ol{margin:0 0 .6em;padding-left:1.6em}.post-md li{margin:.1em 0}' +
+            '.post-md blockquote{margin:0 0 .6em;padding:.1em 0 .1em .7em;border-left:3px solid rgba(127,127,127,.5);opacity:.85}' +
+            '.post-md code{font-family:Consolas,monospace;font-size:.92em;background:rgba(127,127,127,.15);padding:0 .25em;border-radius:3px}' +
+            '.post-md pre{margin:0 0 .6em;padding:.5em .7em;background:rgba(127,127,127,.12);border-radius:4px;overflow-x:auto;white-space:pre}' +
+            '.post-md pre code{background:none;padding:0}' +
+            '.post-md table{border-collapse:collapse;margin:0 0 .6em}' +
+            '.post-md th,.post-md td{border:1px solid rgba(127,127,127,.45);padding:.15em .5em}.post-md th{background:rgba(127,127,127,.12)}' +
+            '.post-md hr{border:0;border-top:1px solid rgba(127,127,127,.45);margin:.6em 0}' +
+            '.post-md del{opacity:.75}' +
+            '.post-md .md-spoiler{background:rgba(127,127,127,.75);color:transparent;border-radius:3px;cursor:pointer}' +
+            '.post-md .md-spoiler.open{background:rgba(127,127,127,.15);color:inherit}' +
             // 引用文を返信として扱うときの引用行 (>>N と同じアンカー。見た目は引用の緑に点線)
             'a.anchor.quote-anchor{color:#789922;text-decoration:none;border-bottom:1px dotted #789922;cursor:pointer}' +
             // 各レスの 🌐 ボタン (名前行の末尾)。html.show-tr-buttons (🌐 メニュー) のとき全レスに、そうでなくても
@@ -1566,6 +1586,12 @@
         try { built = buildBodyAndMedia(displayBodyOf(p)); }
         finally { renderingQuoteTargets = null; }
         let body = built.body;
+        // 本文を Markdown で書く掲示板のレスは、整形した HTML (C# 側で描画・無害化済み) を本文の代わりに出す。
+        // 訳文を表示しているときは訳文 (整形なし)。画像・動画のサムネイル (media) は今までどおり本文の URL から作る。
+        if (showingOriginal && p.ext && typeof p.ext.bodyHtml === 'string' && p.ext.bodyHtml.length > 0)
+            body = '<div class="post-md">' + p.ext.bodyHtml + '</div>';
+        else if (!showingOriginal && translationHtml.has(p.number))
+            body = '<div class="post-md">' + translationHtml.get(p.number) + '</div>';   // 記法を保って訳した訳文も整形して出す
         if (parentLine) body = parentLine + (body ? '<br>' + body : '');
         return { body: body, media: built.media };
     }
@@ -1623,9 +1649,15 @@
     }
 
     /** 訳文と翻訳表示の状態を取り込む (appendPosts / resync)。obj: { 番号: 訳文 }、shown: [番号]。 */
-    function mergeTranslations(obj, shown) {
+    function mergeTranslations(obj, shown, htmlObj) {
         if (obj && typeof obj === 'object')
-            for (const k of Object.keys(obj)) { const n = parseInt(k, 10); if (!isNaN(n)) translations.set(n, obj[k]); }
+            for (const k of Object.keys(obj)) {
+                const n = parseInt(k, 10);
+                if (isNaN(n)) continue;
+                translations.set(n, obj[k]);
+                const html = htmlObj && typeof htmlObj === 'object' ? htmlObj[k] : undefined;
+                if (typeof html === 'string') translationHtml.set(n, html); else translationHtml.delete(n);
+            }
         if (Array.isArray(shown)) for (const n of shown) if (typeof n === 'number') translatedShown.add(n);
     }
 
@@ -1638,12 +1670,14 @@
                 const n = parseInt(k, 10);
                 if (isNaN(n)) continue;
                 translations.set(n, msg.translations[k]);
+                const html = msg.translationsHtml && typeof msg.translationsHtml === 'object' ? msg.translationsHtml[k] : undefined;
+                if (typeof html === 'string') translationHtml.set(n, html); else translationHtml.delete(n);
                 if (translatedShown.has(n)) affected.add(n);
                 buttonsOnly.add(n);
             }
         for (const n of msg.show || []) { translatedShown.add(n); affected.add(n); }
         for (const n of msg.hide || []) { translatedShown.delete(n); affected.add(n); }
-        for (const n of msg.removed || []) { translations.delete(n); translatedShown.delete(n); affected.add(n); }
+        for (const n of msg.removed || []) { translations.delete(n); translationHtml.delete(n); translatedShown.delete(n); affected.add(n); }
         const buttons = new Set([...affected, ...buttonsOnly]);
         for (const n of msg.loading || []) { translatePending.add(n); buttons.add(n); }
         for (const n of msg.loaded  || []) { translatePending.delete(n); buttons.add(n); }
@@ -4260,6 +4294,14 @@
             return;
         }
 
+        // 整形した Markdown 本文のネタバレ: 隠れているときのクリックは表示するだけ (中のリンクは開かない)。
+        // 表示中はリンクならそのまま開き、それ以外のクリックでまた隠す
+        const spoiler = e.target.closest && e.target.closest('.md-spoiler');
+        if (spoiler && (!spoiler.classList.contains('open') || !e.target.closest('a'))) {
+            spoiler.classList.toggle('open');
+            return;
+        }
+
         const a = e.target.closest && e.target.closest('a');
         if (!a) return;
         if (a.classList.contains('anchor')) {
@@ -5343,7 +5385,7 @@
                         ownPostNumbers = new Set(msg.ownPostNumbers);
                     }
                     if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
-                    mergeTranslations(msg.translations, msg.translatedShown);
+                    mergeTranslations(msg.translations, msg.translatedShown, msg.translationsHtml);
                     window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental, msg.hasMore === true);
                     break;
                 case 'updateOwnPosts':
@@ -5398,9 +5440,10 @@
                         votePending.clear();
                         pendingBulkDelta = [];   // 全体を送り直すので、溜めていた差分の塊は捨てる (全体に含まれている)
                         translations = new Map();
+                        translationHtml = new Map();
                         translatedShown = new Set();
                         translatePending = new Set(Array.isArray(msg.translatingPosts) ? msg.translatingPosts : []);
-                        mergeTranslations(msg.translations, msg.translatedShown);
+                        mergeTranslations(msg.translations, msg.translatedShown, msg.translationsHtml);
                         authorProfiles = new Map();
                         if (msg.authorProfiles && typeof msg.authorProfiles === 'object')
                             for (const k of Object.keys(msg.authorProfiles)) authorProfiles.set(k, msg.authorProfiles[k]);

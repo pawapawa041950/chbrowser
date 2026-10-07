@@ -424,9 +424,16 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
         var attachments = new List<PostAttachment>();
         var lines = new List<string>();
-        if (Str(d, "link_flair_text") is { Length: > 0 } flair) lines.Add("[" + flair + "]");
+        var mdLines = new List<string>();   // 整形表示用の Markdown (本文と同じ並び。自己投稿の本文が Markdown のときだけ使う)
+        if (Str(d, "link_flair_text") is { Length: > 0 } flair)
+        {
+            lines.Add("[" + flair + "]");
+            mdLines.Add(ChBrowser.Services.Render.MarkdownBodyRenderer.EscapeText("[" + flair + "]"));
+        }
         var self = RedditBodyConverter.Convert(Str(d, "selftext_html"));
         if (self.Length > 0) lines.Add(self);
+        var selfMd = Str(d, "selftext");
+        if (self.Length > 0 && !string.IsNullOrWhiteSpace(selfMd)) mdLines.Add(selfMd);
 
         // ギャラリー: gallery_data の順に media_metadata の元画像
         if (Bool(d, "is_gallery") && d.TryGetProperty("media_metadata", out var mm) && mm.ValueKind == JsonValueKind.Object)
@@ -450,17 +457,23 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         {
             attachments.Add(new PostAttachment(fb, Width: Int(rv, "width"), Height: Int(rv, "height"), Kind: "video"));
         }
-        foreach (var a in attachments) lines.Add(a.Url);
+        foreach (var a in attachments) { lines.Add(a.Url); mdLines.Add("<" + a.Url + ">"); }
 
         // リンク投稿: 先の URL (画像直リンクならそのまま画像として出る)。ギャラリー / 動画 / 自分自身へのリンクは除く
         var link = Str(d, "url_overridden_by_dest") ?? Str(d, "url");
         if (!Bool(d, "is_self") && attachments.Count == 0 && link is { Length: > 0 }
             && !link.Contains("/comments/" + id, StringComparison.Ordinal))
         {
-            lines.Add(link.StartsWith("/", StringComparison.Ordinal) ? Origin + link : link);
+            var abs = link.StartsWith("/", StringComparison.Ordinal) ? Origin + link : link;
+            lines.Add(abs);
+            mdLines.Add("<" + abs + ">");
             if (Str(d, "post_hint") == "image") attachments.Add(new PostAttachment(link, Kind: "image"));
         }
-        if (Str(d, "removed_by_category") is { Length: > 0 } removed) lines.Add($"[削除されました: {removed}]");
+        if (Str(d, "removed_by_category") is { Length: > 0 } removed)
+        {
+            lines.Add($"[削除されました: {removed}]");
+            mdLines.Add(ChBrowser.Services.Render.MarkdownBodyRenderer.EscapeText($"[削除されました: {removed}]"));
+        }
 
         var permalink = Str(d, "permalink") is { } pl ? Origin + pl : null;
         return new SnapshotPost(
@@ -479,7 +492,9 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 Permalink:   permalink,
                 Attachments: attachments.Count > 0 ? attachments : null,
                 MyVote:      LikesOf(d),
-                AuthorId:    Str(d, "author_fullname")));
+                AuthorId:    Str(d, "author_fullname"),
+                // 本文が Markdown の自己投稿だけ (リンク投稿・画像投稿は整形するものが無いので今までどおり)
+                Markdown:    !string.IsNullOrWhiteSpace(selfMd) && self.Length > 0 ? string.Join("\n\n", mdLines) : null));
     }
 
     private static SnapshotPost ToComment(JsonElement d)
@@ -492,6 +507,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         AddDistinguished(d, flags);
         if (Bool(d, "stickied")) flags.Add("固定");
         var body = RedditBodyConverter.Convert(Str(d, "body_html"));
+        var markdown = body.Length > 0 && Str(d, "body") is { Length: > 0 } md ? md : null;   // 整形表示用の元の Markdown
         if (body.Length == 0) body = (Str(d, "body") ?? "").Replace("<", "＜");
         var permalink = Str(d, "permalink") is { } pl ? Origin + pl : null;
         return new SnapshotPost(
@@ -510,7 +526,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 EditedEpoch: Edited(d),
                 Permalink:   permalink,
                 MyVote:      LikesOf(d),
-                AuthorId:    Str(d, "author_fullname")));
+                AuthorId:    Str(d, "author_fullname"),
+                Markdown:    markdown));
     }
 
     /// <summary>評価値。<c>score_hidden</c> (投稿直後は隠す subreddit がある) なら null (偽の 1 を出さない)。</summary>
@@ -678,6 +695,9 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     // -----------------------------------------------------------------
 
     public bool SupportsAuthorProfiles => true;
+
+    /// <summary>本文は Markdown (reddit の記法)。相対リンク (<c>/r/xxx</c>) は reddit へ、<c>&gt;!…!&lt;</c> はネタバレ。</summary>
+    public ChBrowser.Services.Render.MarkdownBodySpec MarkdownBody { get; } = new(Origin, Spoilers: true);
 
     /// <summary>1 回の取得で問い合わせる上限 (100 人 × 3 回)。残りは次にスレを開いた / 更新したときに取る。</summary>
     public const int AuthorBatchSize = 100, MaxAuthorBatches = 3;

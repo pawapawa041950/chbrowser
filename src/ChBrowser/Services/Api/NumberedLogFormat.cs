@@ -97,9 +97,9 @@ public static class NumberedLogFormat
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>拡張情報を 8 列目用の JSON にする (null なら空文字 = 従来と同じ行)。</summary>
+    /// <summary>拡張情報を 8 列目用の JSON にする (null なら空文字 = 従来と同じ行)。表示用の HTML (<see cref="PostExtra.BodyHtml"/>) は保存しない。</summary>
     public static string SerializeExtra(PostExtra? ext)
-        => ext is null ? "" : System.Text.Json.JsonSerializer.Serialize(ext, ExtraJsonOptions);
+        => ext is null ? "" : System.Text.Json.JsonSerializer.Serialize(ext.BodyHtml is null ? ext : ext with { BodyHtml = null }, ExtraJsonOptions);
 
     /// <summary>8 列目の JSON を拡張情報に。空 / 壊れた JSON は null (= 読み飛ばし。ログ全体は読める)。</summary>
     public static PostExtra? ParseExtra(string json)

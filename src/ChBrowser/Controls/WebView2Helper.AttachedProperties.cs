@@ -233,7 +233,7 @@ public static partial class WebView2Helper
             var json = JsonSerializer.Serialize(new
             {
                 type             = "appendPosts",
-                posts            = chunk,
+                posts            = PostsForPage(tab, chunk),
                 scrollTarget,
                 markPostNumber,
                 incremental      = data.IsIncremental,
@@ -243,6 +243,7 @@ public static partial class WebView2Helper
                 myVotes          = tab?.MyVotes,
                 // AI 翻訳: この塊のレスの訳文と、翻訳で表示するレス (レス描画の時点で訳文で出す。全体は resync で送る)
                 translations     = TranslationsFor(tab, chunk),
+                translationsHtml = TranslationsHtmlFor(tab, chunk.Select(pp => pp.Number)),
                 translatedShown  = tab is not null
                                        ? chunk.Where(pp => tab.TranslatedShown.Contains(pp.Number)).Select(pp => pp.Number).ToArray()
                                        : System.Array.Empty<long>(),
@@ -252,6 +253,38 @@ public static partial class WebView2Helper
 
             _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
         }
+    }
+
+    /// <summary>スレ表示へ送るレス。本文の Markdown を整形表示する掲示板 (<see cref="ChBrowser.Services.Bbs.IBbsProvider.MarkdownBody"/>) なら、
+    /// Markdown を描画した HTML (<see cref="ChBrowser.Models.PostExtra.BodyHtml"/>) を付けた複製にする (元のレス・ログはそのまま)。
+    /// スレ表示はこの HTML があれば本文の代わりに出す。</summary>
+    private static System.Collections.Generic.IReadOnlyList<ChBrowser.Models.Post> PostsForPage(
+        ChBrowser.ViewModels.ThreadTabViewModel? tab, System.Collections.Generic.IReadOnlyList<ChBrowser.Models.Post> posts)
+    {
+        if (tab is null || ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host).MarkdownBody is not { } spec) return posts;
+        System.Collections.Generic.List<ChBrowser.Models.Post>? copy = null;
+        for (var i = 0; i < posts.Count; i++)
+        {
+            var p = posts[i];
+            if (ChBrowser.Services.Render.MarkdownBodyRenderer.HtmlFor(p, spec) is not { } html) continue;
+            copy ??= new System.Collections.Generic.List<ChBrowser.Models.Post>(posts);
+            copy[i] = p with { Ext = p.Ext! with { BodyHtml = html } };
+        }
+        return copy ?? posts;
+    }
+
+    /// <summary>訳文が Markdown のレス (<see cref="ChBrowser.ViewModels.ThreadTabViewModel.TranslationsMarkdown"/>) の、訳文を整形した HTML
+    /// (numbers のうち該当するものだけ。無ければ null)。スレ表示は訳文を表示するとき、これがあれば訳文の代わりに出す。</summary>
+    private static System.Collections.Generic.Dictionary<long, string>? TranslationsHtmlFor(
+        ChBrowser.ViewModels.ThreadTabViewModel? tab, System.Collections.Generic.IEnumerable<long> numbers)
+    {
+        if (tab is null || tab.TranslationsMarkdown.Count == 0) return null;
+        if (ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host).MarkdownBody is not { } spec) return null;
+        System.Collections.Generic.Dictionary<long, string>? d = null;
+        foreach (var n in numbers)
+            if (tab.TranslationsMarkdown.Contains(n) && tab.Translations.TryGetValue(n, out var md))
+                (d ??= new())[n] = ChBrowser.Services.Render.MarkdownBodyRenderer.RenderCached(md, spec);
+        return d;
     }
 
     /// <summary>appendPosts 1 バッチ分の訳文 (バッチ内のレスの分だけ。毎バッチ全体を送らない)。</summary>
@@ -285,13 +318,14 @@ public static partial class WebView2Helper
             type           = "resyncThreadState",
             provider       = tab.ProviderConfig,
             viewMode       = tab.ViewMode,
-            posts          = tab.Posts,
+            posts          = PostsForPage(tab, tab.Posts),
             scrollTarget   = (long?)tab.ScrollTargetPostNumber,
             markPostNumber = (long?)tab.MarkPostNumber,
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
             myVotes        = tab.MyVotes,
             authorProfiles = tab.AuthorProfiles,
             translations   = tab.Translations,
+            translationsHtml = TranslationsHtmlFor(tab, tab.Translations.Keys),
             translatedShown = tab.TranslatedShown,
             translatingPosts = tab.TranslatingPosts,
             filter = new
@@ -349,7 +383,9 @@ public static partial class WebView2Helper
     private static void OnTranslationUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.TranslationUpdateMessage m) return;
-        var json = JsonSerializer.Serialize(new { type = "updateTranslations", translations = m.Translations, show = m.Show, hide = m.Hide,
+        var json = JsonSerializer.Serialize(new { type = "updateTranslations", translations = m.Translations,
+                                                  translationsHtml = TranslationsHtmlFor(wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel, m.Translations.Keys),
+                                                  show = m.Show, hide = m.Hide,
                                                   loading = m.Loading, loaded = m.Loaded, removed = m.Removed }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
