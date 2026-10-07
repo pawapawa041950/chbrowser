@@ -39,29 +39,40 @@ public static class MarkdownBodyRenderer
 
     private static readonly ConditionalWeakTable<PostExtra, string> Cache = new();
 
-    /// <summary>レスの Markdown の HTML (Markdown が無ければ null)。同じレスは 2 回目から覚えた結果を返す。</summary>
+    /// <summary>レスの Markdown の HTML (Markdown が無い / 整形できなければ null = 今までどおりの表示)。同じレスは 2 回目から覚えた結果を返す。</summary>
     public static string? HtmlFor(Post post, MarkdownBodySpec spec)
     {
         if (post.Ext is not { Markdown: { Length: > 0 } md } ext) return null;
-        if (Cache.TryGetValue(ext, out var cached)) return cached;
+        if (Cache.TryGetValue(ext, out var cached)) return cached.Length > 0 ? cached : null;
         var html = Render(md, spec);
-        Cache.AddOrUpdate(ext, html);
+        Cache.AddOrUpdate(ext, html ?? "");   // 整形できなかったことも覚える (毎回やり直さない)
         return html;
     }
 
     private static readonly ConditionalWeakTable<string, string> TextCache = new();
 
     /// <summary><see cref="Render"/> の、同じ文字列 (インスタンス) の結果を覚える版 (訳した Markdown を送り直すたびに描き直さない)。</summary>
-    public static string RenderCached(string markdown, MarkdownBodySpec spec)
+    public static string? RenderCached(string markdown, MarkdownBodySpec spec)
     {
-        if (TextCache.TryGetValue(markdown, out var cached)) return cached;
+        if (TextCache.TryGetValue(markdown, out var cached)) return cached.Length > 0 ? cached : null;
         var html = Render(markdown, spec);
-        TextCache.AddOrUpdate(markdown, html);
+        TextCache.AddOrUpdate(markdown, html ?? "");
         return html;
     }
 
-    /// <summary>Markdown → スレ表示に出す HTML。</summary>
-    public static string Render(string markdown, MarkdownBodySpec spec)
+    /// <summary>Markdown → スレ表示に出す HTML。整形できなければ null (呼び出し側は今までどおりの本文を出す)。
+    /// Markdig は入れ子が深すぎる入力 (巨大な表など) で例外を投げるので、ここで止めて表示を壊さない。</summary>
+    public static string? Render(string markdown, MarkdownBodySpec spec)
+    {
+        try { return RenderCore(markdown, spec); }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[markdown] 整形できないため本文のまま表示: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string RenderCore(string markdown, MarkdownBodySpec spec)
     {
         var src = markdown.Replace("\r\n", "\n");
         if (spec.Spoilers) src = SpoilerRe.Replace(src, m => SpoilerOpen + m.Groups["t"].Value + SpoilerClose);

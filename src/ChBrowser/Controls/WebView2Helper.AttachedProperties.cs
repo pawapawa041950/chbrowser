@@ -282,8 +282,9 @@ public static partial class WebView2Helper
         if (ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host).MarkdownBody is not { } spec) return null;
         System.Collections.Generic.Dictionary<long, string>? d = null;
         foreach (var n in numbers)
-            if (tab.TranslationsMarkdown.Contains(n) && tab.Translations.TryGetValue(n, out var md))
-                (d ??= new())[n] = ChBrowser.Services.Render.MarkdownBodyRenderer.RenderCached(md, spec);
+            if (tab.TranslationsMarkdown.Contains(n) && tab.Translations.TryGetValue(n, out var md)
+                && ChBrowser.Services.Render.MarkdownBodyRenderer.RenderCached(md, spec) is { } html)
+                (d ??= new())[n] = html;   // 整形できない訳文は送らない (スレ表示は訳文をそのまま出す)
         return d;
     }
 
