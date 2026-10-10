@@ -52,6 +52,11 @@ public sealed record LlmChatResult(
 /// タイムアウトは <see cref="HttpClient.Timeout"/> ではなくメソッドごとの <see cref="CancellationTokenSource"/>
 /// で制御する (= ストリーミングは応答全体が長くなり得るため、HttpClient.Timeout だと長文生成が途中で切れる)。
 ///
+/// <para><b>接続先の違いへの対応</b>: OpenAI / Claude (OpenAI 互換の窓口) / LiteLLM / vLLM / llama.cpp / Ollama 等、OpenAI 互換の
+/// Chat Completions を話す接続先なら同じコードで動く。接続先ごとに受け付ける項目が違う (OpenAI の新しいモデルは <c>max_tokens</c> を拒否する、
+/// 厳格なサーバは知らない項目を拒否する等) ことには、接続先ごとの固有コードではなく、拒否されたときのエラーから形を直して
+/// 送り直し、接続先ごとに覚えることで対応する (<see cref="LlmRequestShape"/>、<see cref="SendAdaptiveAsync"/>)。</para>
+///
 /// <para><b>Function calling (= Agent モード)</b>: <see cref="ChatStreamAsync"/> に <c>tools</c> を渡すと、
 /// LLM はテキストの代わりにツール呼び出しを返してくる場合がある。返ってきた <see cref="LlmChatResult.ToolCalls"/>
 /// を呼び出し側でローカル実行し、結果を <c>role:"tool"</c> メッセージとして履歴に追加、もう一度
@@ -94,28 +99,26 @@ public sealed class LlmClient : IDisposable
         if (endpoint is null)
             return new LlmTestResult(false, $"API URL の形式が不正です: {settings.ApiUrl}");
 
-        var payload = new
+        var shape = LlmRequestShapes.For(endpoint, settings.Model);
+        Dictionary<string, object?> Build(LlmRequestShape s)
         {
-            model      = settings.Model.Trim(),
-            messages   = new[] { new { role = "user", content = "ping" } },
-            max_tokens = 1,
-        };
-        var json = JsonSerializer.Serialize(payload);
+            var p = new Dictionary<string, object?>
+            {
+                ["model"]    = settings.Model.Trim(),
+                ["messages"] = new[] { new { role = "user", content = "ping" } },
+            };
+            if (s.TokenLimitKey is { } k) p[k] = 16;   // 推論モデルでも拒否されない程度に小さく
+            return p;
+        }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TestTimeout);
         try
         {
-            using var req = BuildRequest(endpoint, json, settings.ApiKey);
-            using var resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
-            var body = await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
-
-            if (resp.IsSuccessStatusCode)
-                return new LlmTestResult(true, $"接続成功 (HTTP {(int)resp.StatusCode})");
-
-            // エラー時は OpenAI 互換のエラー JSON から message を拾えれば優先表示。
-            var detail = ExtractErrorMessage(body) ?? Truncate(body, 200);
-            return new LlmTestResult(false, $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {detail}");
+            var (resp, error, adapted) = await SendAdaptiveAsync(shape, Build, settings.ApiKey, HttpCompletionOption.ResponseContentRead, cts.Token).ConfigureAwait(false);
+            if (resp is null) return new LlmTestResult(false, error ?? "接続に失敗しました");
+            using (resp)
+                return new LlmTestResult(true, $"接続成功 (HTTP {(int)resp.StatusCode})" + (adapted.Count > 0 ? " — 接続先に合わせて調整: " + string.Join(" / ", adapted) : ""));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -162,50 +165,44 @@ public sealed class LlmClient : IDisposable
         // 各メッセージを個別に object へ落としてから配列にする。
         var msgObjs = messages.Select(SerializeMessage).ToArray();
 
-        // max_tokens を明示送信する (= サーバの default 値が低くて think 中に切れるのを防ぐ)。
+        // 出力上限を明示送信する (= サーバの default 値が低くて think 中に切れるのを防ぐ)。
         // Context Size の 1/4 を上限とし [2048, 16384] にクランプ。これで多くのリーズニングモデルが
         // think + 本文を出し切れる。下記の値より大きく欲しい場合は ContextSize を増やせばよい。
+        // 項目名 (max_tokens / max_completion_tokens) は接続先に合わせる (LlmRequestShape)。
         var maxTokens = ComputeMaxTokens(settings.ContextSize);
 
         // tools が指定されていれば payload に tools を追加。空なら通常モード。
         // stream_options.include_usage: 対応サーバ (OpenAI / llama.cpp 等) は最終チャンクで usage を返す
-        // → 出力トークン数を正確に取れる (= token/s・総トークン表示用)。非対応サーバは無視するだけ。
-        // payload は Dictionary で組む (= 呼び出し側が extraBody で任意フィールドを足せるように)。
-        var payload = new Dictionary<string, object?>
+        // → 出力トークン数を正確に取れる (= token/s・総トークン表示用)。拒否するサーバには送らなくなる。
+        // extraBody: リーズニング無効化のヒント等を呼び出し側 (翻訳・NG 判定) が注入する。llama.cpp / vLLM は知らない項目を無視し、
+        // 厳格なサーバ (OpenAI 等) が拒否した項目は以後送らない (LlmRequestShape)。
+        var shape = LlmRequestShapes.For(endpoint, settings.Model);
+        Dictionary<string, object?> Build(LlmRequestShape s)
         {
-            ["model"]          = settings.Model.Trim(),
-            ["messages"]       = msgObjs,
-            ["stream"]         = true,
-            ["stream_options"] = new { include_usage = true },
-            ["max_tokens"]     = maxTokens,
-        };
-        if (tools is { Count: > 0 })
-            payload["tools"] = tools.ToArray();
-        // extraBody: リーズニング無効化フラグ等を呼び出し側 (NG 判定) が注入する。
-        // 同名キーは上書き。OpenAI 互換サーバ (llama.cpp / vLLM) は未知フィールドを基本的に無視する。
-        if (extraBody is not null)
-            foreach (var kv in extraBody) payload[kv.Key] = kv.Value;
-        var json = JsonSerializer.Serialize(payload);
+            var p = new Dictionary<string, object?>
+            {
+                ["model"]    = settings.Model.Trim(),
+                ["messages"] = msgObjs,
+                ["stream"]   = true,
+            };
+            if (!s.IsDropped("stream_options")) p["stream_options"] = new { include_usage = true };
+            if (s.TokenLimitKey is { } k) p[k] = maxTokens;
+            if (tools is { Count: > 0 }) p["tools"] = tools.ToArray();
+            if (extraBody is not null)
+                foreach (var kv in extraBody)
+                    if (!s.IsDropped(kv.Key)) p[kv.Key] = kv.Value;
+            return p;
+        }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(ChatTimeout);
         var sw = System.Diagnostics.Stopwatch.StartNew();   // 計測: 生成時間 / 推論時間 (AgentTurnMetrics 用)
         try
         {
-            using var req = BuildRequest(endpoint, json, settings.ApiKey);
             // ResponseHeadersRead: 本文を待たずにヘッダ到着で戻る (= ストリーミング読み出しの前提)。
-            using var resp = await _http
-                .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
-                .ConfigureAwait(true);
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                var body   = await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(true);
-                var detail = ExtractErrorMessage(body) ?? Truncate(body, 300);
-                return new LlmChatResult(
-                    false, "", Array.Empty<LlmToolCall>(),
-                    $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {detail}");
-            }
+            var (sent, error, _) = await SendAdaptiveAsync(shape, Build, settings.ApiKey, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(true);
+            if (sent is null) return new LlmChatResult(false, "", Array.Empty<LlmToolCall>(), error);
+            using var resp = sent;
 
             using var stream = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(true);
             using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -483,12 +480,16 @@ public sealed class LlmClient : IDisposable
                 contentDelta = content.GetString();
             }
 
-            // DeepSeek-R1 / OpenRouter の reasoning モデルが流す思考過程フィールド。
+            // 推論モデルが流す思考過程フィールド。名前が接続先で違う: reasoning_content (DeepSeek / llama.cpp / vLLM 等) /
+            // reasoning (OpenRouter / Ollama / 新しい vLLM 等)。どちらでも拾う。
             // 同じ chunk で content と一緒に来ることはほぼ無いが、来ても問題ないように両方拾う。
-            if (delta.TryGetProperty("reasoning_content", out var reasoning) &&
-                reasoning.ValueKind == JsonValueKind.String)
+            foreach (var key in ReasoningDeltaKeys)
             {
-                reasoningDelta = reasoning.GetString();
+                if (delta.TryGetProperty(key, out var reasoning) && reasoning.ValueKind == JsonValueKind.String)
+                {
+                    reasoningDelta = reasoning.GetString();
+                    break;
+                }
             }
 
             if (delta.TryGetProperty("tool_calls", out var tcs) &&
@@ -520,6 +521,51 @@ public sealed class LlmClient : IDisposable
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>思考過程の delta の項目名 (接続先によって違う。先にあるものを優先)。</summary>
+    private static readonly string[] ReasoningDeltaKeys = { "reasoning_content", "reasoning" };
+
+    /// <summary>要求を送る。接続先に拒否されたら、エラーから形を直せるか (<see cref="LlmRequestShape.TryAdapt"/>) を見て、直せれば送り直す。
+    /// まだ受け付けられると分かっていない項目を含む要求は、接続先ごとに 1 本ずつ送る (並行の要求が同じエラーで一斉に失敗しないように)。
+    /// 戻り値: 成功した応答 (呼び出し側が破棄する) か、失敗の理由。adapted は今回直した内容 (接続テストの表示用)。</summary>
+    private async Task<(HttpResponseMessage? Response, string? Error, List<string> Adapted)> SendAdaptiveAsync(
+        LlmRequestShape shape, Func<LlmRequestShape, Dictionary<string, object?>> build, string apiKey,
+        HttpCompletionOption completion, CancellationToken ct)
+    {
+        const int MaxAttempts = 12;   // 拒否される項目が 1 つずつ報告される接続先でも、推論オフのヒント等を一通り外せる回数
+        var adapted = new List<string>();
+        var probing = !shape.AllKnownGood(build(shape).Keys);
+        if (probing) await shape.ProbeLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                var payload = build(shape);
+                using var req = BuildRequest(shape.Endpoint, JsonSerializer.Serialize(payload), apiKey);
+                var resp = await _http.SendAsync(req, completion, ct).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode)
+                {
+                    shape.MarkGood(payload.Keys);
+                    return (resp, null, adapted);
+                }
+                string body;
+                using (resp) body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var status = (int)resp.StatusCode;
+                var change = attempt < MaxAttempts ? shape.TryAdapt(status, body, payload.Keys) : null;
+                if (change is null)
+                {
+                    var detail = ExtractErrorMessage(body) ?? Truncate(body, 300);
+                    return (null, $"HTTP {status} {resp.ReasonPhrase}: {detail}", adapted);
+                }
+                adapted.Add(change);
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[LlmClient] 接続先に合わせて要求を調整: {change} ({shape.Endpoint})");
+            }
+        }
+        finally
+        {
+            if (probing) shape.ProbeLock.Release();
         }
     }
 
@@ -582,22 +628,34 @@ public sealed class LlmClient : IDisposable
         return s + "/chat/completions";
     }
 
-    /// <summary>OpenAI 互換のエラー JSON ( { "error": { "message": "..." } } または { "error": "..." } )
-    /// から message 文字列を取り出す。JSON でない / 形が違う場合は null。</summary>
+    /// <summary>エラー JSON から利用者に見せる文を取り出す。接続先によって形が違うので順に探す:
+    /// <c>{ "error": { "message": "..." } }</c> (OpenAI / Claude / LiteLLM 等) / <c>{ "error": "..." }</c> (llama.cpp 等) /
+    /// <c>{ "detail": "..." | [{ "msg": "..." }] }</c> (vLLM 等の FastAPI 系) / <c>{ "message": "..." }</c>。JSON でない / 見つからなければ null。</summary>
     private static string? ExtractErrorMessage(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return null;
         try
         {
             using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                doc.RootElement.TryGetProperty("error", out var err))
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (root.TryGetProperty("error", out var err))
             {
-                if (err.ValueKind == JsonValueKind.Object && err.TryGetProperty("message", out var msg))
+                if (err.ValueKind == JsonValueKind.Object && err.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.String)
                     return msg.GetString();
                 if (err.ValueKind == JsonValueKind.String)
                     return err.GetString();
             }
+            if (root.TryGetProperty("detail", out var detail))
+            {
+                if (detail.ValueKind == JsonValueKind.String) return detail.GetString();
+                if (detail.ValueKind == JsonValueKind.Array)
+                    return string.Join(" / ", detail.EnumerateArray()
+                        .Select(d => d.ValueKind == JsonValueKind.Object && d.TryGetProperty("msg", out var m) ? m.GetString() : d.ToString())
+                        .Where(s => !string.IsNullOrEmpty(s)));
+            }
+            if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                return message.GetString();
         }
         catch
         {
