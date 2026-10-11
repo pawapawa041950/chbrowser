@@ -2361,10 +2361,16 @@
      *  どちらのモードでも開いた後の挙動は共通 (= 同じ popups[] チェーンに level で積まれ、
      *  マウスがポップアップ外へ出たら mouseleave / mousemove セーフティネットで閉じる)。
      *  click モードでも「外側クリックで閉じる」は持たない (= hover ポップアップと閉じ方を統一)。 */
+    /** ワッチョイ / ID リンクのうち、ハンドラを取り付け済みの要素 (attachMetaHoverHandlers)。 */
+    const metaHoverAttached = new WeakSet();
+
     function attachMetaHoverHandlers(scopeRoot, level) {
-        // 取り付け済みのリンクには付けない (以前は呼ばれるたびに全リンクへ付け直していて、バッチごとに同じハンドラが積み重なっていた)
-        scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]:not([data-meta-hover])').forEach(function (el) {
-            el.dataset.metaHover = '1';
+        // 取り付け済みのリンクには付けない (以前は呼ばれるたびに全リンクへ付け直していて、バッチごとに同じハンドラが積み重なっていた)。
+        // 取り付け済みかは要素そのもので覚える (WeakSet)。DOM の属性で覚えると、ポップアップ用に複製 (cloneNode) した要素にも
+        // 属性だけが写り、ハンドラの無い複製が「取り付け済み」と見なされてポップアップ内のリンクが反応しなくなるため。
+        scopeRoot.querySelectorAll('.watchoi-link[data-watchoi-list]').forEach(function (el) {
+            if (metaHoverAttached.has(el)) return;
+            metaHoverAttached.add(el);
             el.addEventListener('mouseenter', function () {
                 if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
@@ -2382,8 +2388,9 @@
                 openMetaListPopup(el, el.dataset.watchoiList, level);
             });
         });
-        scopeRoot.querySelectorAll('.id-link[data-id-list]:not([data-meta-hover])').forEach(function (el) {
-            el.dataset.metaHover = '1';
+        scopeRoot.querySelectorAll('.id-link[data-id-list]').forEach(function (el) {
+            if (metaHoverAttached.has(el)) return;
+            metaHoverAttached.add(el);
             el.addEventListener('mouseenter', function () {
                 if (META_POPUP_CLICK_ONLY) return;
                 cancelCloseAt(level);
