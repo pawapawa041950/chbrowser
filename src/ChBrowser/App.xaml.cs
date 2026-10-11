@@ -134,6 +134,8 @@ public partial class App : Application
         // ---- Phase 11: 設定読み込み (HiDPI / Timeout は次回起動時反映なのでここで取り込む) ----
         var paths        = new DataPaths();
         _paths           = paths;
+        // 同じ名前の板が別々のサーバにある、と見つけた記録 (板の保存場所・同じ板かの判定に使う)
+        ChBrowser.Services.Bbs.BoardIdentity.Initialize(paths.BoardDuplicatesPath);
         _configStorage   = new ConfigStorage(paths);
         _currentConfig   = _configStorage.Load();
 

@@ -14,12 +14,10 @@ public sealed partial class MainViewModel
     {
         try
         {
-            var rootIn = DataPaths.ExtractRootDomain(host);
             foreach (var tab in AllThreadTabs)
             {
-                if (string.Equals(DataPaths.ExtractRootDomain(tab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(tab.Board.DirectoryName, dir, StringComparison.Ordinal) &&
-                    string.Equals(tab.ThreadKey,           key, StringComparison.Ordinal))
+                if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(tab.Board.Host, tab.Board.DirectoryName, host, dir) &&
+                    string.Equals(tab.ThreadKey, key, StringComparison.Ordinal))
                 {
                     return ExtractPreview(tab.Posts, requestedPostNo);
                 }

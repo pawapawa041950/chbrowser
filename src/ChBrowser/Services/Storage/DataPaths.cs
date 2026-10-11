@@ -124,12 +124,17 @@ public sealed class DataPaths
     /// ユーザがメモ帳等で同時編集できるよう、書込時のみ open → 即 close する運用。</summary>
     public string KakikomiTxtPath => Path.Combine(Root, "kakikomi.txt");
 
-    /// <summary>板の保存ディレクトリ。host から root domain を判定。</summary>
+    /// <summary>板の保存ディレクトリ (<c>data/&lt;root domain&gt;/&lt;保存名&gt;</c>)。保存名はふつう板名で、サーバは見ない (= 板が移転しても同じ場所)。
+    /// 同じ名前の板が別々のサーバにある場合だけ、主でない方を <c>板名@サーバ</c> に分ける (<see cref="ChBrowser.Services.Bbs.BoardIdentity"/>)。</summary>
     public string BoardDir(string host, string directoryName)
-    {
-        var domain = ExtractRootDomain(host);
-        return EnsureDir(Path.Combine(Root, domain, directoryName));
-    }
+        => EnsureDir(BoardDirPath(host, directoryName));
+
+    /// <summary><see cref="BoardDir"/> と同じ場所 (ディレクトリを作らない。削除・存在確認用)。</summary>
+    public string BoardDirPath(string host, string directoryName)
+        => Path.Combine(Root, ExtractRootDomain(host), ChBrowser.Services.Bbs.BoardIdentity.StorageName(host, directoryName));
+
+    /// <summary>同じ名前の板が別々のサーバにある、と見つけた記録 (<see cref="ChBrowser.Services.Bbs.BoardIdentity"/>)。</summary>
+    public string BoardDuplicatesPath => Path.Combine(AppDir, "board_duplicates.json");
 
     public string SubjectTxtPath(string host, string directoryName)
         => Path.Combine(BoardDir(host, directoryName), "_subject.txt");

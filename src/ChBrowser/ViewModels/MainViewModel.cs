@@ -520,12 +520,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// <summary>板 URL を開く: 既存 ThreadListTab があればアクティブ化、無ければ新規。</summary>
     public async Task OpenBoardByUrlAsync(string host, string dir)
     {
-        var rootIn = DataPaths.ExtractRootDomain(host);
         foreach (var tab in AllThreadListTabs)
         {
             if (tab.Board is not { } b) continue;
-            if (string.Equals(DataPaths.ExtractRootDomain(b.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(b.DirectoryName, dir, StringComparison.Ordinal))
+            if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(b.Host, b.DirectoryName, host, dir))
             {
                 ActivateThreadListTab(tab); // 所属ペインをアクティブにして選択
                 return;
@@ -567,12 +565,10 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
     /// (= 5ch.io URL に「/&lt;dir&gt;/&lt;key&gt;/&lt;N&gt;」のレス番号が含まれているクリック経路用)。</summary>
     public async Task OpenThreadByUrlAsync(string host, string dir, string key, long scrollToPostNumber = 0, string? postId = null)
     {
-        var rootIn = DataPaths.ExtractRootDomain(host);
         foreach (var tab in AllThreadTabs)
         {
-            if (string.Equals(DataPaths.ExtractRootDomain(tab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(tab.Board.DirectoryName, dir, StringComparison.Ordinal) &&
-                string.Equals(tab.ThreadKey,           key, StringComparison.Ordinal))
+            if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(tab.Board.Host, tab.Board.DirectoryName, host, dir) &&
+                string.Equals(tab.ThreadKey, key, StringComparison.Ordinal))
             {
                 MaybeActivateThreadTab(tab, activate: true); // 所属ペインをアクティブにして選択
                 if (scrollToPostNumber <= 0) scrollToPostNumber = ResolvePostIdToNumber(tab.Board, key, postId);
@@ -595,9 +591,8 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             // SelectedThreadTab が今作ったタブを指しているはずなので、それに対して push する。
             var newTab = SelectedThreadTab;
             if (newTab is not null
-                && string.Equals(DataPaths.ExtractRootDomain(newTab.Board.Host), rootIn, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(newTab.Board.DirectoryName, dir, StringComparison.Ordinal)
-                && string.Equals(newTab.ThreadKey,           key, StringComparison.Ordinal))
+                && ChBrowser.Services.Bbs.BoardIdentity.SameBoard(newTab.Board.Host, newTab.Board.DirectoryName, host, dir)
+                && string.Equals(newTab.ThreadKey, key, StringComparison.Ordinal))
             {
                 newTab.PendingScrollToPost = new ScrollToPostRequest(scrollToPostNumber);
             }

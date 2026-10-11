@@ -197,7 +197,6 @@ public sealed class NgService
     {
         var now    = DateTimeOffset.UtcNow;
         var result = new List<NgRule>();
-        var root   = DataPaths.ExtractRootDomain(host);
         foreach (var r in _all.Rules)
         {
             if (!IsActive(r, now)) continue;
@@ -220,8 +219,8 @@ public sealed class NgService
                 continue;
             }
 
-            // 両方設定 → root domain 一致をチェック
-            if (string.Equals(DataPaths.ExtractRootDomain(r.BoardHost), root, StringComparison.OrdinalIgnoreCase))
+            // 両方設定 → 同じ板か (ドメイン + 板名。名前が重複している板はサーバも含めて比べる)
+            if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(r.BoardHost, r.BoardDirectory, host, directoryName))
             {
                 result.Add(r);
             }

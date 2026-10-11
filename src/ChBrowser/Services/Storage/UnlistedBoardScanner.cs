@@ -42,11 +42,16 @@ public sealed class UnlistedBoardScanner
     /// URL のホストは <see cref="IBbsProvider.DefaultHost"/> を使う。ただし保存ルート自体がその提供者の
     /// 有効なホストなら (5ch.io / bbspink.com / machi.to) ルートをそのまま使い、<see cref="DataPaths.BoardDir"/> が
     /// 同じ保存場所へ戻れるようにする (= bbspink.com の板が 5ch.io 側のディレクトリを見に行かないように)。
-    /// 5ch.io の板は従来通り host = "5ch.io"、したらばは "jbbs.shitaraba.net" になる。</summary>
-    public static Board BuildFallbackBoard(string rootDomain, string directoryName, string boardName)
+    /// 5ch.io の板は従来通り host = "5ch.io"、したらばは "jbbs.shitaraba.net" になる。
+    /// <para><paramref name="storageName"/> は保存フォルダの名前。名前が重複している板の「板名@サーバ」(<c>b@img</c>) なら、
+    /// そのサーバのホスト (<c>img.2chan.net</c>) と板名 (<c>b</c>) に戻す (<see cref="BoardIdentity"/>)。</para></summary>
+    public static Board BuildFallbackBoard(string rootDomain, string storageName, string boardName)
     {
         var provider = BbsRegistry.ResolveByStorageRoot(rootDomain);
-        var host     = provider.OwnsHost(rootDomain) ? rootDomain : provider.DefaultHost;
+        var (serverHost, directoryName) = BoardIdentity.ParseStorageName(rootDomain, storageName);
+        var host = serverHost is not null && provider.OwnsHost(serverHost) ? serverHost
+                 : provider.OwnsHost(rootDomain) ? rootDomain : provider.DefaultHost;
+        if (string.Equals(boardName, storageName, StringComparison.Ordinal)) boardName = directoryName + (serverHost is null ? "" : $" ({serverHost})");
         return new Board(directoryName, boardName, provider.BoardUrl(host, directoryName), "", 0);
     }
 

@@ -49,7 +49,24 @@ public sealed class BbsmenuClient
 
         // 取得そのままバイト列で保存 (形式変換しない)
         await File.WriteAllBytesAsync(CachePath(provider), bytes, ct).ConfigureAwait(false);
-        return Parse(provider, bytes);
+
+        // 追加の板一覧 (主の板一覧に無い板を補う)。取れなければ前回保存分を使い、それも無ければ主の板一覧だけで続ける
+        for (var i = 0; i < provider.ExtraBoardListUrls.Count; i++)
+        {
+            try
+            {
+                using var extraResp = await _client.Http.GetAsync(provider.ExtraBoardListUrls[i], ct).ConfigureAwait(false);
+                extraResp.EnsureSuccessStatusCode();
+                var extraBytes = await extraResp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                await File.WriteAllBytesAsync(ExtraCachePath(provider, i), extraBytes, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException && !ct.IsCancellationRequested)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[BbsmenuClient] 追加の板一覧を取得できません ({provider.ExtraBoardListUrls[i]}): {ex.Message} — 前回の保存分を使います");
+            }
+        }
+        return await ParseWithExtrasAsync(provider, bytes, ct).ConfigureAwait(false);
     }
 
     /// <summary>提供者の板一覧をローカル保存分からパースする。未取得なら空配列。</summary>
@@ -59,14 +76,30 @@ public sealed class BbsmenuClient
         var path = CachePath(provider);
         if (!File.Exists(path)) return Array.Empty<BoardCategory>();
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        return Parse(provider, bytes);
+        return await ParseWithExtrasAsync(provider, bytes, ct).ConfigureAwait(false);
     }
 
     private string CachePath(ChBrowser.Services.Bbs.IBbsProvider provider)
         => _paths.BoardListCachePath(provider, provider.BoardListCacheExtension);
 
-    private static IReadOnlyList<BoardCategory> Parse(ChBrowser.Services.Bbs.IBbsProvider provider, byte[] bytes)
-        => provider.ParseBoardList(bytes);
+    /// <summary>追加の板一覧 (<see cref="ChBrowser.Services.Bbs.IBbsProvider.ExtraBoardListUrls"/>) の保存場所 (<c>boardlist.extra1.html</c> 等)。</summary>
+    private string ExtraCachePath(ChBrowser.Services.Bbs.IBbsProvider provider, int index)
+        => _paths.BoardListCachePath(provider, $"extra{index + 1}.{provider.BoardListCacheExtension}");
+
+    /// <summary>主の板一覧をパースし、保存済みの追加の板一覧を足す。最後に、同じ名前の板が別々のサーバにあるものを覚える
+    /// (<see cref="ChBrowser.Services.Bbs.BoardIdentity"/>: 主でない方は保存場所を分ける)。</summary>
+    private async Task<IReadOnlyList<BoardCategory>> ParseWithExtrasAsync(ChBrowser.Services.Bbs.IBbsProvider provider, byte[] bytes, CancellationToken ct)
+    {
+        var categories = provider.ParseBoardList(bytes);
+        for (var i = 0; i < provider.ExtraBoardListUrls.Count; i++)
+        {
+            var path = ExtraCachePath(provider, i);
+            if (!File.Exists(path)) continue;
+            categories = provider.MergeExtraBoardList(categories, i, await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false));
+        }
+        ChBrowser.Services.Bbs.BoardIdentity.RegisterBoardList(categories.SelectMany(c => c.Boards));
+        return categories;
+    }
 
     /// <summary>旧 bbsmenu.html 形式 (まちBBS): <c>&lt;B&gt;カテゴリ&lt;/B&gt;</c> の後に
     /// <c>&lt;A HREF=URL&gt;板名&lt;/A&gt;</c> が並ぶ。タグの大文字小文字・href の引用符の有無は問わない。

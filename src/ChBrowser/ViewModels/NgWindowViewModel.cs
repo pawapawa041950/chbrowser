@@ -99,13 +99,11 @@ public sealed partial class NgWindowViewModel : ObservableObject
 
         if (!string.IsNullOrEmpty(host))
         {
-            var ruleRoot = DataPaths.ExtractRootDomain(host);
             foreach (var s in AvailableScopes)
             {
                 if (s == GlobalScope) continue;
                 if (string.IsNullOrEmpty(s.Host)) continue; // transient (host 空) は除外
-                if (DataPaths.ExtractRootDomain(s.Host) == ruleRoot &&
-                    string.Equals(s.DirectoryName, dir, StringComparison.Ordinal))
+                if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(s.Host, s.DirectoryName, host, dir))
                     return s;
             }
         }

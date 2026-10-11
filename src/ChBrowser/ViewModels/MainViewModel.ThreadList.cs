@@ -460,8 +460,7 @@ public sealed partial class MainViewModel
     /// (= 存在しない板を選んでも空フォルダを作らない)。</summary>
     public void DeleteBoardLogs(string host, string directoryName, string boardName)
     {
-        var rootIn   = DataPaths.ExtractRootDomain(host);
-        var boardDir = System.IO.Path.Combine(_paths.Root, rootIn, directoryName);
+        var boardDir = _paths.BoardDirPath(host, directoryName);
         var datCount = System.IO.Directory.Exists(boardDir)
             ? System.IO.Directory.EnumerateFiles(boardDir, "*.dat").Count()
             : 0;
@@ -472,13 +471,11 @@ public sealed partial class MainViewModel
             message, "板を削除", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
         if (answer != System.Windows.MessageBoxResult.Yes) return;
 
-        static bool SameBoard(Board b, string rootIn, string dir)
-            => string.Equals(DataPaths.ExtractRootDomain(b.Host), rootIn, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(b.DirectoryName, dir, StringComparison.Ordinal);
+        bool SameBoard(Board b) => ChBrowser.Services.Bbs.BoardIdentity.SameBoard(b.Host, b.DirectoryName, host, directoryName);
 
-        foreach (var threadTab in AllThreadTabs.Where(t => SameBoard(t.Board, rootIn, directoryName)).ToList())
+        foreach (var threadTab in AllThreadTabs.Where(t => SameBoard(t.Board)).ToList())
             RemoveThreadTab(threadTab);
-        foreach (var listTab in AllThreadListTabs.Where(t => t.Board is { } b && SameBoard(b, rootIn, directoryName)).ToList())
+        foreach (var listTab in AllThreadListTabs.Where(t => t.Board is { } b && SameBoard(b)).ToList())
             RemoveThreadListTab(listTab);
 
         try
@@ -532,11 +529,12 @@ public sealed partial class MainViewModel
                 }
             }
 
-            foreach (var (dirName, datFiles) in boardDirs)
+            foreach (var (storageName, datFiles) in boardDirs)
             {
-
-                var board     = FindBoardByDirectory(rootDomain, dirName)
-                              ?? UnlistedBoardScanner.BuildFallbackBoard(rootDomain, dirName, dirName);
+                // フォルダ名は保存名 (ふつうは板名。名前が重複している板は「板名@サーバ」)
+                var board     = FindBoardByDirectory(rootDomain, storageName)
+                              ?? UnlistedBoardScanner.BuildFallbackBoard(rootDomain, storageName, storageName);
+                var dirName   = board.DirectoryName;
                 var subjList  = LoadSubjectFromDiskSync(board);
                 var subjByKey = subjList.ToDictionary(t => t.Key);
                 var states    = BuildLogStates(board, subjList);
@@ -573,13 +571,13 @@ public sealed partial class MainViewModel
         return items;
     }
 
-    /// <summary>BoardCategories から (rootDomain, directoryName) で板を検索する (host のサブドメイン違いを吸収)。</summary>
-    private Board? FindBoardByDirectory(string rootDomain, string directoryName)
+    /// <summary>BoardCategories から、保存フォルダ (<paramref name="rootDomain"/> + 保存名) の板を検索する (host のサブドメイン違いを吸収)。
+    /// 保存名はふつう板名で、名前が重複している板は「板名@サーバ」(<see cref="ChBrowser.Services.Bbs.BoardIdentity"/>)。</summary>
+    private Board? FindBoardByDirectory(string rootDomain, string storageName)
     {
         foreach (var cat in BoardCategories)
             foreach (var bvm in cat.Boards)
-                if (bvm.Board.DirectoryName == directoryName
-                    && DataPaths.ExtractRootDomain(bvm.Board.Host) == rootDomain)
+                if (ChBrowser.Services.Bbs.BoardIdentity.HasStorageName(bvm.Board, rootDomain, storageName))
                     return bvm.Board;
         return null;
     }

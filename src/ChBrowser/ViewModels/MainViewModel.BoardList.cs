@@ -233,14 +233,12 @@ public sealed partial class MainViewModel
                     return bvm.Board;
                 }
 
-        // Pass 2: root domain + dir 一致 (= subdomain 違いで bbsmenu に登録があるケース)
-        var rootIn = ChBrowser.Services.Storage.DataPaths.ExtractRootDomain(host);
+        // Pass 2: 同じ板 (= ドメイン + 板名。サーバ違い = 移転 / 別アドレスでも bbsmenu の板に寄せる)。
+        // 名前が重複している板 (ふたばの二次元裏 b 等) はサーバも含めて比べるので、別の板に寄せることは無い (BoardIdentity)
         foreach (var cat in BoardCategories)
             foreach (var bvm in cat.Boards)
             {
-                var rootB = ChBrowser.Services.Storage.DataPaths.ExtractRootDomain(bvm.Board.Host);
-                if (string.Equals(rootB, rootIn, StringComparison.OrdinalIgnoreCase)
-                    && bvm.Board.DirectoryName == directoryName)
+                if (ChBrowser.Services.Bbs.BoardIdentity.SameBoard(bvm.Board.Host, bvm.Board.DirectoryName, host, directoryName))
                 {
                     ChBrowser.Services.Logging.LogService.Instance.Write(
                         $"[resolveBoard] Pass2 (rootDomain+dir) hit: input host='{host}' → bbsmenu Url='{bvm.Board.Url}' (host='{bvm.Board.Host}')");

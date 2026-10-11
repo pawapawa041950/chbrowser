@@ -18,8 +18,10 @@ namespace ChBrowser.Services.Bbs;
 /// <summary>ふたば☆ちゃんねる (<c>*.2chan.net</c>) (<c>doc/multi-bbs-design.md</c> §8.8)。
 ///
 /// <list type="bullet">
-/// <item><description>板一覧 = <c>www.2chan.net/bbsmenu.html</c> (Shift_JIS)。板ごとにサーバが違う (<c>may</c> / <c>dat</c> / <c>dec</c> …) が、
-///   板名 (dir) はサーバをまたいで重複しないので、保存は <c>data/2chan.net/&lt;板&gt;/</c>。板名 → サーバの対応表を持ち、
+/// <item><description>板一覧 = <c>www.2chan.net/bbsmenu.html</c> (Shift_JIS) に、携帯用メニュー <c>www.2chan.net/i.htm</c> にだけ載っている板
+///   (二次元裏img = <c>img.2chan.net/b</c>、二次元裏dat = <c>dat.2chan.net/b</c>) を足す。板ごとにサーバが違う (<c>may</c> / <c>dat</c> / <c>dec</c> …)。
+///   保存は <c>data/2chan.net/&lt;板&gt;/</c>。ただし二次元裏 <c>b</c> は may / img / dat の 3 つのサーバにある別々の板なので、
+///   may 以外は <c>b@img</c> / <c>b@dat</c> に分ける (<see cref="BoardIdentity"/>)。板名 → サーバの対応表を持ち、
 ///   サーバが分からないとき (板一覧に無い取得済み板等) に引く。</description></item>
 /// <item><description>スレ一覧 = カタログ (<c>futaba.php?mode=cat</c>、Shift_JIS の HTML)。Cookie <c>cxyl</c> で 15×10 = 150 スレ・本文 40 文字にする。
 ///   並び順 (<c>sort=</c>) を選べる。カタログは板の全スレではない (多い板は 150 を超える) ので、一覧に無いログをスレ落ちとはみなさない。</description></item>
@@ -179,6 +181,26 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
     public string? BoardListUrl => MenuUrl;
     public string  BoardListCacheExtension => "html";
 
+    /// <summary>携帯用メニュー。PC 用メニュー (<see cref="MenuUrl"/>) に載っていない板 (二次元裏img / 二次元裏dat) がある。</summary>
+    private const string MobileMenuUrl = "https://www.2chan.net/i.htm";
+    public IReadOnlyList<string> ExtraBoardListUrls { get; } = new[] { MobileMenuUrl };
+
+    /// <summary>二次元裏 <c>b</c> は may / img / dat に別々の板がある。主 (= 保存名が <c>b</c> のまま) は PC 用メニューにある may。</summary>
+    public IReadOnlyDictionary<string, string> KnownDuplicateBoards { get; } = new Dictionary<string, string> { ["b"] = "may" };
+
+    /// <summary>同じ板の別アドレス (2026-10-12 時点で確認): <c>nov/b</c> は img の二次元裏、<c>cgi/b</c> / <c>zip/b</c> / <c>ipv6/b</c> は dat の二次元裏
+    /// (どれも投稿番号が同じ)。名前が重複している <c>b</c> の見分けで、正式なサーバに寄せる。</summary>
+    private static readonly Dictionary<string, string> BoardAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["nov.2chan.net/b"]  = "img.2chan.net",
+        ["cgi.2chan.net/b"]  = "dat.2chan.net",
+        ["zip.2chan.net/b"]  = "dat.2chan.net",
+        ["ipv6.2chan.net/b"] = "dat.2chan.net",
+    };
+
+    public string CanonicalBoardHost(string host, string directoryName)
+        => BoardAliases.TryGetValue(host + "/" + directoryName, out var canonical) ? canonical : host;
+
     /// <summary>ふたばへの要求にカタログの表示設定の Cookie を付ける (他の要求には影響しない)。</summary>
     public void PrepareRequest(HttpRequestMessage request)
     {
@@ -247,6 +269,52 @@ public sealed class FutabaProvider : IBbsProvider, ISnapshotThreadProvider, IBro
             categories.Add(new BoardCategory(group.Key, categories.Count + 1, boards, Id));
         }
         return categories;
+    }
+
+    /// <summary>携帯用メニューの板 (<c>&lt;a href="https://img.2chan.net/v.php?b&amp;guid=on"&gt;二次元裏img&lt;/a&gt;</c>: ホスト = サーバ、<c>?</c> の後 = 板名)。</summary>
+    private static readonly Regex MobileMenuItemRegex = new(
+        @"<a[^>]+href=""https?://(?<srv>[a-z0-9]+)\.2chan\.net/v\.php\?(?<dir>[a-z0-9_]+)&[^""]*""[^>]*>(?<name>[\s\S]*?)</a>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>携帯用メニュー (<see cref="MobileMenuUrl"/>) → PC 用メニューに無い板 (サーバ + 板名の組で比べる) を足す。
+    /// 同じ板名の板が PC 用メニューにあれば、そのカテゴリ (二次元裏が並ぶ所) のその板の直後に、無ければ末尾の「携帯用メニューのみ」に入れる。</summary>
+    public IReadOnlyList<BoardCategory> MergeExtraBoardList(IReadOnlyList<BoardCategory> main, int index, byte[] bytes)
+    {
+        var html = Sjis.GetString(bytes);
+        var have = main.SelectMany(c => c.Boards).Select(b => (b.Host.ToLowerInvariant(), b.DirectoryName.ToLowerInvariant())).ToHashSet();
+        var extra = new List<(string Host, string Dir, string Name)>();
+        foreach (Match m in MobileMenuItemRegex.Matches(html))
+        {
+            var host = m.Groups["srv"].Value.ToLowerInvariant() + "." + RootDomain;
+            var dir  = m.Groups["dir"].Value.ToLowerInvariant();
+            if (!have.Add((host, dir))) continue;
+            var name = WebUtility.HtmlDecode(Regex.Replace(m.Groups["name"].Value, "<[^>]+>", "")).Trim();
+            extra.Add((host, dir, name.Length > 0 ? name : dir));
+            ServerByDir.TryAdd(dir, host);   // 板名が新しいときだけ (b は may のまま)
+        }
+        if (extra.Count == 0) return main;
+
+        var cats = main.Select(c => (Name: c.CategoryName, Order: c.CategoryNumber, Boards: c.Boards.ToList(), c.ProviderId)).ToList();
+        var rest = new List<Board>();
+        foreach (var (host, dir, name) in extra)
+        {
+            var board = new Board(dir, name, BoardUrl(host, dir), "", 0);
+            var target = cats.FindIndex(c => c.Boards.Any(b => string.Equals(b.DirectoryName, dir, StringComparison.OrdinalIgnoreCase)));
+            if (target < 0) { rest.Add(board); continue; }
+            var list = cats[target].Boards;
+            // 同じ板名の最後の板 (先に足した同名の板を含む) の直後へ
+            var at = list.FindLastIndex(b => string.Equals(b.DirectoryName, dir, StringComparison.OrdinalIgnoreCase)) + 1;
+            list.Insert(at, board with { CategoryName = cats[target].Name });
+        }
+        var result = cats.Select(c => new BoardCategory(c.Name, c.Order,
+            c.Boards.Select((b, i) => b with { CategoryName = c.Name, CategoryOrder = i + 1 }).ToList(), c.ProviderId)).ToList();
+        if (rest.Count > 0)
+        {
+            const string RestName = "携帯用メニューのみ";
+            result.Add(new BoardCategory(RestName, result.Count + 1,
+                rest.Select((b, i) => b with { CategoryName = RestName, CategoryOrder = i + 1 }).ToList(), Id));
+        }
+        return result;
     }
 
     // -----------------------------------------------------------------

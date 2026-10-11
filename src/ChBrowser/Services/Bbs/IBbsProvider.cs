@@ -159,6 +159,24 @@ public interface IBbsProvider
     /// <see cref="BoardCategory.ProviderId"/> は <see cref="Id"/>。板一覧を持たない提供者は空配列。</summary>
     IReadOnlyList<BoardCategory> ParseBoardList(byte[] bytes);
 
+    /// <summary>主の板一覧 (<see cref="BoardListUrl"/>) に載っていない板を補う、追加の板一覧の URL (ふたば: 携帯用メニュー)。既定は無し。
+    /// 取得できなくても主の板一覧だけで続ける。</summary>
+    IReadOnlyList<string> ExtraBoardListUrls => Array.Empty<string>();
+
+    /// <summary>追加の板一覧 (<see cref="ExtraBoardListUrls"/> の <paramref name="index"/> 番目) の生バイト列を読み、
+    /// 主の板一覧 <paramref name="main"/> に無い板を足した板一覧を返す。既定はそのまま。</summary>
+    IReadOnlyList<BoardCategory> MergeExtraBoardList(IReadOnlyList<BoardCategory> main, int index, byte[] bytes) => main;
+
+    /// <summary>前もって分かっている「同じ名前の板が別々のサーバにある」板名 → 主のサーバ (<c>may</c> 等)。
+    /// 板一覧を読む前 (アドレスバーから開いた等) でも板を取り違えないための初期値。既定は無し (板一覧から自動で見つける。<see cref="BoardIdentity"/>)。</summary>
+    IReadOnlyDictionary<string, string> KnownDuplicateBoards => EmptyDuplicates;
+
+    /// <summary>同じ板の別アドレスを正式なサーバのホストに寄せる (ふたば: <c>nov.2chan.net/b</c> → <c>img.2chan.net</c>)。既定はそのまま。
+    /// 名前が重複している板の見分け (<see cref="BoardIdentity"/>) に使う。</summary>
+    string CanonicalBoardHost(string host, string directoryName) => host;
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyDuplicates = new Dictionary<string, string>();
+
     /// <summary>true なら 5ch の生 dat (Range 差分・行番号 = レス番号) をそのまま保存する。
     /// false なら取得結果を <see cref="Api.NumberedLogFormat"/> (番号列付きログ) に変換して保存し、
     /// 差分は <see cref="ThreadFetchRangeUrl"/> (番号以降) で取る。</summary>
