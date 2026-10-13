@@ -73,6 +73,17 @@ public sealed class TranslationService
     public Task<string?> TranslatePostAsync(string plain, CancellationToken ct)
         => AiTranslator.TranslateOneAsync(_llm, Settings, plain, DisableReasoning, ct);
 
+    public const string ImagesNotSupportedMessage =
+        "AI翻訳に使う LLM が画像の入力に対応していません (設定 → LLM で、AI翻訳に使うプロファイルの「画像を入力できるモデル」を ON にしてください)";
+
+    /// <summary>画像 (キャッシュのファイルの中身) に書かれた文字を日本語に訳す (画像の説明はさせない。文字が複数の場所にあれば場所も)。
+    /// 同時実行の枠の中で送る。画像を入力できない接続・失敗 (接続エラー等) は <see cref="AiTranslateException"/>。</summary>
+    public Task<ImageTranslation> TranslateImageAsync(byte[] imageBytes, CancellationToken ct)
+    {
+        if (!Settings.SupportsImages) throw new AiTranslateException(ImagesNotSupportedMessage);
+        return WithSlotAsync(() => ImageTranslator.TranslateAsync(_llm, Settings, imageBytes, DisableReasoning, ct), ct);
+    }
+
     /// <summary>Markdown で書かれたレス本文 1 件を、記法を保ったまま日本語に訳す (訳した Markdown。応答が空なら null)。同時実行の枠は呼び出し元が取る。</summary>
     public Task<string?> TranslateMarkdownPostAsync(string markdown, CancellationToken ct)
         => AiTranslator.TranslateMarkdownAsync(_llm, Settings, markdown, DisableReasoning, ct);

@@ -30,6 +30,9 @@ public sealed record LlmChatMessage(string Role, string Content)
     public IReadOnlyList<LlmToolCall>? ToolCalls { get; init; }
     /// <summary>tool ロールのメッセージで、対応する assistant.tool_calls[].id を指す。</summary>
     public string? ToolCallId { get; init; }
+    /// <summary>メッセージに付ける画像 (<c>data:image/jpeg;base64,…</c> の data URL)。画像を入力できるモデルにだけ送る
+    /// (<see cref="LlmSettings.SupportsImages"/>)。OpenAI 互換の <c>content: [{type:"text"}, {type:"image_url"}]</c> の形で送る。</summary>
+    public IReadOnlyList<string>? ImageDataUrls { get; init; }
 }
 
 /// <summary>Chat Completions (ストリーミング) の最終結果。
@@ -597,6 +600,14 @@ public sealed class LlmClient : IDisposable
                 content      = m.Content,
                 tool_call_id = m.ToolCallId ?? "",
             };
+        }
+        if (m.ImageDataUrls is { Count: > 0 } images)
+        {
+            // 画像付き: content を配列にする (OpenAI / Claude の互換窓口 / vLLM / llama.cpp / LiteLLM 共通の形)
+            var parts = new List<object>();
+            if (!string.IsNullOrEmpty(m.Content)) parts.Add(new { type = "text", text = m.Content });
+            foreach (var url in images) parts.Add(new { type = "image_url", image_url = new { url } });
+            return new { role = m.Role, content = parts.ToArray() };
         }
         return new { role = m.Role, content = m.Content };
     }

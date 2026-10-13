@@ -610,6 +610,18 @@
             '.post-vote.pending{opacity:.5}' +
             '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
             '.post-avatar.empty{display:none}' +
+            // 画像の文字の AI 翻訳: 訳のあるサムネイルの印 / 翻訳中の印 / マウスを乗せたときの訳のポップアップ
+            '.image-slot.has-img-tr,.image-slot.img-tr-pending{position:relative}' +
+            // 印は ::before (::after はサムネイルの大きさを変えるつまみに使っている)
+            '.image-slot.has-img-tr::before,.image-slot.img-tr-pending::before{position:absolute;left:2px;top:2px;z-index:21;padding:0 .3em;border-radius:3px;font-size:11px;line-height:1.5;color:#fff;pointer-events:none}' +
+            '.image-slot.has-img-tr::before{content:"訳";background:rgba(30,100,200,.85)}' +
+            '.image-slot.img-tr-pending::before{content:"翻訳中…";background:rgba(120,120,120,.85);animation:imgTrPulse 1s ease-in-out infinite alternate}' +
+            '@keyframes imgTrPulse{from{opacity:.55}to{opacity:1}}' +
+            '#img-tr-popup{position:fixed;z-index:100000;max-height:80vh;overflow:auto;padding:.5em .7em;border:1px solid rgba(127,127,127,.6);border-radius:6px;' +
+            'background:#fffff6;color:#222;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word;pointer-events:none}' +
+            '#img-tr-popup .itr-item+.itr-item{margin-top:.45em;padding-top:.45em;border-top:1px dashed rgba(127,127,127,.4)}' +
+            '#img-tr-popup .itr-where{display:block;font-size:11px;font-weight:bold;color:#3060a0;margin-bottom:.1em}' +
+            '#img-tr-popup .itr-none{color:#777}' +
             // 整形した Markdown 本文 (post-md)。色は文字色からの半透明にしてテーマ (明暗) に合わせる
             '.post-md{white-space:normal}' +   // 本文は改行をそのまま出す (pre-wrap) が、整形した HTML は段落・リスト等で改行する
             '.post-md>:first-child{margin-top:0}.post-md>:last-child{margin-bottom:0}' +
@@ -2744,6 +2756,144 @@
         }
     }, { rootMargin: '1500px 0px' });
 
+    // ---------- 画像の文字の AI 翻訳 (サムネイル右クリック「AIで翻訳」) ----------
+    // 訳は C# 側 (画像キャッシュの隣) にあり、表示したサムネイルについてまとめて問い合わせる (訳があれば「訳」の印)。
+    // マウスを乗せたらサムネイルにかぶらない位置に訳を出す。サムネイルの鍵は実画像の URL (data-src)、無ければ data-url。
+
+    /** 鍵 (画像 URL) → [{ where, text }]。訳が無いことが分かっている鍵は入れない。 */
+    const imgTr = new Map();
+    /** 翻訳中の鍵。 */
+    const imgTrPending = new Set();
+    /** 問い合わせ済みの鍵 (表示のたびに問い合わせ直さない)。 */
+    const imgTrAsked = new Set();
+    let imgTrQueue = [];
+    let imgTrQueueTimer = null;
+    /** マウスを乗せているサムネイル (訳の問い合わせの答えが来たときにまだ乗っていればポップアップを出す)。 */
+    let imgTrHoverSlot = null;
+
+    function imgTrKey(slot) { return (slot && (slot.dataset.src || slot.dataset.url)) || ''; }
+    function imgTrKeys(slot) {
+        const keys = [];
+        if (slot.dataset.src) keys.push(slot.dataset.src);
+        if (slot.dataset.url && slot.dataset.url !== slot.dataset.src) keys.push(slot.dataset.url);
+        return keys;
+    }
+    function imgTrOf(slot) {
+        for (const k of imgTrKeys(slot)) if (imgTr.has(k)) return imgTr.get(k);
+        return null;
+    }
+
+    /** 新しく出たサムネイルの鍵を問い合わせの列に積む (少し待ってまとめて送る)。 */
+    function queueImgTrQuery(slots) {
+        if (!window.chrome || !window.chrome.webview) return;
+        for (const s of slots) {
+            if (s.dataset.mediaType === 'video') continue;
+            for (const k of imgTrKeys(s)) {
+                if (imgTrAsked.has(k)) continue;
+                imgTrAsked.add(k);
+                imgTrQueue.push(k);
+            }
+        }
+        if (imgTrQueue.length === 0 || imgTrQueueTimer) return;
+        imgTrQueueTimer = setTimeout(function () {
+            imgTrQueueTimer = null;
+            const urls = imgTrQueue; imgTrQueue = [];
+            window.chrome.webview.postMessage({ type: 'imageTranslationQuery', urls: urls });
+        }, 150);
+    }
+
+    /** サムネイルの「訳」「翻訳中」の印を付け直す (画面上の全箇所。ポップアップ内の複製も)。 */
+    function refreshImgTrMarks() {
+        for (const s of document.getElementsByClassName('image-slot')) {
+            const keys = imgTrKeys(s);
+            s.classList.toggle('img-tr-pending', keys.some(function (k) { return imgTrPending.has(k); }));
+            s.classList.toggle('has-img-tr', !s.classList.contains('img-tr-pending') && keys.some(function (k) { return imgTr.has(k); }));
+        }
+    }
+
+    /** C# からの訳 ({ url: { items } })。missing はマウスを乗せた 1 件の問い合わせで訳が無かった鍵。 */
+    function applyImageTranslations(msg) {
+        const items = msg.items || {};
+        for (const k of Object.keys(items)) {
+            imgTr.set(k, (items[k] && items[k].items) || []);
+            imgTrPending.delete(k);
+        }
+        refreshImgTrMarks();
+        if (imgTrHoverSlot && imgTrOf(imgTrHoverSlot)) showImgTrPopup(imgTrHoverSlot);
+    }
+
+    function applyImageTranslationState(msg) {
+        if (!msg.url) return;
+        if (msg.state === 'pending') imgTrPending.add(msg.url); else imgTrPending.delete(msg.url);
+        refreshImgTrMarks();
+    }
+
+    function hideImgTrPopup() {
+        const p = document.getElementById('img-tr-popup');
+        if (p) p.remove();
+    }
+
+    /** 訳のポップアップをサムネイルにかぶらない位置に出す: 右に入れば右、だめなら左、それもだめなら下 / 上。 */
+    function showImgTrPopup(slot) {
+        const items = imgTrOf(slot);
+        if (!items) return;
+        hideImgTrPopup();
+        const pop = document.createElement('div');
+        pop.id = 'img-tr-popup';
+        if (items.length === 0) {
+            pop.innerHTML = '<span class="itr-none">(画像に翻訳する文字は見つかりませんでした)</span>';
+        } else {
+            pop.innerHTML = items.map(function (it) {
+                return '<div class="itr-item">' + (it.where ? '<span class="itr-where">' + escapeHtml(it.where) + '</span>' : '')
+                     + escapeHtml(it.text || '') + '</div>';
+            }).join('');
+        }
+        document.body.appendChild(pop);
+
+        const r  = slot.getBoundingClientRect();
+        const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+        const gap = 8, margin = 6;
+        const right = vw - r.right - gap - margin, left = r.left - gap - margin;
+        const side  = Math.max(right, left);
+        let x, y;
+        if (side >= 220) {
+            pop.style.maxWidth = Math.min(520, side) + 'px';
+            const w = pop.offsetWidth, h = pop.offsetHeight;
+            x = right >= left ? r.right + gap : r.left - gap - w;
+            y = Math.max(margin, Math.min(r.top, vh - h - margin));
+        } else {
+            pop.style.maxWidth = Math.min(520, vw - margin * 2) + 'px';
+            const w = pop.offsetWidth, h = pop.offsetHeight;
+            x = Math.max(margin, Math.min(r.left, vw - w - margin));
+            y = (vh - r.bottom >= h + gap || vh - r.bottom >= r.top) ? r.bottom + gap : r.top - gap - h;
+            y = Math.max(margin, y);
+        }
+        pop.style.left = x + 'px';
+        pop.style.top  = y + 'px';
+    }
+
+    document.addEventListener('mouseover', function (e) {
+        const slot = e.target.closest && e.target.closest('.image-slot');
+        if (!slot || slot === imgTrHoverSlot) return;
+        imgTrHoverSlot = slot;
+        if (slot.dataset.mediaType === 'video') return;
+        if (imgTrOf(slot)) { showImgTrPopup(slot); return; }
+        // まだ分からない (data-src が後から決まった等): この 1 件を問い合わせる (答えが来たときにまだ乗っていれば出す)
+        const keys = imgTrKeys(slot);
+        if (keys.length > 0 && window.chrome && window.chrome.webview)
+            window.chrome.webview.postMessage({ type: 'imageTranslationQuery', urls: keys, hover: true });
+    });
+    document.addEventListener('mouseout', function (e) {
+        if (!imgTrHoverSlot) return;
+        const to = e.relatedTarget;
+        if (to && imgTrHoverSlot.contains(to)) return;   // サムネイルの中での移動
+        const from = e.target.closest && e.target.closest('.image-slot');
+        if (from !== imgTrHoverSlot) return;
+        imgTrHoverSlot = null;
+        hideImgTrPopup();
+    });
+    window.addEventListener('scroll', hideImgTrPopup, { passive: true });
+
     function observeImageSlots(root) {
         const scope = root || document;
         // image-slot.deferred (画像 HEAD) と image-slot.video (動画 materialize) の両方を監視する。
@@ -2754,6 +2904,10 @@
             s.dataset.observed = '1';
             imageSlotObserver.observe(s);
         });
+        // 画像の文字の訳があるかを問い合わせる (印を付けるため)。印は描き直されたサムネイルにも付け直す
+        const slots = scope.querySelectorAll('.image-slot');
+        queueImgTrQuery(slots);
+        if (imgTr.size > 0 || imgTrPending.size > 0) refreshImgTrMarks();
     }
 
     /** HEAD / 非同期展開の結果を 1 枚のスロットに適用。 */
@@ -5410,6 +5564,12 @@
                     break;
                 case 'updateAuthorProfiles':
                     applyAuthorProfiles(msg.profiles);
+                    break;
+                case 'imageTranslations':
+                    applyImageTranslations(msg);
+                    break;
+                case 'imageTranslationState':
+                    applyImageTranslationState(msg);
                     break;
                 case 'updateTranslations':
                     applyTranslationUpdate(msg);

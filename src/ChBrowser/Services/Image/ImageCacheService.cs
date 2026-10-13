@@ -169,6 +169,14 @@ public sealed class ImageCacheService : IDisposable
     /// <summary>指定 URL + Kind のキャッシュエントリを物理ファイル + index から削除する。
     /// 削除成功時 true、エントリが無かった場合 false。
     /// 右クリックメニュー「キャッシュ削除」等から呼ばれる。</summary>
+    /// <summary>画像の文字の AI 翻訳 (<see cref="ChBrowser.Services.Llm.ImageTranslator"/>) の保存先。キャッシュの画像と同じ場所の
+    /// <c>&lt;hash&gt;.tr.json</c> (スレではなく画像ごとに持つ = 同じ画像がほかのスレに貼られても訳が出る)。
+    /// 画像のキャッシュを消す / 容量超過で追い出すと一緒に消える。</summary>
+    public string ImageTranslationPath(string url)
+        => HashToPath(ComputeUrlHash(url, CacheKind.Image), TranslationExt, CacheKind.Image);
+
+    private const string TranslationExt = ".tr.json";
+
     public bool Delete(string url, CacheKind kind = CacheKind.Image)
     {
         if (string.IsNullOrEmpty(url)) return false;
@@ -182,6 +190,7 @@ public sealed class ImageCacheService : IDisposable
         }
         var path = HashToPath(entry.Hash, entry.Ext, entry.Kind);
         SafeDelete(path);
+        if (entry.Kind == CacheKind.Image) SafeDelete(HashToPath(entry.Hash, TranslationExt, CacheKind.Image));   // 画像の文字の訳も
         // index 永続化をバックグラウンドで予約 (= UI スレッドを止めない)。
         _ = Task.Run(async () =>
         {
@@ -308,6 +317,7 @@ public sealed class ImageCacheService : IDisposable
                 if (totalSize <= MaxBytes) break;
                 var p = HashToPath(e.Hash, e.Ext, e.Kind);
                 SafeDelete(p);
+                if (e.Kind == CacheKind.Image) SafeDelete(HashToPath(e.Hash, TranslationExt, CacheKind.Image));   // 画像の文字の訳も
                 lock (_indexLock)
                 {
                     _index.Remove(e.Hash);

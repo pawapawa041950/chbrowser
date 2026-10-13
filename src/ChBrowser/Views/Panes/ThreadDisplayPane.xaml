@@ -82,6 +82,12 @@
                       Tag="deleteCache"
                       Click="DeleteCache_Click"
                       Visibility="Collapsed" />
+            <!-- 画像に書かれた文字を AI で日本語に訳す (画像のみ)。訳はサムネイルにマウスを乗せると出る -->
+            <MenuItem Header="AIで翻訳"
+                      Tag="aiTranslateImage"
+                      Click="AiTranslateImage_Click"
+                      ToolTip="画像に書かれている文字 (X のスクリーンショット・漫画の吹き出し等) を AI で日本語に翻訳する。訳はサムネイルにマウスを乗せると表示"
+                      Visibility="Collapsed" />
             <MenuItem Header="リンクをコピー" Click="UrlCopy_Click" />
         </ContextMenu>
     </UserControl.Resources>
