@@ -27,7 +27,10 @@ Windows 用の掲示板ブラウザ (5ch.io / bbspink、したらば、まちBBS
   <div align="center">
   <a href="img/sample3.png"><img src="img/sample3.png" width="400"></a>
   </div>
-- **AI翻訳機能** LLMでスレを翻訳することができる(redditなどで有用)
+- **AI翻訳機能** LLMでスレを翻訳することができる(redditなどで有用) 
+  <div align="center">
+  <img src="img/translate-demo.webp" width="600">
+  </div>
 - **(実験的)LLM連携** OpenAI互換APIでLLMと連携。板一覧、スレ一覧、スレッド内容についてチャットで聞ける
 - **(実験的)MCPサーバ** 5chの板一覧、スレッド一覧、スレッド内容を取得するツールをMCPで公開 ([ツール一覧](https://github.com/pawapawa041950/chbrowser/releases/tag/v20260530_2))
 - **(実験的)AI NG機能** LLMにレスが攻撃的かどうかをスコア付けさせ、「スコア～以上は非表示」とすることができる
