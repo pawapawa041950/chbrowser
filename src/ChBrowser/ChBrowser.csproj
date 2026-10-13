@@ -64,6 +64,7 @@
     <EmbeddedResource Include="Resources\viewer-details.css" />
     <EmbeddedResource Include="Resources\viewer-details.js" />
     <EmbeddedResource Include="Resources\shortcut-bridge.js" />
+    <EmbeddedResource Include="Resources\image-translation.js" />
     <EmbeddedResource Include="Resources\ai-chat.html" />
   </ItemGroup>
 

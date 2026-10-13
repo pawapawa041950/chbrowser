@@ -140,6 +140,84 @@ public static class ImageTranslator
         return text.Length > 0 ? new List<ImageTextItem> { new("", text) } : new List<ImageTextItem>();
     }
 
+    // ---- 画面 (スレ表示のサムネイル / ビューア) 共通の窓口 ----
+    // 翻訳中・失敗の状態はここで一元に持ち、変わったら Changed で知らせる (どの画面から訳しても、ほかの画面にも「翻訳中」や訳が出る)。
+
+    /// <summary>翻訳中 / 失敗した画像 (URL → null = 翻訳中、文字列 = 失敗の理由)。成功したら消す (以後は保存した訳)。UI スレッドだけで触る。</summary>
+    private static readonly Dictionary<string, string?> States = new(StringComparer.Ordinal);
+
+    /// <summary>画像 (URL) の訳の状態が変わった (翻訳を始めた / 訳せた / 失敗した)。UI スレッドで呼ばれる。
+    /// 訳を出している画面は <see cref="PageState"/> で今の状態を取り直して表示を更新する。</summary>
+    public static event Action<string>? Changed;
+
+    /// <summary>右クリックメニューの項目名 (訳が保存されていれば「AIで翻訳し直す」)。</summary>
+    public static string MenuHeader(ChBrowser.Services.Image.ImageCacheService cache, string url)
+        => File.Exists(cache.ImageTranslationPath(url)) ? "AIで翻訳し直す" : "AIで翻訳";
+
+    /// <summary>画面 (JS) に渡す訳の状態。<c>{ state: "pending" }</c> / <c>{ state: "error", message }</c> /
+    /// <c>{ state: "done", items: [{ where, text }], model }</c>、何も無ければ null。
+    /// 描画は共通の image-translation.js (スレ表示のポップアップ / ビューアの詳細ペイン)。</summary>
+    public static object? PageState(ChBrowser.Services.Image.ImageCacheService cache, string url)
+    {
+        if (States.TryGetValue(url, out var error))
+            return error is null ? new { state = "pending" } : new { state = "error", message = error };
+        if (Load(cache.ImageTranslationPath(url)) is { } tr)
+            return new { state = "done", items = tr.Items.Select(i => new { where = i.Where, text = i.Text }).ToArray(), model = tr.Model };
+        return null;
+    }
+
+    private static void SetState(string url, bool pending, string? error)
+    {
+        if (pending)            States[url] = null;
+        else if (error is null) States.Remove(url);
+        else                    States[url] = error;
+        // 1 つの画面の失敗で翻訳全体 (と呼び出し元の async void) が落ちないよう、受け手ごとに守る
+        foreach (var handler in Changed?.GetInvocationList() ?? Array.Empty<Delegate>())
+        {
+            try { ((Action<string>)handler)(url); }
+            catch (Exception ex)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[ImageTranslator] 訳の状態の通知に失敗: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>画像キャッシュにある画像 (<paramref name="url"/>) の文字を訳し、キャッシュの隣に保存する (サムネイルの右クリック / ビューアの右クリック共通)。
+    /// 翻訳中・失敗の状態もここで持ち、<see cref="Changed"/> で知らせる。UI スレッドから呼ぶ。
+    /// 戻り値: 訳、または利用者に見せる失敗の理由 (接続が未設定 / 画像を入力できない / 画像がまだ無い / 翻訳中 / 接続エラー / 画像を読めない)。</summary>
+    public static async Task<(ImageTranslation? Result, string? Error)> TranslateCachedAsync(
+        TranslationService translation, ChBrowser.Services.Image.ImageCacheService cache, string url, CancellationToken ct)
+    {
+        if (States.TryGetValue(url, out var st) && st is null) return (null, "この画像は翻訳中です");
+        var (tr, error) = await TranslateCoreAsync(translation, cache, url, ct).ConfigureAwait(true);
+        SetState(url, pending: false, error);
+        return (tr, error);
+    }
+
+    private static async Task<(ImageTranslation? Result, string? Error)> TranslateCoreAsync(
+        TranslationService translation, ChBrowser.Services.Image.ImageCacheService cache, string url, CancellationToken ct)
+    {
+        if (!translation.IsConfigured) return (null, TranslationService.NotConfiguredMessage);
+        if (!cache.TryGet(url, out var hit, ChBrowser.Services.Image.CacheKind.Image))
+            return (null, "画像がまだ読み込まれていません (画像が表示されてから翻訳してください)");
+        SetState(url, pending: true, null);
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(hit.FilePath, ct).ConfigureAwait(true);
+            var tr = await translation.TranslateImageAsync(bytes, ct).ConfigureAwait(true);
+            Save(cache.ImageTranslationPath(url), tr);
+            return (tr, null);
+        }
+        catch (AiTranslateException ex)
+        {
+            return (null, $"画像の翻訳に失敗しました: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or FileFormatException or ArgumentException)
+        {
+            return (null, $"画像を読み込めませんでした: {ex.Message}");   // 壊れている / 対応していない形式
+        }
+    }
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

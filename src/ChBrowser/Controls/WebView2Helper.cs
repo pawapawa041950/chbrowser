@@ -732,7 +732,8 @@ public static partial class WebView2Helper
             var html   = ChBrowser.Services.Render.EmbeddedAssets.Read("thread.html");
             // thread.css / post.css はディスク優先 (= ユーザがテーマ編集した内容を反映)。
             var css    = ChBrowser.Services.Render.EmbeddedAssets.ReadCss("thread.css");
-            var js     = ChBrowser.Services.Render.EmbeddedAssets.Read("thread.js");
+            // image-translation.js = 画像の文字の訳の描画 (ビューアの詳細ペインと共通)
+            var js     = ChBrowser.Services.Render.EmbeddedAssets.Read("image-translation.js") + "\n" + ChBrowser.Services.Render.EmbeddedAssets.Read("thread.js");
             var bridge = ChBrowser.Services.Render.EmbeddedAssets.Read("shortcut-bridge.js");
 
             // テーマ (post.html テンプレ + post.css) を注入。テーマ未登録時は埋め込み既定を使う。
@@ -782,7 +783,7 @@ public static partial class WebView2Helper
             if (_viewerDetailsShellHtmlCache is not null) return _viewerDetailsShellHtmlCache;
             var html = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.html");
             var css  = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.css");
-            var js   = ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.js");
+            var js   = ChBrowser.Services.Render.EmbeddedAssets.Read("image-translation.js") + "\n" + ChBrowser.Services.Render.EmbeddedAssets.Read("viewer-details.js");
             _viewerDetailsShellHtmlCache = html
                 .Replace("/*{{CSS}}*/", css)
                 .Replace("/*{{JS}}*/",  js);

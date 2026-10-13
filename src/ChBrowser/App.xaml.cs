@@ -27,6 +27,8 @@ public partial class App : Application
     /// 動画サムネキャッシュ書き込み (Phase 3) / 動画 DL マネージャ (Phase 4) 等が利用する。
     /// OnStartup 完了前は null。</summary>
     public ImageCacheService? ImageCacheServiceInstance => _imageCache;
+    /// <summary>AI 翻訳の共通窓口 (ビューアの「AIで翻訳」等、MainViewModel の外から使う)。</summary>
+    public ChBrowser.Services.Llm.TranslationService? TranslationServiceInstance => _mainVm?.Translation;
 
     private ChBrowser.Services.Media.VideoDownloadManager? _videoDownloadManager;
     /// <summary>動画本体のバックグラウンドダウンロード管理 (Phase 4)。

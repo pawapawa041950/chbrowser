@@ -30,6 +30,10 @@
             <MenuItem Header="保存..."          Click="SaveImage_Click" />
             <MenuItem Header="URL をコピー"      Click="CopyImageUrl_Click" />
             <MenuItem Header="ブラウザで開く"    Click="OpenInBrowser_Click" />
+            <!-- 画像に書かれた文字を AI で日本語に訳す (画像のみ)。訳は詳細ペインに出る -->
+            <Separator Tag="aiTranslateImage" />
+            <MenuItem Header="AIで翻訳" Tag="aiTranslateImage" Click="AiTranslateImage_Click"
+                      ToolTip="画像に書かれている文字 (X のスクリーンショット・漫画の吹き出し等) を AI で日本語に翻訳する。訳は詳細ペインに表示" />
         </ContextMenu>
     </Window.Resources>
 

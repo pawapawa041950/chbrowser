@@ -81,6 +81,9 @@ public partial class ImageViewerWindow : Window
 
         // 詳細ペイン WebView2 を非同期で初期化 (== shell HTML を NavigateToString)。
         Loaded += (_, _) => _ = InitializeDetailsWebViewAsync();
+        // 画像の文字の訳の状態が変わったら (スレ表示のサムネイルから訳した場合も)、表示中の画像なら詳細ペインを更新する
+        ChBrowser.Services.Llm.ImageTranslator.Changed += OnImageTranslationChanged;
+        Closed += (_, _) => ChBrowser.Services.Llm.ImageTranslator.Changed -= OnImageTranslationChanged;
 
         // 「✕」で閉じても破棄せず、隠してアプリ常駐させる (= 次に画像を開く時は再表示)
         Closing += (_, e) =>
@@ -187,6 +190,7 @@ public partial class ImageViewerWindow : Window
                 {
                     type    = "setDetails",
                     url,
+                    translation = ChBrowser.Services.Llm.ImageTranslator.PageState(_imageCache, url),
                     details = meta is null ? null : new
                     {
                         format     = meta.Format,
@@ -442,6 +446,24 @@ public partial class ImageViewerWindow : Window
         menu.IsOpen          = true;
     }
 
+    // ---- 画像の文字の AI 翻訳 ----
+
+    /// <summary>右クリック「AIで翻訳」: 画像に書かれた文字を訳し、詳細ペインに出す (詳細ペインが閉じていれば開く)。
+    /// 翻訳中・訳・失敗の理由は <see cref="ChBrowser.Services.Llm.ImageTranslator.Changed"/> 経由で詳細ペインに出る。</summary>
+    private async void AiTranslateImage_Click(object sender, RoutedEventArgs e)
+    {
+        var url = UrlFromMenu(sender);
+        if (string.IsNullOrEmpty(url)) return;
+        if (Application.Current is not App { TranslationServiceInstance: { } translation }) return;
+        if (!_detailsVisible) ToggleDetailsPane();
+        await ChBrowser.Services.Llm.ImageTranslator.TranslateCachedAsync(translation, _imageCache, url, default).ConfigureAwait(true);
+    }
+
+    private void OnImageTranslationChanged(string url)
+    {
+        if (DataContext is ImageViewerViewModel { SelectedTab.Url: var current } && current == url) PushDetailsForCurrentTab();
+    }
+
     /// <summary>ContextMenu.Tag から URL を取り出すヘルパ (各クリックハンドラで共通)。</summary>
     private static string? UrlFromMenu(object sender)
     {
@@ -482,12 +504,18 @@ public partial class ImageViewerWindow : Window
     private void ImageContextMenu_Opened(object sender, RoutedEventArgs e)
     {
         if (sender is not ContextMenu cm) return;
+        var url     = cm.Tag as string ?? "";
+        var isImage = DataContext is ImageViewerViewModel vm && vm.Tabs.FirstOrDefault(t => t.Url == url) is { IsVideo: false };
         foreach (var item in cm.Items)
         {
             if (item is MenuItem mi && (mi.Tag as string) == "fullscreen")
-            {
                 mi.IsChecked = _isFullscreen;
-                break;
+            // 「AIで翻訳」は画像だけ。訳があれば「AIで翻訳し直す」
+            if (item is FrameworkElement fe && (fe.Tag as string) == "aiTranslateImage")
+            {
+                fe.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
+                if (fe is MenuItem tmi && isImage)
+                    tmi.Header = ChBrowser.Services.Llm.ImageTranslator.MenuHeader(_imageCache, url);
             }
         }
     }

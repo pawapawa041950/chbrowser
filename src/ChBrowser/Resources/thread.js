@@ -612,16 +612,20 @@
             '.post-avatar.empty{display:none}' +
             // 画像の文字の AI 翻訳: 訳のあるサムネイルの印 / 翻訳中の印 / マウスを乗せたときの訳のポップアップ
             '.image-slot.has-img-tr,.image-slot.img-tr-pending{position:relative}' +
-            // 印は ::before (::after はサムネイルの大きさを変えるつまみに使っている)
-            '.image-slot.has-img-tr::before,.image-slot.img-tr-pending::before{position:absolute;left:2px;top:2px;z-index:21;padding:0 .3em;border-radius:3px;font-size:11px;line-height:1.5;color:#fff;pointer-events:none}' +
-            '.image-slot.has-img-tr::before{content:"訳";background:rgba(30,100,200,.85)}' +
-            '.image-slot.img-tr-pending::before{content:"翻訳中…";background:rgba(120,120,120,.85);animation:imgTrPulse 1s ease-in-out infinite alternate}' +
+            // 印は ::before (::after はサムネイルの大きさを変えるつまみに使っている)。右上に置く
+            // (左上は AI 生成画像の生成元 / モデル名のバッジ行。見た目もそのバッジに合わせる)
+            '.image-slot.has-img-tr::before,.image-slot.img-tr-pending::before{position:absolute;right:4px;top:4px;z-index:21;padding:1px 6px;border-radius:3px;' +
+            'font-size:10px;font-weight:bold;line-height:normal;white-space:nowrap;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.35);pointer-events:none}' +
+            '.image-slot.has-img-tr::before{content:"訳";background:rgba(30,100,200,.9)}' +
+            '.image-slot.img-tr-pending::before{content:"翻訳中…";background:rgba(120,120,120,.9);animation:imgTrPulse 1s ease-in-out infinite alternate}' +
+            // 左上のバッジ行 (長いモデル名は右へ伸びる) が印にかからないよう、印の幅 + 間を空けて止める (はみ出しは省略表示)
+            '.image-slot.has-img-tr>.image-slot-badge-row{max-width:calc(100% - 37px)}' +
+            '.image-slot.img-tr-pending>.image-slot-badge-row{max-width:calc(100% - 70px)}' +
             '@keyframes imgTrPulse{from{opacity:.55}to{opacity:1}}' +
             '#img-tr-popup{position:fixed;z-index:100000;max-height:80vh;overflow:auto;padding:.5em .7em;border:1px solid rgba(127,127,127,.6);border-radius:6px;' +
-            'background:#fffff6;color:#222;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word;pointer-events:none}' +
-            '#img-tr-popup .itr-item+.itr-item{margin-top:.45em;padding-top:.45em;border-top:1px dashed rgba(127,127,127,.4)}' +
-            '#img-tr-popup .itr-where{display:block;font-size:11px;font-weight:bold;color:#3060a0;margin-bottom:.1em}' +
-            '#img-tr-popup .itr-none{color:#777}' +
+            'background:#fffff6;color:#222;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;line-height:1.5;pointer-events:none}' +
+            // 中身 (itr-*) の見た目は image-translation.js (ビューアの詳細ペインと共通)。ここでは色だけ
+            '#img-tr-popup .itr-where{color:#3060a0;opacity:1}' +
             // 整形した Markdown 本文 (post-md)。色は文字色からの半透明にしてテーマ (明暗) に合わせる
             '.post-md{white-space:normal}' +   // 本文は改行をそのまま出す (pre-wrap) が、整形した HTML は段落・リスト等で改行する
             '.post-md>:first-child{margin-top:0}.post-md>:last-child{margin-bottom:0}' +
@@ -2760,10 +2764,8 @@
     // 訳は C# 側 (画像キャッシュの隣) にあり、表示したサムネイルについてまとめて問い合わせる (訳があれば「訳」の印)。
     // マウスを乗せたらサムネイルにかぶらない位置に訳を出す。サムネイルの鍵は実画像の URL (data-src)、無ければ data-url。
 
-    /** 鍵 (画像 URL) → [{ where, text }]。訳が無いことが分かっている鍵は入れない。 */
+    /** 鍵 (画像 URL) → 訳の状態 ({ state: 'pending' | 'error' | 'done', ... }。形は image-translation.js)。何も無い鍵は入れない。 */
     const imgTr = new Map();
-    /** 翻訳中の鍵。 */
-    const imgTrPending = new Set();
     /** 問い合わせ済みの鍵 (表示のたびに問い合わせ直さない)。 */
     const imgTrAsked = new Set();
     let imgTrQueue = [];
@@ -2778,8 +2780,10 @@
         if (slot.dataset.url && slot.dataset.url !== slot.dataset.src) keys.push(slot.dataset.url);
         return keys;
     }
+    function imgTrState(key) { const t = imgTr.get(key); return t ? t.state : ''; }
+    /** サムネイルの訳 (訳し終えたものだけ。翻訳中・失敗はポップアップを出さない)。 */
     function imgTrOf(slot) {
-        for (const k of imgTrKeys(slot)) if (imgTr.has(k)) return imgTr.get(k);
+        for (const k of imgTrKeys(slot)) if (imgTrState(k) === 'done') return imgTr.get(k);
         return null;
     }
 
@@ -2806,26 +2810,19 @@
     function refreshImgTrMarks() {
         for (const s of document.getElementsByClassName('image-slot')) {
             const keys = imgTrKeys(s);
-            s.classList.toggle('img-tr-pending', keys.some(function (k) { return imgTrPending.has(k); }));
-            s.classList.toggle('has-img-tr', !s.classList.contains('img-tr-pending') && keys.some(function (k) { return imgTr.has(k); }));
+            s.classList.toggle('img-tr-pending', keys.some(function (k) { return imgTrState(k) === 'pending'; }));
+            s.classList.toggle('has-img-tr', !s.classList.contains('img-tr-pending') && keys.some(function (k) { return imgTrState(k) === 'done'; }));
         }
     }
 
-    /** C# からの訳 ({ url: { items } })。missing はマウスを乗せた 1 件の問い合わせで訳が無かった鍵。 */
+    /** C# からの訳の状態 ({ url: 状態 | null })。null は「何も無くなった」。 */
     function applyImageTranslations(msg) {
         const items = msg.items || {};
         for (const k of Object.keys(items)) {
-            imgTr.set(k, (items[k] && items[k].items) || []);
-            imgTrPending.delete(k);
+            if (items[k]) imgTr.set(k, items[k]); else imgTr.delete(k);
         }
         refreshImgTrMarks();
         if (imgTrHoverSlot && imgTrOf(imgTrHoverSlot)) showImgTrPopup(imgTrHoverSlot);
-    }
-
-    function applyImageTranslationState(msg) {
-        if (!msg.url) return;
-        if (msg.state === 'pending') imgTrPending.add(msg.url); else imgTrPending.delete(msg.url);
-        refreshImgTrMarks();
     }
 
     function hideImgTrPopup() {
@@ -2835,19 +2832,12 @@
 
     /** 訳のポップアップをサムネイルにかぶらない位置に出す: 右に入れば右、だめなら左、それもだめなら下 / 上。 */
     function showImgTrPopup(slot) {
-        const items = imgTrOf(slot);
-        if (!items) return;
+        const t = imgTrOf(slot);
+        if (!t) return;
         hideImgTrPopup();
         const pop = document.createElement('div');
         pop.id = 'img-tr-popup';
-        if (items.length === 0) {
-            pop.innerHTML = '<span class="itr-none">(画像に翻訳する文字は見つかりませんでした)</span>';
-        } else {
-            pop.innerHTML = items.map(function (it) {
-                return '<div class="itr-item">' + (it.where ? '<span class="itr-where">' + escapeHtml(it.where) + '</span>' : '')
-                     + escapeHtml(it.text || '') + '</div>';
-            }).join('');
-        }
+        pop.innerHTML = window.ChImageTranslation.html(t);
         document.body.appendChild(pop);
 
         const r  = slot.getBoundingClientRect();
@@ -2881,7 +2871,7 @@
         // まだ分からない (data-src が後から決まった等): この 1 件を問い合わせる (答えが来たときにまだ乗っていれば出す)
         const keys = imgTrKeys(slot);
         if (keys.length > 0 && window.chrome && window.chrome.webview)
-            window.chrome.webview.postMessage({ type: 'imageTranslationQuery', urls: keys, hover: true });
+            window.chrome.webview.postMessage({ type: 'imageTranslationQuery', urls: keys });
     });
     document.addEventListener('mouseout', function (e) {
         if (!imgTrHoverSlot) return;
@@ -2907,7 +2897,7 @@
         // 画像の文字の訳があるかを問い合わせる (印を付けるため)。印は描き直されたサムネイルにも付け直す
         const slots = scope.querySelectorAll('.image-slot');
         queueImgTrQuery(slots);
-        if (imgTr.size > 0 || imgTrPending.size > 0) refreshImgTrMarks();
+        if (imgTr.size > 0) refreshImgTrMarks();
     }
 
     /** HEAD / 非同期展開の結果を 1 枚のスロットに適用。 */
@@ -5567,9 +5557,6 @@
                     break;
                 case 'imageTranslations':
                     applyImageTranslations(msg);
-                    break;
-                case 'imageTranslationState':
-                    applyImageTranslationState(msg);
                     break;
                 case 'updateTranslations':
                     applyTranslationUpdate(msg);

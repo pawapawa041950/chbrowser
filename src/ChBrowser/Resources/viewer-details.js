@@ -122,7 +122,7 @@
     }
 
     function renderInfoSection(d) {
-        var html = '<div class="section"><div class="info-grid">';
+        var html = '<div class="section section-info"><div class="info-grid">';
         if (d.format)   html += '<div class="info-label">形式</div><div class="info-value">' + escapeHtml(d.format) + '</div>';
                         html += '<div class="info-label">サイズ</div><div class="info-value">' + formatFileSize(d.fileSize) + '</div>';
         if (d.width && d.height)
@@ -167,6 +167,18 @@
         return d.parameters && Object.keys(d.parameters).length > 0;
     }
 
+    /** 画像の文字の AI 翻訳のセクション (右クリック「AIで翻訳」)。基本情報 (形式・サイズ・生成元等) のすぐ下に入れる
+     *  (基本情報が無い表示ではファイル名の下)。t の形と中身の描画は image-translation.js (スレ表示のサムネイルのポップアップと共通)。 */
+    function renderTranslation(t) {
+        if (!t) return;
+        var sec = document.createElement('div');
+        sec.className = 'section section-translation';
+        sec.innerHTML = '<div class="section-header">翻訳</div>' + window.ChImageTranslation.html(t);
+        var after = root.querySelector('.section-info') || root.querySelector('.filename');
+        if (after) root.insertBefore(sec, after.nextSibling);   // nextSibling が null なら末尾に入る
+        else root.insertBefore(sec, root.firstChild);
+    }
+
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function (e) {
             var msg = e.data;
@@ -175,11 +187,12 @@
             // url なし = 「現在タブ無し」 → 空表示
             if (!msg.url) { renderEmpty(); return; }
             // details なし = キャッシュ未ヒット / 非対応形式 → 「取得できません」
-            if (!msg.details) { renderNoData(msg.url); return; }
+            if (!msg.details) renderNoData(msg.url);
             // details あるが AI 情報無し → 基本情報のみ
-            if (!hasAi(msg.details)) { renderBasicOnly(msg.url, msg.details); return; }
+            else if (!hasAi(msg.details)) renderBasicOnly(msg.url, msg.details);
             // フル表示
-            renderFull(msg.url, msg.details);
+            else renderFull(msg.url, msg.details);
+            renderTranslation(msg.translation);
         });
     }
 })();

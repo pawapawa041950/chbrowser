@@ -28,6 +28,13 @@ public partial class ThreadDisplayPane : UserControl
         InitializeComponent();
         ChBrowser.Controls.PaneDragInitiator.Attach(HeaderBar, ChBrowser.Models.PaneId.ThreadDisplay);
         Loaded += (_, __) => WireVideoDownloadCompletionToPane();
+        // 画像の文字の訳の状態が変わったら (ビューアから訳した場合も)、このペインのスレ表示へ送る (サムネイルの「訳」「翻訳中」の印)
+        Loaded   += (_, __) =>
+        {
+            ChBrowser.Services.Llm.ImageTranslator.Changed -= OnImageTranslationChanged;   // Loaded が重なっても二重にしない
+            ChBrowser.Services.Llm.ImageTranslator.Changed += OnImageTranslationChanged;
+        };
+        Unloaded += (_, __) => ChBrowser.Services.Llm.ImageTranslator.Changed -= OnImageTranslationChanged;
     }
 
     /// <summary>NG 判定 AI のしきい値ボタン。左クリックでアタッチ済み ContextMenu (しきい値メニュー) を開く。
@@ -827,8 +834,8 @@ public partial class ThreadDisplayPane : UserControl
                 case "deleteCache":  mi.Visibility = isMedia ? Visibility.Visible : Visibility.Collapsed; break;
                 case "aiTranslateImage":
                     mi.Visibility = mediaType == "image" ? Visibility.Visible : Visibility.Collapsed;
-                    mi.Header     = mediaType == "image" && Application.Current is App { ImageCacheServiceInstance: { } c }
-                                    && System.IO.File.Exists(c.ImageTranslationPath(srcUrl)) ? "AIで翻訳し直す" : "AIで翻訳";
+                    if (mediaType == "image" && Application.Current is App { ImageCacheServiceInstance: { } c })
+                        mi.Header = ChBrowser.Services.Llm.ImageTranslator.MenuHeader(c, srcUrl);
                     break;
             }
         }
@@ -847,80 +854,63 @@ public partial class ThreadDisplayPane : UserControl
     };
 
     /// <summary>UrlContextMenu「AIで翻訳」: 画像 (キャッシュにあるもの) に書かれた文字を LLM で日本語に訳し、画像キャッシュの隣に保存する。
-    /// 訳し終えたらスレ表示へ送る (サムネイルにマウスを乗せると訳が出る)。訳している間はサムネイルに印を出す。</summary>
+    /// 翻訳中・訳せたことは <see cref="ChBrowser.Services.Llm.ImageTranslator.Changed"/> 経由でスレ表示に届く (サムネイルの印 / マウスを乗せると訳)。</summary>
     private async void AiTranslateImage_Click(object sender, RoutedEventArgs e)
     {
         var (ctx, owner) = UrlMenuOf(sender);
         if (ctx is null || Vm is not { } main) return;
         if (Application.Current is not App { ImageCacheServiceInstance: { } cache }) return;
-        var wv  = owner?.PlacementTarget as WebView2;
-        var tab = wv?.DataContext as ThreadTabViewModel;
+        var tab = (owner?.PlacementTarget as WebView2)?.DataContext as ThreadTabViewModel;
         void Status(string text) { if (tab is not null) tab.StatusMessage = text; else main.StatusMessage = text; }
 
-        if (!main.Translation.IsConfigured) { Status(ChBrowser.Services.Llm.TranslationService.NotConfiguredMessage); return; }
-        var url = ctx.SrcUrl;
-        if (!cache.TryGet(url, out var hit, CacheKind.Image))
-        {
-            Status("画像がまだ読み込まれていません (サムネイルが表示されてから翻訳してください)");
-            return;
-        }
-
-        PostImageTranslationState(wv, url, "pending");
         Status("画像の文字を翻訳中…");
-        try
-        {
-            var bytes = await System.IO.File.ReadAllBytesAsync(hit.FilePath).ConfigureAwait(true);
-            var tr = await main.Translation.TranslateImageAsync(bytes, default).ConfigureAwait(true);
-            ChBrowser.Services.Llm.ImageTranslator.Save(cache.ImageTranslationPath(url), tr);
-            PostImageTranslations(wv, new() { [url] = tr }, Array.Empty<string>());
-            Status(tr.Items.Count == 0 ? "画像に翻訳する文字が見つかりませんでした" : $"画像の文字を翻訳しました ({tr.Items.Count} か所。サムネイルにマウスを乗せると表示)");
-        }
-        catch (ChBrowser.Services.Llm.AiTranslateException ex)
-        {
-            PostImageTranslationState(wv, url, "failed");
-            Status($"画像の翻訳に失敗しました: {ex.Message}");
-        }
-        catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.IO.FileFormatException or ArgumentException)
-        {
-            // 画像を読めない (壊れている / 対応していない形式)
-            PostImageTranslationState(wv, url, "failed");
-            Status($"画像を読み込めませんでした: {ex.Message}");
-        }
+        var (tr, error) = await ChBrowser.Services.Llm.ImageTranslator.TranslateCachedAsync(main.Translation, cache, ctx.SrcUrl, default).ConfigureAwait(true);
+        if (tr is null) Status(error ?? "画像の翻訳に失敗しました");
+        else Status(tr.Items.Count == 0 ? "画像に翻訳する文字が見つかりませんでした" : $"画像の文字を翻訳しました ({tr.Items.Count} か所。サムネイルにマウスを乗せると表示)");
     }
 
-    /// <summary>JS の imageTranslationQuery: 表示したサムネイル (urls) のうち、訳が保存されているものを返す (サムネイルに「訳」の印を付ける /
-    /// マウスを乗せたときに訳を出すため)。hover = true (マウスを乗せた 1 件の問い合わせ) なら、訳が無いことも返す。</summary>
+    /// <summary>サムネイルの訳を問い合わせてきたスレ表示 (= サムネイルを出している WebView)。訳の状態が変わったら知らせる。閉じたタブは自然に消える (弱参照)。</summary>
+    private readonly System.Collections.Generic.List<WeakReference<WebView2>> _imageTrViews = new();
+
+    private void OnImageTranslationChanged(string url)
+    {
+        if (Application.Current is not App { ImageCacheServiceInstance: { } cache }) return;
+        var items = new System.Collections.Generic.Dictionary<string, object?> { [url] = ChBrowser.Services.Llm.ImageTranslator.PageState(cache, url) };
+        // 閉じたタブの WebView (破棄済みだがまだ GC されていないもの) は送れないので外す
+        _imageTrViews.RemoveAll(w => !w.TryGetTarget(out var wv) || !PostImageTranslations(wv, items));
+    }
+
+    /// <summary>JS の imageTranslationQuery: 表示したサムネイル (urls) のうち、訳がある (または翻訳中の) ものを返す
+    /// (サムネイルに「訳」「翻訳中」の印を付ける / マウスを乗せたときに訳を出すため)。</summary>
     private void HandleImageTranslationQuery(object sender, JsonElement payload)
     {
         if (sender is not WebView2 wv) return;
         if (Application.Current is not App { ImageCacheServiceInstance: { } cache }) return;
+        if (!_imageTrViews.Any(w => w.TryGetTarget(out var v) && ReferenceEquals(v, wv))) _imageTrViews.Add(new WeakReference<WebView2>(wv));
         if (!payload.TryGetProperty("urls", out var arr) || arr.ValueKind != JsonValueKind.Array) return;
-        var hover = payload.TryGetProperty("hover", out var h) && h.ValueKind == JsonValueKind.True;
-        var found   = new System.Collections.Generic.Dictionary<string, ChBrowser.Services.Llm.ImageTranslation>();
-        var missing = new System.Collections.Generic.List<string>();
+        var found = new System.Collections.Generic.Dictionary<string, object?>();
         foreach (var u in arr.EnumerateArray().Take(1000))
         {
             if (u.GetString() is not { Length: > 0 } url || found.ContainsKey(url)) continue;
-            var path = cache.ImageTranslationPath(url);
-            if (System.IO.File.Exists(path) && ChBrowser.Services.Llm.ImageTranslator.Load(path) is { } tr) found[url] = tr;
-            else missing.Add(url);
+            if (ChBrowser.Services.Llm.ImageTranslator.PageState(cache, url) is { } st) found[url] = st;
         }
-        if (found.Count == 0 && !hover) return;
-        PostImageTranslations(wv, found, hover ? missing : Array.Empty<string>());
+        if (found.Count > 0) PostImageTranslations(wv, found);
     }
 
-    private static void PostImageTranslations(WebView2? wv, System.Collections.Generic.Dictionary<string, ChBrowser.Services.Llm.ImageTranslation> found,
-                                              System.Collections.Generic.IReadOnlyList<string> missing)
+    /// <summary>スレ表示へ訳の状態を送る ({ url: 状態 | null })。状態の形は <see cref="ChBrowser.Services.Llm.ImageTranslator.PageState"/>。
+    /// 戻り値: false = WebView が破棄済み (閉じたタブ) で送れなかった。</summary>
+    private static bool PostImageTranslations(WebView2? wv, System.Collections.Generic.Dictionary<string, object?> items)
     {
-        if (wv?.CoreWebView2 is null) return;
-        var items = found.ToDictionary(kv => kv.Key, kv => new { items = kv.Value.Items, model = kv.Value.Model });
-        wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "imageTranslations", items, missing }, ImageTrJson));
-    }
-
-    private static void PostImageTranslationState(WebView2? wv, string url, string state)
-    {
-        if (wv?.CoreWebView2 is null) return;
-        wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "imageTranslationState", url, state }, ImageTrJson));
+        try
+        {
+            if (wv?.CoreWebView2 is not { } core) return true;   // 初期化前は送らない (表示したら問い合わせが来る)
+            core.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "imageTranslations", items }, ImageTrJson));
+            return true;
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            return false;
+        }
     }
 
     private void UrlCopy_Click(object sender, RoutedEventArgs e)
