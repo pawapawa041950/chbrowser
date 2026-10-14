@@ -3,7 +3,7 @@
 // 一覧を取り直してもページを読み直さないので、列幅・並べ替え・絞り込み・選択行・スクロール位置がそのまま残る。
 // JS → C#:
 //   { type: 'ready' }                                                    — シェル読み込み完了 (C# は現在の行を送る)
-//   { type: 'openThread', host, directoryName, key, title, logState }   — クリック or ダブルクリックで開く
+//   { type: 'openThread', host, directoryName, key, title, logState, count } — クリック or ダブルクリックで開く (count = 一覧のレス数)
 //   { type: 'openBoard', host, directoryName, name }                     — 板行 (data-kind="board") のクリックで板を開く
 //   { type: 'threadListRowMenu', kind, host, directoryName, key, title } — 行の右クリック (kind: 'thread' | 'board')
 //   { type: 'paneActivated' }                                            — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
@@ -186,6 +186,9 @@
             key:           tr.dataset.key,
             title:         tr.dataset.title,
             logState:      parseInt(tr.dataset.log, 10) || 0,
+            // 一覧に載っているレス数。開いたときに記録し、次の一覧更新で「本当に増えたか」の判定に使う
+            // (reddit 等は一覧の数に削除済み・取得できないコメントが含まれ、取得できるレス数より多いため)
+            count:         parseInt(tr.dataset.count, 10) || 0,
         });
     }
 

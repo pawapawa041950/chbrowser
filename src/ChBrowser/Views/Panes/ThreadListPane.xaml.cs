@@ -188,8 +188,11 @@ public partial class ThreadListPane : UserControl
             hint = (LogMarkState)li;
         }
 
+        // 一覧に載っているレス数 (新着判定の基準として記録する。ThreadIndex.LastListedPostCount)
+        var listed = payload.TryGetProperty("count", out var cp) && cp.TryGetInt32(out var ci) ? ci : 0;
+
         if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(key)) return;
-        await main.OpenThreadFromListAsync(host, dir, key, title ?? "", hint);
+        await main.OpenThreadFromListAsync(host, dir, key, title ?? "", hint, listedPostCount: listed);
     }
 
     // ---- スレ一覧の各行の右クリックメニュー ----

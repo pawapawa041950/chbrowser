@@ -1500,11 +1500,14 @@ public sealed partial class MainViewModel
 
     /// <summary>JS の openThread メッセージ (host/dir/key/title 同梱) からスレを開く。
     /// 通常の板タブ・お気に入りディレクトリ展開タブの両方の経路でこれを呼ぶ。
-    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入り一括オープン用)。</summary>
-    public Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null, bool activate = true)
+    /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入り一括オープン用)。
+    /// <paramref name="listedPostCount"/> はスレ一覧に載っていたレス数 (分からなければ 0)。取得後に記録して、次に一覧を更新したときの
+    /// 新着判定の基準にする (reddit 等は一覧の数が取得できるレス数より多いので、これが無いと毎回「更新あり」になる)。</summary>
+    public Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null, bool activate = true,
+                                        int listedPostCount = 0)
     {
         var board = ResolveBoard(host, directoryName, "");
-        var info  = new ThreadInfo(key, title, 0, 0); // PostCount/Order は dat 取得後に意味を持たない
+        var info  = new ThreadInfo(key, title, listedPostCount, 0); // PostCount = 一覧のレス数 (新着判定の基準として記録する)。Order は使わない
         return OpenThreadAsync(board, info, stateHint, activate);
     }
 
