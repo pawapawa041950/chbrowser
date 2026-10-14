@@ -148,20 +148,21 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <TextBlock ctrl:HeaderStripPanel.Priority="3" Padding="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                <!-- スレタイは絵文字をカラーで出すため ColorEmojiTextBlock (DirectWrite 描画。WPF の TextBlock はモノクロになる) -->
+                <ctrl:ColorEmojiTextBlock ctrl:HeaderStripPanel.Priority="3" Margin="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            Text="{Binding SelectedTab.TitleThread, StringFormat=' ： {0}'}"
                            ToolTip="{Binding SelectedTab.TitleThread}">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
+                    <ctrl:ColorEmojiTextBlock.Style>
+                        <Style TargetType="ctrl:ColorEmojiTextBlock">
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                     <Setter Property="Visibility" Value="Collapsed" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                    </ctrl:ColorEmojiTextBlock.Style>
+                </ctrl:ColorEmojiTextBlock>
                 <!-- 絞り込み検索: 開くと幅 200 を取り、見出しの後半 (板名 / スレタイ) を縮めて出る (見出しの前半とボタンは縮めない)。
                      SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
                 <ctrl:SearchBoxToggle Margin="0,0,6,0"

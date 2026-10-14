@@ -89,15 +89,16 @@
             <ctrl:HeaderStripPanel Margin="4,2">
                 <!-- 見出し: 板タブなら「掲示板名 ： 板名」、それ以外のタブはタブの見出し、タブが無ければ「スレッド一覧」。
                      幅が足りなければ板名 → (検索欄) → 掲示板名の順に縮む (ボタンは縮めない)。 -->
-                <TextBlock ctrl:HeaderStripPanel.Priority="1" Padding="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                <!-- 見出しは絵文字をカラーで出すため ColorEmojiTextBlock (DirectWrite 描画。WPF の TextBlock はモノクロになる) -->
+                <ctrl:ColorEmojiTextBlock ctrl:HeaderStripPanel.Priority="1" Margin="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            Text="{Binding SelectedTab.TitleSite, FallbackValue='スレッド一覧', TargetNullValue='スレッド一覧'}" />
-                <TextBlock ctrl:HeaderStripPanel.Priority="3" Padding="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                <ctrl:ColorEmojiTextBlock ctrl:HeaderStripPanel.Priority="3" Margin="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            Text="{Binding SelectedTab.TitleRest, StringFormat=' ： {0}'}"
                            ToolTip="{Binding SelectedTab.TitleRest}">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
+                    <ctrl:ColorEmojiTextBlock.Style>
+                        <Style TargetType="ctrl:ColorEmojiTextBlock">
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding SelectedTab}" Value="{x:Null}">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -107,8 +108,8 @@
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                    </ctrl:ColorEmojiTextBlock.Style>
+                </ctrl:ColorEmojiTextBlock>
                 <!-- 絞り込み検索: 開くと幅 200 を取り、見出しの後半 (板名 / スレタイ) を縮めて出る (見出しの前半とボタンは縮めない)。
                      SelectedTab.SearchQuery と双方向 bind、per-tab で復元。 -->
                 <ctrl:SearchBoxToggle Margin="0,0,6,0"

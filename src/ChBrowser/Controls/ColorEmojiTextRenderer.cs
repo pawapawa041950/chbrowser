@@ -119,10 +119,11 @@ internal static class ColorEmojiTextRenderer
     /// <param name="maxWidthDip">最大幅 (DIP)。無限大 (=制約なし) なら trimming しない。</param>
     /// <param name="ellipsis">true かつ maxWidth 有限なら末尾を … で省略。</param>
     /// <param name="pixelsPerDip">DPI 倍率 (96dpi=1.0)。高 DPI でくっきり描くため。</param>
+    /// <param name="fontWeight">文字の太さ (OpenType の値。400 = 標準、600 = SemiBold、700 = Bold)。</param>
     public static bool TryRender(
         string text, string baseFamily, double fontSizeDip, WpfColor foreground,
         double maxWidthDip, bool ellipsis, double pixelsPerDip,
-        out BitmapSource? bitmap, out WpfSize sizeDip)
+        out BitmapSource? bitmap, out WpfSize sizeDip, int fontWeight = 400)
     {
         bitmap  = null;
         sizeDip = default;
@@ -137,7 +138,7 @@ internal static class ColorEmojiTextRenderer
 
             using var fmt = dw.CreateTextFormat(
                 string.IsNullOrEmpty(baseFamily) ? "Segoe UI" : baseFamily, null!,
-                Vortice.DirectWrite.FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, Vortice.DirectWrite.FontStretch.Normal, (float)fontSizeDip);
+                (Vortice.DirectWrite.FontWeight)fontWeight, Vortice.DirectWrite.FontStyle.Normal, Vortice.DirectWrite.FontStretch.Normal, (float)fontSizeDip);
             fmt.WordWrapping = WordWrapping.NoWrap;
 
             bool constrained = !double.IsInfinity(maxWidthDip) && maxWidthDip > 0;

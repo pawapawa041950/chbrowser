@@ -17,7 +17,7 @@ namespace ChBrowser.Controls;
 /// タブが空白になることを防ぐ。</para>
 ///
 /// <para>単一行・省略記号対応。<see cref="Text"/> / <see cref="FontSize"/> / <see cref="Foreground"/> /
-/// <see cref="FontFamily"/> / <see cref="TextTrimming"/> の変更と DPI 変更・絵文字設定変更で再描画する。</para></summary>
+/// <see cref="FontFamily"/> / <see cref="FontWeight"/> / <see cref="TextTrimming"/> の変更と DPI 変更・絵文字設定変更で再描画する。</para></summary>
 public sealed class ColorEmojiTextBlock : FrameworkElement
 {
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
@@ -44,6 +44,12 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
             FrameworkPropertyMetadataOptions.Inherits | FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
             OnInputChanged));
 
+    public static readonly DependencyProperty FontWeightProperty = TextElement.FontWeightProperty.AddOwner(
+        typeof(ColorEmojiTextBlock),
+        new FrameworkPropertyMetadata(FontWeights.Normal,
+            FrameworkPropertyMetadataOptions.Inherits | FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender,
+            OnInputChanged));
+
     /// <summary>ボタンのアイコンか。true なら設定「ボタンをカラーで表示する」(<see cref="ButtonIconSettings"/>) が OFF のときモノクロで描く
     /// (タブ見出しなどの絵文字は false のまま = 常にカラー)。</summary>
     public static readonly DependencyProperty IsButtonIconProperty = DependencyProperty.Register(
@@ -62,6 +68,7 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
     public double      FontSize     { get => (double)GetValue(FontSizeProperty);         set => SetValue(FontSizeProperty, value); }
     public Brush       Foreground   { get => (Brush)GetValue(ForegroundProperty);        set => SetValue(ForegroundProperty, value); }
     public FontFamily  FontFamily   { get => (FontFamily)GetValue(FontFamilyProperty);   set => SetValue(FontFamilyProperty, value); }
+    public FontWeight  FontWeight   { get => (FontWeight)GetValue(FontWeightProperty);   set => SetValue(FontWeightProperty, value); }
     public TextTrimming TextTrimming { get => (TextTrimming)GetValue(TextTrimmingProperty); set => SetValue(TextTrimmingProperty, value); }
     public bool        IsButtonIcon { get => (bool)GetValue(IsButtonIconProperty);        set => SetValue(IsButtonIconProperty, value); }
 
@@ -124,13 +131,14 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
         // ボタンのアイコンで、設定「ボタンをカラーで表示する」が OFF ならモノクロ (= WPF の文字描画)
         var mono = IsButtonIcon && !ButtonIconSettings.Instance.Colored;
 
-        var key = (text, FontSize, fg, fam, ellipsis, widthKey, dpi, active, fontPath, mono);
+        var weight = FontWeight.ToOpenTypeWeight();
+        var key = (text, FontSize, fg, fam, ellipsis, widthKey, dpi, active, fontPath, mono, weight);
         if (key.Equals(_cacheKey) && (_bmp is not null || _fallback is not null)) return;
         _cacheKey = key;
 
         if (mono)
             BuildFallback(text, fam, fg, maxWidth, ellipsis, dpi);
-        else if (ColorEmojiTextRenderer.TryRender(text, fam, FontSize, fg, maxWidth, ellipsis, dpi, out var bmp, out var size))
+        else if (ColorEmojiTextRenderer.TryRender(text, fam, FontSize, fg, maxWidth, ellipsis, dpi, out var bmp, out var size, weight))
         {
             _bmp      = bmp;
             _fallback = null;
@@ -147,7 +155,7 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
     {
         _bmp = null;
         if (string.IsNullOrEmpty(text)) { _fallback = null; _size = new Size(0, Math.Ceiling(FontSize * 1.4)); return; }
-        var typeface = new Typeface(new FontFamily(family), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var typeface = new Typeface(new FontFamily(family), FontStyles.Normal, FontWeight, FontStretches.Normal);
         var ft = new FormattedText(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
             typeface, FontSize, new SolidColorBrush(fg), dpi) { MaxLineCount = 1 };
         if (ellipsis && !double.IsInfinity(maxWidth) && maxWidth > 0)
