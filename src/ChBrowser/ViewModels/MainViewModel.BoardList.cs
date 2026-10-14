@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -142,7 +143,7 @@ public sealed partial class MainViewModel
 
     /// <summary>板一覧ペインへ中身を送る (<c>setBoardTree</c>)。<paramref name="providerId"/> を指定するとその掲示板のノードだけ
     /// (JS はそのノードだけ差し替える)、null なら全体。ページ (シェル) の読み込み直後は JS の <c>ready</c> を受けて全体を送る。</summary>
-    public void PushBoardTree(string? providerId = null)
+    public void PushBoardTree(string? providerId = null, bool reveal = false, Board? revealBoard = null)
     {
         // 板一覧を持つ掲示板は従来どおり。持たない掲示板 (したらば / reddit) も「検索」「表示済み板」を出すためにノードを作る。
         var nodes = ChBrowser.Services.Bbs.BbsRegistry.All
@@ -153,7 +154,48 @@ public sealed partial class MainViewModel
                 SupportsSearch: p.SupportsBoardSearch))
             .ToList();
         BoardTreePush = new BoardTreeMessage(providerId is null,
-            ChBrowser.Services.Render.BoardListHtmlBuilder.BuildTree(nodes, BoardCategories));
+            ChBrowser.Services.Render.BoardListHtmlBuilder.BuildTree(nodes, BoardCategories),
+            reveal ? providerId : null, reveal ? revealBoard : null);
+    }
+
+    /// <summary>板一覧ペインでその板の掲示板のノード (アコーディオン) と、板が入っているカテゴリを開き、板を選択して見える位置までスクロールする
+    /// (スレ一覧ペインの見出しの掲示板名をクリックしたとき)。板一覧に載っていない板 (reddit / したらば等) は掲示板のノードを開くところまで。
+    /// 開いた状態は保存する。</summary>
+    public void RevealBoardInBoardList(Board board)
+    {
+        var providerId = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).Id;
+        var changed = false;
+        if (!_providerExpanded.TryGetValue(providerId, out var cur) || !cur)
+        {
+            _providerExpanded[providerId] = true;
+            changed = true;
+        }
+
+        // 板が入っているカテゴリ (同名の板が別サーバにある掲示板もあるので、ホストまで一致するものを優先し、無ければ板のディレクトリ名で探す)
+        var cats  = BoardCategories.Where(c => c.ProviderId == providerId).ToList();
+        var found = FindInCategories(cats, b => b.Host == board.Host && b.DirectoryName == board.DirectoryName)
+                 ?? FindInCategories(cats, b => b.DirectoryName == board.DirectoryName);
+        if (found is { } hit)
+        {
+            var (cat, listed) = hit;
+            if (!cat.IsExpanded)
+            {
+                cat.IsExpanded = true;
+                ExpandedCategoryKeys.Add(ChBrowser.Services.Storage.BoardTreeState.CategoryKey(cat.ProviderId, cat.CategoryName));
+                changed = true;
+            }
+            board = listed;   // 一覧に載っている板 (ホストが一覧と違う場合も一覧の方で選択する)
+        }
+        if (changed) SaveBoardTreeState();
+        PushBoardTree(providerId, reveal: true, revealBoard: found is null ? null : board);
+    }
+
+    private static (BoardCategoryViewModel Category, Board Board)? FindInCategories(IEnumerable<BoardCategoryViewModel> cats, Func<Board, bool> match)
+    {
+        foreach (var c in cats)
+            foreach (var b in c.Boards)
+                if (match(b.Board)) return (c, b.Board);
+        return null;
     }
 
     /// <summary>板一覧ペインのシェル HTML を (CSS の変更を反映して) 作り直す。中身が変わればページが読み直され、

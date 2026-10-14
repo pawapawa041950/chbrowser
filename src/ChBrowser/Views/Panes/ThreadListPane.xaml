@@ -89,10 +89,47 @@
             <ctrl:HeaderStripPanel Margin="4,2">
                 <!-- 見出し: 板タブなら「掲示板名 ： 板名」、それ以外のタブはタブの見出し、タブが無ければ「スレッド一覧」。
                      幅が足りなければ板名 → (検索欄) → 掲示板名の順に縮む (ボタンは縮めない)。 -->
-                <!-- 見出しは絵文字をカラーで出すため ColorEmojiTextBlock (DirectWrite 描画。WPF の TextBlock はモノクロになる) -->
+                <!-- 板タブの掲示板名はリンク (押すと板一覧ペインでその掲示板のアコーディオンを開く) -->
+                <Button ctrl:HeaderStripPanel.Priority="1" Click="SiteLinkButton_Click" Cursor="Hand"
+                        Content="{Binding SelectedTab.TitleSite}"
+                        ToolTip="板一覧ペインでこの掲示板を開く">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <TextBlock x:Name="LinkText" Padding="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
+                                       Foreground="#1F4E8C" TextTrimming="CharacterEllipsis" Background="Transparent"
+                                       Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab.Board}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <!-- 板タブ以外 (全ログ / お気に入り / 検索結果) はタブの見出し。絵文字をカラーで出すため ColorEmojiTextBlock
+                     (DirectWrite 描画。WPF の TextBlock はモノクロになる) -->
                 <ctrl:ColorEmojiTextBlock ctrl:HeaderStripPanel.Priority="1" Margin="2,2,0,2" VerticalAlignment="Center" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
-                           Text="{Binding SelectedTab.TitleSite, FallbackValue='スレッド一覧', TargetNullValue='スレッド一覧'}" />
+                           Text="{Binding SelectedTab.TitleSite, FallbackValue='スレッド一覧', TargetNullValue='スレッド一覧'}">
+                    <ctrl:ColorEmojiTextBlock.Style>
+                        <Style TargetType="ctrl:ColorEmojiTextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedTab.IsBoardTab}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ctrl:ColorEmojiTextBlock.Style>
+                </ctrl:ColorEmojiTextBlock>
                 <ctrl:ColorEmojiTextBlock ctrl:HeaderStripPanel.Priority="3" Margin="0,2,8,2" VerticalAlignment="Center" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            Text="{Binding SelectedTab.TitleRest, StringFormat=' ： {0}'}"

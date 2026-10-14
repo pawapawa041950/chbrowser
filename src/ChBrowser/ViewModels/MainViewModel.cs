@@ -942,10 +942,17 @@ public sealed class BoardTreeMessage
 {
     public bool Full { get; }
     public IReadOnlyList<ChBrowser.Services.Render.BoardTreeProvider> Providers { get; }
-    public BoardTreeMessage(bool full, IReadOnlyList<ChBrowser.Services.Render.BoardTreeProvider> providers)
+    /// <summary>差し替えた後に見える位置までスクロールする掲示板 (<see cref="MainViewModel.RevealBoardInBoardList"/>)。null なら何もしない。</summary>
+    public string? RevealProviderId { get; }
+    /// <summary>差し替えた後に選択してスクロールする板 (<see cref="RevealProviderId"/> の中の板)。null なら掲示板のノードまで。</summary>
+    public Board? RevealBoard { get; }
+    public BoardTreeMessage(bool full, IReadOnlyList<ChBrowser.Services.Render.BoardTreeProvider> providers,
+                            string? revealProviderId = null, Board? revealBoard = null)
     {
-        Full      = full;
-        Providers = providers;
+        Full             = full;
+        Providers        = providers;
+        RevealProviderId = revealProviderId;
+        RevealBoard      = revealBoard;
     }
 }
 

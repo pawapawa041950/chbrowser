@@ -28,7 +28,8 @@ public static partial class WebView2Helper
     private static void OnBoardTreePushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.BoardTreeMessage m) return;
-        var json = JsonSerializer.Serialize(new { type = "setBoardTree", full = m.Full, providers = m.Providers }, PostJsonOptions);
+        var json = JsonSerializer.Serialize(new { type = "setBoardTree", full = m.Full, providers = m.Providers, reveal = m.RevealProviderId,
+            revealBoard = m.RevealBoard is { } rb ? new { host = rb.Host, dir = rb.DirectoryName } : null }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
     }
 

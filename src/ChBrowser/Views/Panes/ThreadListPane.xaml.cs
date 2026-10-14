@@ -30,6 +30,13 @@ public partial class ThreadListPane : UserControl
     /// <summary>アプリ全体の ViewModel (= Group.Main)。横断操作 / 共有設定の参照に使う。</summary>
     private MainViewModel? Vm => (DataContext as ThreadListPaneGroupViewModel)?.Main;
 
+    /// <summary>見出しの掲示板名 (板タブのみリンク): 板一覧ペインでその掲示板と板のカテゴリのアコーディオンを開き、板を選択して見える位置までスクロールする。</summary>
+    private void SiteLinkButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (Group?.SelectedTab?.Board is not { } board || Vm is not { } main) return;
+        main.RevealBoardInBoardList(board);
+    }
+
     // ---- ペインフォーカス → ViewModel に通知 (このペインを MRU アクティブにする) ----
 
     private void Pane_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)

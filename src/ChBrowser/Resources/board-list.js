@@ -11,7 +11,9 @@
 //   { type: 'contextMenu', target: 'board', host, directoryName, name } — 板右クリック
 //   { type: 'shortcut'|'gesture', descriptor }              — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
-//   { type: 'setBoardTree', full: bool, providers: [...] } — 中身。full なら全体を作り直し、そうでなければ該当掲示板のノードだけ差し替え
+//   { type: 'setBoardTree', full: bool, providers: [...], reveal? } — 中身。full なら全体を作り直し、そうでなければ該当掲示板のノードだけ差し替え。
+//       reveal (掲示板 id) があれば、そのノードを見える位置までスクロールする (スレ一覧ペインの見出しの掲示板名をクリックしたとき)。
+//       revealBoard { host, dir } があれば、その板を選択して真ん中あたりまでスクロールする (カテゴリは C# が開いた状態で送ってくる)
 //       provider: { id, name, expanded, hasBoardList, supportsSearch, boardCount, emptyMessage, categories: [{ name, expanded, boards: [{ host, dir, name }] }] }
 //   { type: 'setConfig', openOnSingleClick: bool }         — Phase 11b: クリック動作の設定
 //   { type: 'setShortcutBindings', bindings: {...} }        — Phase 16
@@ -144,6 +146,21 @@
         }
         // 絞り込み中なら新しい中身にも当てる
         if (paneSearchQuery) applyPaneSearch(paneSearchQuery);
+        if (msg.reveal) {
+            var rb = msg.revealBoard;
+            var li = rb ? root.querySelector('details.provider[data-provider="' + CSS.escape(msg.reveal) + '"] li.board[data-host="'
+                                             + CSS.escape(rb.host || '') + '"][data-dir="' + CSS.escape(rb.dir || '') + '"]') : null;
+            if (li) {
+                // 選択するだけ (板は開かない)
+                if (selected) selected.classList.remove('selected');
+                li.classList.add('selected');
+                selected = li;
+                li.scrollIntoView({ block: 'center' });
+            } else {
+                var target = root.querySelector('details.provider[data-provider="' + CSS.escape(msg.reveal) + '"]');
+                if (target) target.scrollIntoView({ block: 'start' });
+            }
+        }
     }
 
     // C# からの setConfig / setPaneSearch / setShortcutBindings 受信
