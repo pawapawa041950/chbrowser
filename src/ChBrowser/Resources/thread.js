@@ -3019,6 +3019,15 @@
                 window.chrome.webview.postMessage({ type: 'imageLoadFailed', url: url });
             }
         }, { once: true });
+        // 読み込めたら、この URL の HEAD 結果を「キャッシュ済み」にする。しきい値超えをクリックで読み込んだ画像が、
+        // レスの描き直し (翻訳 / 原文の切り替え等) で作り直したスロットで「クリックで読み込む」に戻らないように
+        // (鍵は元の URL。非同期展開のスロットは data-src が展開後の URL に変わっているので data-url も見る)。
+        img.addEventListener('load', function () {
+            for (const k of [url, slot.dataset.url]) {
+                const m = k && imageMetaCache.get(k);
+                if (m && !m.noMedia && !m.cached) imageMetaCache.set(k, Object.assign({}, m, { cached: true }));
+            }
+        }, { once: true });
         slot.appendChild(img);
 
         // YouTube サムネイルには赤い再生アイコン + 右上「↗ ブラウザ」バッジを重ねる。

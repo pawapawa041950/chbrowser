@@ -230,9 +230,22 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
         if (!string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
     }
 
-    /// <summary>1 件のスレッドのマーク状態を変更する増分通知を送る (集約タブ対応のため host/dir も指定)。</summary>
+    /// <summary>1 件のスレッドのマーク状態を変更する増分通知を送る (集約タブ対応のため host/dir も指定)。
+    /// <see cref="Items"/> 側の状態も合わせる (行を送り直したとき (スレタイの翻訳の途中経過等) に古い状態へ戻らないように)。</summary>
     public void SetLogMark(string host, string directoryName, string key, LogMarkState state)
-        => LogMarkUpdate = new LogMarkPatch(new[] { new LogMarkChange(host, directoryName, key, state) });
+    {
+        for (var i = 0; i < Items.Count; i++)
+        {
+            var it = Items[i];
+            if (it.Kind != ThreadListItemKind.Thread || it.State == state
+                || it.Host != host || it.DirectoryName != directoryName || it.Info.Key != key) continue;
+            var items = Items.ToArray();
+            items[i] = it with { State = state };
+            Items = items;
+            break;
+        }
+        LogMarkUpdate = new LogMarkPatch(new[] { new LogMarkChange(host, directoryName, key, state) });
+    }
 
     /// <summary>複数行のお気に入り状態をまとめて変更する増分通知 (Phase 18+)。</summary>
     public void SetFavoritedPatch(IReadOnlyList<FavoritedChange> changes)
