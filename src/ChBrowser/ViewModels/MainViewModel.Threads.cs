@@ -236,6 +236,9 @@ public sealed partial class MainViewModel
                 // 仕様: cache load では「自分への返信」検知を走らせない (= 既存スレ内の旧返信は赤化しない)。
                 // 初回 false で OK。次の差分取得が新着 + 返信を含む場合に ApplyFetchDelta が立てる。
                 tab.HasReplyToOwn = false;
+                // 保存済みの投稿者のアイコンはすぐ出す (差分取得を待つと、reddit 等は取得に数秒かかるのでその間アイコンが出ない)。
+                // 新しい投稿者・期限切れの取り直しは取得の後 (finally) で行う
+                _ = LoadAuthorProfilesAsync(tab, fetchStale: false);
             }
             else
             {
@@ -387,7 +390,8 @@ public sealed partial class MainViewModel
     /// 保存済みのものはすぐ送り、無い / 古いものは掲示板に問い合わせて届いたら送る (表示はレスより後から差し込まれる)。
     /// 投稿者は名前で識別し、問い合わせにはアカウント ID を使う (レスの拡張情報か、スレの meta.json の対応表から引く)。
     /// 自動処理扱い (ログインが切れていても窓は出さない) で、失敗しても表示には影響しない。</summary>
-    private async Task LoadAuthorProfilesAsync(ThreadTabViewModel tab)
+    /// <param name="fetchStale">false なら保存済みのものを送るだけで、掲示板には問い合わせない (キャッシュを表示した直後用)。</param>
+    private async Task LoadAuthorProfilesAsync(ThreadTabViewModel tab, bool fetchStale = true)
     {
         var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(tab.Board.Host);
         if (!provider.SupportsAuthorProfiles || tab.Posts.Count == 0) return;
@@ -404,6 +408,7 @@ public sealed partial class MainViewModel
             var cache = AuthorProfileCache;
             tab.AddAuthorProfiles(cache.Get(provider, names.Where(n => !tab.AuthorProfiles.ContainsKey(n))));
 
+            if (!fetchStale) return;
             var stale = cache.Stale(provider, names, DateTimeOffset.UtcNow);
             if (stale.Count == 0) return;
             ChBrowser.Services.Bbs.AuthorProfileFetch fetched;
