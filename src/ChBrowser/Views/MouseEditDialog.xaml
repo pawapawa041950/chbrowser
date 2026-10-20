@@ -31,7 +31,7 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Content="キャンセル"
                             Width="90"
-                            IsCancel="True"
+                            Click="CancelButton_Click"
                             Margin="0,0,8,0" />
                     <Button Content="OK"
                             Width="90"

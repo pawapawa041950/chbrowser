@@ -21,7 +21,6 @@
             <Button Content="OK"
                     Width="84"
                     IsDefault="True"
-                    IsCancel="True"
                     Click="OkButton_Click" />
         </StackPanel>
 

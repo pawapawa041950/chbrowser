@@ -28,6 +28,9 @@ public partial class MouseEditDialog : Window
     private void ClearButton_Click(object sender, RoutedEventArgs e)
         => OperationCombo.SelectedIndex = 0; // (未設定)
 
+    /// <summary>キャンセル (Esc では閉じない。誤って押して入力中の内容を失わないように)。</summary>
+    private void CancelButton_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         NewBinding   = (OperationCombo.SelectedValue as string) ?? "";

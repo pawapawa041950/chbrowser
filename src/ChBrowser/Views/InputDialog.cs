@@ -45,7 +45,8 @@ public static class InputDialog
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         var okBtn     = new Button { Content = "OK",         Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-        var cancelBtn = new Button { Content = "キャンセル", Width = 80, IsCancel = true };
+        // Esc では閉じない (IsCancel を付けない。誤って押して入力中の内容を失わないように)
+        var cancelBtn = new Button { Content = "キャンセル", Width = 80 };
         buttons.Children.Add(okBtn);
         buttons.Children.Add(cancelBtn);
         Grid.SetRow(buttons, 3);
@@ -55,6 +56,7 @@ public static class InputDialog
 
         var confirmed = false;
         okBtn.Click += (_, _) => { confirmed = true; window.Close(); };
+        cancelBtn.Click += (_, _) => window.Close();
 
         // ダイアログ表示前にフォーカスを TextBox に当てる (Loaded 後でないと SelectAll が効かない)
         window.Loaded += (_, _) =>

@@ -197,7 +197,7 @@ public sealed class PostDialog : Window
 
     /// <summary>OK / Cancel の文言を自由に指定できるモーダル確認ダイアログ。
     /// <see cref="MessageBox"/> はボタン文言を変えられないので必要時のみ自前で組む。
-    /// 既定フォーカス / Enter は「キャンセル」(= 誤爆防止)、Esc も「キャンセル」。 </summary>
+    /// 既定フォーカス / Enter は「キャンセル」(= 誤爆防止)。Esc では閉じない。 </summary>
     private static bool ShowConfirmCustom(Window owner, string title, string message,
                                           string okText, string cancelText)
     {
@@ -238,8 +238,7 @@ public sealed class PostDialog : Window
             Content   = cancelText,
             MinWidth  = 120,
             Padding   = new Thickness(8, 4, 8, 4),
-            IsCancel  = true,
-            IsDefault = true, // 既定フォーカス = キャンセル (= Enter 誤爆で別スレに書き込まないように)
+            IsDefault = true, // 既定フォーカス = キャンセル (= Enter 誤爆で別スレに書き込まないように)。Esc では閉じない
         };
 
         var confirmed = false;
@@ -530,7 +529,8 @@ public sealed class PostDialog : Window
         sendBtn.SetBinding(ButtonBase_CommandProxy, new Binding(nameof(PostFormViewModel.SubmitCommand)));
         btnPanel.Children.Add(sendBtn);
 
-        var cancelBtn = new Button { Content = "取消", Width = 90, IsCancel = true };
+        // Esc では閉じない (IsCancel を付けない。誤って押して書きかけの本文を失わないように)
+        var cancelBtn = new Button { Content = "取消", Width = 90 };
         cancelBtn.Click += (_, _) =>
         {
             // モードレス (= DialogResult が使えない) ので Close のみ。WasSubmitted は false のまま
@@ -740,8 +740,7 @@ var ed=document.getElementById('ed');
 function send(o){if(window.chrome&&window.chrome.webview)window.chrome.webview.postMessage(o);}
 ed.addEventListener('input',function(){send({type:'edit',text:ed.value});});
 ed.addEventListener('keydown',function(e){
- if(e.key==='Escape'){e.preventDefault();send({type:'cancel'});}
- else if(e.key==='Tab'){e.preventDefault();var s=ed.selectionStart,en=ed.selectionEnd,v=ed.value;
+ if(e.key==='Tab'){e.preventDefault();var s=ed.selectionStart,en=ed.selectionEnd,v=ed.value;
   ed.value=v.slice(0,s)+'\t'+v.slice(en);ed.selectionStart=ed.selectionEnd=s+1;send({type:'edit',text:ed.value});}
 });
 if(window.chrome&&window.chrome.webview){window.chrome.webview.addEventListener('message',function(ev){
@@ -783,9 +782,6 @@ send({type:'ready'});
                     _editorEcho = true;
                     _vm.Message = text;
                     _editorEcho = false;
-                    break;
-                case "cancel":
-                    if (!_vm.IsBusy) Close();
                     break;
                 case "attach":
                     if (_vm.PostForm.SupportsAttachment) AttachFromEditorMessage(root);

@@ -106,6 +106,9 @@ public partial class GestureEditDialog : Window
         HintText.Visibility = Visibility.Visible;
     }
 
+    /// <summary>キャンセル (Esc では閉じない。誤って押して入力中の内容を失わないように)。</summary>
+    private void CancelButton_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         NewBinding   = _currentGesture;

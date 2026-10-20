@@ -73,7 +73,6 @@
                             Click="SaveButton_Click" />
                     <Button Content="閉じる"
                             Width="90"
-                            IsCancel="True"
                             Click="CloseButton_Click" />
                 </StackPanel>
             </DockPanel>

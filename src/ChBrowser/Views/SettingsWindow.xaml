@@ -106,7 +106,6 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="閉じる"
                         Width="90"
-                        IsCancel="True"
                         Click="CloseButton_Click" />
             </StackPanel>
         </Border>

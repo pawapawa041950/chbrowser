@@ -98,6 +98,9 @@ public partial class BoardPickerWindow : Window
 
     private void ResultList_MouseDoubleClick(object sender, MouseButtonEventArgs e) => Commit();
 
+    /// <summary>キャンセル (Esc では閉じない。誤って押して入力中の内容を失わないように)。</summary>
+    private void CancelButton_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
     private void OkButton_Click(object sender, RoutedEventArgs e) => Commit();
 
     private void Commit()

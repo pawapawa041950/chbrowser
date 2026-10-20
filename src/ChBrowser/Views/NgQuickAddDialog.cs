@@ -95,7 +95,9 @@ public sealed class NgQuickAddDialog : Window
         };
         var ok = new Button { Content = "登録", Width = 90, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
         ok.Click += (_, _) => OnOk();
-        var cancel = new Button { Content = "取消", Width = 90, IsCancel = true };
+        // Esc では閉じない (IsCancel を付けない。誤って押して入力中の内容を失わないように)
+        var cancel = new Button { Content = "取消", Width = 90 };
+        cancel.Click += (_, _) => Close();
         btnPanel.Children.Add(ok);
         btnPanel.Children.Add(cancel);
         Grid.SetRow(btnPanel, 6);
