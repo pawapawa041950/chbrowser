@@ -11,8 +11,14 @@ using ChBrowser.Services.Storage;
 
 namespace ChBrowser.Services.Api;
 
-/// <summary>dat 取得結果 (パース済みレス + dat 全体のバイト長)。</summary>
-public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize);
+/// <summary>dat 取得結果 (パース済みレス + dat 全体のバイト長)。<see cref="Dropped"/> = スレが dat 落ちしていた
+/// (5ch: dat が 404 で、過去ログ (read.cgi) から読み直せた場合。読み直せなかったときは 404 の例外になる)。</summary>
+public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize, bool Dropped = false)
+{
+    /// <summary>取得の失敗が「スレが無い (dat 落ち / スレ落ち)」によるものか (各掲示板とも 404 の <see cref="System.Net.Http.HttpRequestException"/> で表す)。</summary>
+    public static bool IsDroppedError(System.Exception ex)
+        => ex is System.Net.Http.HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound };
+}
 
 /// <summary>
 /// スレ本文 (dat 相当) の取得・保存・パース。
@@ -97,6 +103,7 @@ public sealed class DatClient
 
         var allPosts = new List<Post>();
         long finalSize;
+        var dropped = false;
 
         switch ((int)resp.StatusCode)
         {
@@ -162,6 +169,7 @@ public sealed class DatClient
                     allPosts.AddRange(posts);
                     if (posts.Count > 0) progress.Report(posts);
                     finalSize = fallbackBytes.LongLength;
+                    dropped   = true;   // 読めたが dat 落ち (過去ログ) のスレ
                     break;
                 }
             default:
@@ -170,7 +178,7 @@ public sealed class DatClient
                 break;
         }
 
-        return new DatFetchResult(allPosts, finalSize);
+        return new DatFetchResult(allPosts, finalSize, dropped);
     }
 
     /// <summary>dat 404 時のフォールバック: <c>read.cgi</c> から HTML を取得して

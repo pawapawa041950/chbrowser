@@ -271,9 +271,11 @@ public sealed partial class MainViewModel
 
             // 最終状態は ComputeMarkState で算定 (= Dropped > RepliedToOwn > Cached の優先順)。
             // tab.HasReplyToOwn は ApplyFetchDelta が直前にセット済 (= delta scan の結果)。
-            var finalState = ComputeMarkState(tab, stateHint);
+            // 取得できても dat 落ち (5ch の過去ログ) なら dat 落ちにする
+            var finalState = ComputeMarkState(tab, result.Dropped ? LogMarkState.Dropped : stateHint);
             NotifyThreadListLogMark(board, info.Key, finalState);
             tab.State = finalState;
+            if (result.Dropped) tab.StatusMessage += DroppedNote;
             AppendThreadNotice(tab);
         }
         catch (System.Net.Http.HttpRequestException hex)
@@ -304,8 +306,19 @@ public sealed partial class MainViewModel
             // ローカル dat が表示できていれば、タイトル/状態色は維持して状況だけステータス通知。
             if (tab.Posts.Count > 0)
             {
-                tab.State         = stateHint ?? LogMarkState.Dropped;
-                tab.StatusMessage = $"{info.Title}: 取得失敗 (キャッシュ表示中) — {ex.Message}";
+                if (DatFetchResult.IsDroppedError(ex))
+                {
+                    // スレが無い (dat 落ち / スレ落ち): タブとスレ一覧の状態を dat 落ちにする
+                    tab.State = LogMarkState.Dropped;
+                    NotifyThreadListLogMark(board, info.Key, LogMarkState.Dropped);
+                    tab.StatusMessage = $"{info.Title}: キャッシュ表示中{DroppedNote}";
+                }
+                else
+                {
+                    // 通信の失敗等は dat 落ちとは限らないので、状態は変えない (一覧で dat 落ちと分かっていればそのまま)
+                    tab.State         = stateHint ?? LogMarkState.Cached;
+                    tab.StatusMessage = $"{info.Title}: 取得失敗 (キャッシュ表示中) — {ex.Message}";
+                }
             }
             else
             {
@@ -345,11 +358,19 @@ public sealed partial class MainViewModel
             tab.FetchedPostCount = result.Posts.Count;
 
             // 最終状態算定: HasReplyToOwn は ApplyFetchDelta の delta scan で直前に決まっているので
-            // ここではそれを ComputeMarkState で集約するだけ。Refresh 経路は stateHint なしなので Dropped 評価しない。
-            var finalState = ComputeMarkState(tab, stateHint: null);
+            // ここではそれを ComputeMarkState で集約するだけ。取得できても dat 落ち (5ch の過去ログ) なら dat 落ち。
+            var finalState = ComputeMarkState(tab, result.Dropped ? LogMarkState.Dropped : null);
             NotifyThreadListLogMark(tab.Board, tab.ThreadKey, finalState);
             tab.State = finalState;
+            if (result.Dropped) tab.StatusMessage += DroppedNote;
             AppendThreadNotice(tab);
+        }
+        catch (Exception ex) when (DatFetchResult.IsDroppedError(ex))
+        {
+            // スレが無い (dat 落ち / スレ落ち): タブとスレ一覧の状態を dat 落ちにする
+            tab.State = LogMarkState.Dropped;
+            NotifyThreadListLogMark(tab.Board, tab.ThreadKey, LogMarkState.Dropped);
+            tab.StatusMessage = $"{tab.Header}{DroppedNote}";
         }
         catch (Exception ex)
         {
@@ -372,6 +393,9 @@ public sealed partial class MainViewModel
         if (meta?.Notice is { Length: > 0 } notice)
             tab.StatusMessage = $"{tab.StatusMessage} — {notice}";
     }
+
+    /// <summary>状態表示に添える dat 落ちの知らせ。</summary>
+    private const string DroppedNote = " — dat 落ち (このスレはもう更新されません)";
 
     private const string TruncatedNote = " — 続きあり (未取得のレスがあります。もう一度更新すると続きを取得します)";
 

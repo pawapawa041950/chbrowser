@@ -415,7 +415,8 @@ public sealed partial class MainViewModel
     // ---- お気に入りチェック ----
 
     /// <summary>「お気に入りチェック」: お気に入り登録スレの subject.txt を確認し、
-    /// 新着があるスレを新規タブで開く (subject.txt から消えた = 落ちたスレは除外)。
+    /// 新着があるスレを新規タブで開く。dat 落ちしたスレ (一覧が全スレを載せる掲示板で一覧から消えた / 取得で 404) は、
+    /// 保存済みのログを「dat 落ち」の状態でタブに出す (お気に入りから外す判断ができるように)。
     /// subject.txt 取得 / dat 取得の通信本数は合算で <see cref="AppConfig.BatchConcurrency"/> までに制限する。</summary>
     public async Task CheckFavoritesAsync()
     {
@@ -450,6 +451,7 @@ public sealed partial class MainViewModel
 
         // ---- subject.txt を並列取得 ----
         var subjects    = new ConcurrentDictionary<(string, string), IReadOnlyList<ThreadInfo>>();
+        var subjectOk   = new ConcurrentDictionary<(string, string), bool>();   // 一覧を取得できた板 (失敗した板では dat 落ちと決めつけない)
         var totalBoards = resolved.Count;
         var subjDone    = 0;
 
@@ -463,7 +465,8 @@ public sealed partial class MainViewModel
                 try
                 {
                     var infos = await _subjectClient.FetchAndSaveAsync(kv.Value).ConfigureAwait(false);
-                    subjects[kv.Key] = infos;
+                    subjects[kv.Key]  = infos;
+                    subjectOk[kv.Key] = true;
                 }
                 catch (Exception ex)
                 {
@@ -484,8 +487,9 @@ public sealed partial class MainViewModel
         }).ToList();
         await Task.WhenAll(subjectTasks).ConfigureAwait(true);
 
-        // ---- 新着判定。落ちたスレはスキップ。 ----
-        var toOpen = new List<(Board board, ThreadInfo info)>();
+        // ---- 新着判定。落ちたスレは dat 落ちとして別に集める。 ----
+        var toOpen    = new List<(Board board, ThreadInfo info)>();
+        var toDropped = new List<(Board board, ThreadInfo info)>();
         foreach (var ft in threads)
         {
             var key = (ft.Host, ft.DirectoryName);
@@ -493,7 +497,15 @@ public sealed partial class MainViewModel
             if (!resolved.TryGetValue(key, out var board)) continue;
 
             var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
-            if (info is null) continue; // 落ちた → 除外
+            if (info is null)
+            {
+                // 一覧から消えた: 一覧が全スレを載せる掲示板 (5ch 等) で、一覧を取得できていれば dat 落ち。
+                // 一覧が一部だけの掲示板 (reddit) では「一覧に無い」は落ちたことを意味しないので何もしない
+                if (subjectOk.ContainsKey(key)
+                    && ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadListIsComplete)
+                    toDropped.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
+                continue;
+            }
 
             // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
             // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
@@ -504,7 +516,8 @@ public sealed partial class MainViewModel
 
         if (toOpen.Count == 0)
         {
-            StatusMessage = "お気に入りチェック完了: 新着なし";
+            var droppedOnly = await OpenDroppedFavoritesAsync(toDropped).ConfigureAwait(true);
+            StatusMessage = "お気に入りチェック完了: 新着なし" + DroppedSummary(droppedOnly);
             return;
         }
 
@@ -544,12 +557,39 @@ public sealed partial class MainViewModel
             i++;
             StatusMessage = $"お気に入りチェック: 更新スレ取得 {i}/{totalUpdate} (完了 {datDone}/{totalUpdate})";
             var (board, info, result, error) = await t.ConfigureAwait(true);
-            if (result is null) continue;
+            if (result is null)
+            {
+                // 取得で「スレが無い」(404) と分かった: dat 落ちとして出す
+                if (error is not null && DatFetchResult.IsDroppedError(error)) toDropped.Add((board, info));
+                continue;
+            }
             try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
             catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
         }
 
-        StatusMessage = $"お気に入りチェック完了: 更新 {toOpen.Count} 件";
+        var droppedCount = await OpenDroppedFavoritesAsync(toDropped).ConfigureAwait(true);
+        StatusMessage = $"お気に入りチェック完了: 更新 {toOpen.Count} 件" + DroppedSummary(droppedCount);
+    }
+
+    private static string DroppedSummary(int count) => count > 0 ? $"、dat 落ち {count} 件" : "";
+
+    /// <summary>お気に入りチェックで dat 落ちと分かったスレを、保存済みのログで「dat 落ち」の状態のタブとして出す (通信はしない)。
+    /// 開いているタブなら状態だけ変える。ログが無いスレは出せないので数えない。戻り値: 出した件数。</summary>
+    private async Task<int> OpenDroppedFavoritesAsync(IReadOnlyList<(Board board, ThreadInfo info)> dropped)
+    {
+        var count = 0;
+        foreach (var (board, info) in dropped)
+        {
+            try
+            {
+                var local = await _datClient.LoadFromDiskAsync(board, info.Key).ConfigureAwait(true);
+                if (local is null || local.Posts.Count == 0) continue;
+                await OpenThreadFromPrefetchedAsync(board, info, local, activate: false, dropped: true).ConfigureAwait(true);
+                count++;
+            }
+            catch (Exception ex) { Debug.WriteLine($"[Favorites] open dropped failed: {ex.Message}"); }
+        }
+        return count;
     }
 
     /// <summary>事前に取得済みの <see cref="DatFetchResult"/> からスレタブを作成 / 既存タブに反映する。
@@ -562,8 +602,11 @@ public sealed partial class MainViewModel
     /// <see cref="System.Threading.Tasks.Task.Yield"/> で 1 cycle 譲ると、Add → materialize → binding 確立まで
     /// 進んでから append が走るので問題なく両方届く。
     /// 既存タブブランチは tab が既に bound 済なので race にならない (= 同期処理で十分)。 </summary>
-    private async Task OpenThreadFromPrefetchedAsync(Board board, ThreadInfo info, DatFetchResult result, bool activate = true)
+    /// <param name="dropped">dat 落ちと分かっているスレ (お気に入りチェックで一覧から消えていた)。状態を「dat 落ち」にする。
+    /// <paramref name="result"/> が dat 落ち (<see cref="DatFetchResult.Dropped"/>) でも同じ。</param>
+    private async Task OpenThreadFromPrefetchedAsync(Board board, ThreadInfo info, DatFetchResult result, bool activate = true, bool dropped = false)
     {
+        dropped |= result.Dropped;
         // 既存タブがあれば差分を append して終わり
         var existing = FindThreadTab(board, info.Key);
         if (existing is not null)
@@ -587,10 +630,11 @@ public sealed partial class MainViewModel
             existing.DatSize = result.DatSize;
             SaveFetchedPostCount(board, info.Key, result.Posts.Count, listedPostCount: info.PostCount);
             existing.FetchedPostCount = result.Posts.Count;
-            // 最終状態を ComputeMarkState で算定 (= HasReplyToOwn が true なら RepliedToOwn、それ以外は Cached)。
-            var finalState = ComputeMarkState(existing, stateHint: null);
+            // 最終状態を ComputeMarkState で算定 (= dat 落ち > HasReplyToOwn が true なら RepliedToOwn > Cached)。
+            var finalState = ComputeMarkState(existing, dropped ? LogMarkState.Dropped : null);
             NotifyThreadListLogMark(board, info.Key, finalState);
             existing.State = finalState;
+            if (dropped) existing.StatusMessage = $"{existing.Header}{DroppedNote}";
             UpdateTruncatedNote(existing);   // 取り切れなかったら「続きあり」(reddit)
             if (existing.IsTranslationOn) _ = TranslateMissingAsync(existing);   // スレ全体の翻訳が ON なら新着も訳す
             return;
@@ -670,9 +714,10 @@ public sealed partial class MainViewModel
         SaveFetchedPostCount(board, info.Key, result.Posts.Count, listedPostCount: info.PostCount);
         tab.FetchedPostCount = result.Posts.Count;
 
-        var newTabState = ComputeMarkState(tab, stateHint: null);
+        var newTabState = ComputeMarkState(tab, dropped ? LogMarkState.Dropped : null);
         NotifyThreadListLogMark(board, info.Key, newTabState);
         tab.State = newTabState;
+        if (dropped) tab.StatusMessage = $"{info.Title}{DroppedNote}";
         if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);   // スレ全体の翻訳が ON (保存済みの設定) なら未訳のレスを訳す
     }
 }
