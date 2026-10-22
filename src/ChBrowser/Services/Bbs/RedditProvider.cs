@@ -214,6 +214,153 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return ParseSubredditListing(bytes);
     }
 
+    // ---- 板一覧ペインの一覧 (ホット / おすすめ) ----
+
+    /// <summary>r/popular (全体のホットな投稿)、人気の subreddit、ログイン中のホーム (おすすめ = best)。どれもログインセッション経由。</summary>
+    public IReadOnlyList<ProviderListing> Listings { get; } = new[]
+    {
+        new ProviderListing("hot",       "🔥 ホットなスレッド"),
+        new ProviderListing("hotBoards", "🔥 ホットな板"),
+        new ProviderListing("forYou",    "✨ あなたへのおすすめ"),
+    };
+
+    public async Task<ProviderListingResult> FetchListingAsync(HttpClient http, string listingId, CancellationToken ct,
+                                                               IProgress<ProviderListingResult>? progress = null)
+    {
+        // おすすめは HTML から読む: JSON の best / トップページは「購読している subreddit の投稿」で、購読が無いと空
+        // (2026-10-22 ユーザ環境で確認)。ブラウザのホームに出る「おすすめ」は HTML (<shreddit-post>) にしか無い
+        if (listingId == "forYou") return ProviderListingResult.OfThreads(await FetchHomeFeedHtmlAsync(http, ct, progress).ConfigureAwait(false));
+
+        var url = listingId switch
+        {
+            "hot"       => $"{Origin}/r/popular/hot.json?limit=100&raw_json=1",
+            "hotBoards" => $"{Origin}/subreddits/popular.json?limit=100&raw_json=1",
+            _           => throw new NotSupportedException($"reddit には一覧「{listingId}」がありません。"),
+        };
+        var (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
+        if (listingId == "hotBoards")
+        {
+            var boards = ParseSubredditListing(bytes);
+            LogListing(listingId, url, bytes, boards.Count);
+            return ProviderListingResult.OfBoards(boards);
+        }
+        var threads = ParseCrossBoardListing(bytes);
+        LogListing(listingId, url, bytes, threads.Count);
+        return ProviderListingResult.OfThreads(threads);
+    }
+
+    /// <summary>ホームの「おすすめ」を HTML から読む: トップページ (/) の <c>&lt;shreddit-post&gt;</c> と、スクロールで読み込まれる続き
+    /// (<c>/svc/shreddit/feeds/home-feed?…</c>、ページ内の <c>src</c> に書かれている) を数ページたどる。
+    /// 1 ページは約 1MB・要求の間隔は 1 秒以上なので全部で 10 秒ほどかかる。ページを読むたびに取れた分を <paramref name="progress"/> で知らせる。</summary>
+    private async Task<IReadOnlyList<ListedThread>> FetchHomeFeedHtmlAsync(HttpClient http, CancellationToken ct,
+                                                                           IProgress<ProviderListingResult>? progress)
+    {
+        const int MaxPages = 5, Want = 100;
+        var list = new List<ListedThread>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? next = $"{Origin}/";
+        for (var page = 0; page < MaxPages && next is not null && list.Count < Want; page++)
+        {
+            var (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
+            var html  = System.Text.Encoding.UTF8.GetString(bytes);
+            var before = list.Count;
+            var tags  = ParseShredditPosts(html, list, seen);
+            var m = HomeFeedNextRegex.Match(html);
+            var nextUrl = m.Success ? Origin + System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[reddit listing] forYou (HTML): {next} → {bytes.Length} bytes, shreddit-post={tags}, 一覧に足した件数={list.Count - before}, 続き={(nextUrl is null ? "なし" : nextUrl)}");
+            next = nextUrl is not null && nextUrl != next ? nextUrl : null;
+            if (next is not null && list.Count < Want && list.Count > before)
+                progress?.Report(ProviderListingResult.OfThreads(list.ToArray()));   // 続きがあるときだけ (最後は戻り値で渡す)
+        }
+        return list;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ShredditPostRegex =
+        new(@"<shreddit-post\b[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex HtmlAttrRegex =
+        new(@"(?<name>[\w-]+)=""(?<val>[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex NsfwAttrRegex =
+        new(@"\snsfw(?=[\s>=/])", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex HomeFeedNextRegex =
+        new(@"src=""(?<src>/svc/shreddit/feeds/home-feed[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex PermalinkRegex =
+        new(@"^/r/(?<sub>[A-Za-z0-9_]+)/comments/(?<id>[a-z0-9]+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>HTML の <c>&lt;shreddit-post&gt;</c> 要素 (属性 permalink / post-title / comment-count / score / created-timestamp) → 板付きのスレ。
+    /// 戻り値: 見つけた要素の数 (広告等で使えないものも含む)。</summary>
+    public int ParseShredditPosts(string html, List<ListedThread> list, HashSet<string> seen)
+    {
+        var found = 0;
+        foreach (System.Text.RegularExpressions.Match tag in ShredditPostRegex.Matches(html))
+        {
+            found++;
+            var attrs = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match a in HtmlAttrRegex.Matches(tag.Value))
+                attrs[a.Groups["name"].Value] = System.Net.WebUtility.HtmlDecode(a.Groups["val"].Value);
+            if (!attrs.TryGetValue("permalink", out var permalink)) continue;
+            var pm = PermalinkRegex.Match(permalink);
+            if (!pm.Success) continue;                                  // ユーザーページの投稿・広告等
+            var id = pm.Groups["id"].Value;
+            if (!seen.Add(id)) continue;
+            var sub = pm.Groups["sub"].Value;
+            var title = (attrs.GetValueOrDefault("post-title") ?? "").Replace('\n', ' ').Trim();
+            if (attrs.ContainsKey("nsfw") || NsfwAttrRegex.IsMatch(tag.Value)) title = "[NSFW] " + title;   // 値の無い属性 (nsfw) もある
+            long? created = DateTimeOffset.TryParse(attrs.GetValueOrDefault("created-timestamp"), CultureInfo.InvariantCulture,
+                                                    DateTimeStyles.AssumeUniversal, out var ts) ? ts.ToUnixTimeSeconds() : null;
+            var comments = int.TryParse(attrs.GetValueOrDefault("comment-count"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var cc) ? cc : 0;
+            long? score  = long.TryParse(attrs.GetValueOrDefault("score"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sc) ? sc : null;
+            var dir = sub.ToLowerInvariant();
+            list.Add(new ListedThread(new Board(dir, "r/" + sub, BoardUrl(CanonicalHost, dir), "", 0),
+                new ThreadInfo(id, title, comments + 1, list.Count + 1, created, score)));
+        }
+        return found;
+    }
+
+    /// <summary>一覧の取得結果をログペインに出す (件数が合わないときの調査用)。応答の形 (Listing か / 子の種類と数 / 先頭) を出す。</summary>
+    private static void LogListing(string listingId, string url, byte[] bytes, int parsed)
+    {
+        var info = "";
+        if (TryParse(bytes, out var doc))
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("data", out var data)
+                    && data.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
+                {
+                    var kinds = children.EnumerateArray().GroupBy(c => Str(c, "kind") ?? "?").Select(g => $"{g.Key}×{g.Count()}");
+                    info = $"kind={Str(root, "kind")} children={children.GetArrayLength()} ({string.Join(", ", kinds)})";
+                }
+                else info = $"Listing ではない ({root.ValueKind}{(root.ValueKind == JsonValueKind.Object ? ": " + string.Join(",", root.EnumerateObject().Select(pr => pr.Name).Take(8)) : "")})";
+            }
+        else info = "JSON ではない";
+        var head = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 160)).Replace('\n', ' ').Replace('\r', ' ');
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[reddit listing] {listingId}: {url} → {bytes.Length} bytes, {info}, 一覧に出した件数={parsed} | 先頭: {head}");
+    }
+
+    /// <summary>いろいろな subreddit の投稿が混ざった Listing (t3) → 板付きのスレ。スレの中身は <see cref="ParseThreadListPage"/> と同じ。</summary>
+    public IReadOnlyList<ListedThread> ParseCrossBoardListing(byte[] bytes)
+    {
+        var page = ParseThreadListPage(bytes);
+        var subById = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (TryParse(bytes, out var doc))
+            using (doc)
+                if (doc.RootElement.TryGetProperty("data", out var data)
+                    && data.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
+                    foreach (var c in children.EnumerateArray())
+                        if (c.TryGetProperty("data", out var d) && Str(d, "id") is { Length: > 0 } id && Str(d, "subreddit") is { Length: > 0 } sub)
+                            subById[id] = sub;
+        var list = new List<ListedThread>(page.Items.Count);
+        foreach (var t in page.Items)
+        {
+            if (!subById.TryGetValue(t.Key, out var sub) || sub.StartsWith("u_", StringComparison.Ordinal)) continue;   // ユーザーページの投稿は除く
+            var dir = sub.ToLowerInvariant();
+            list.Add(new ListedThread(new Board(dir, "r/" + sub, BoardUrl(CanonicalHost, dir), "", 0), t with { Order = list.Count + 1 }));
+        }
+        return list;
+    }
+
     /// <summary>t5 (subreddit) の Listing → 検索結果。</summary>
     public IReadOnlyList<BoardSearchHit> ParseSubredditListing(byte[] bytes)
     {

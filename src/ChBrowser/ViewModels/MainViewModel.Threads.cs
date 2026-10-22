@@ -1532,12 +1532,37 @@ public sealed partial class MainViewModel
     /// <paramref name="activate"/>=false で呼ぶと SelectedThreadTab を切り替えない (= お気に入り一括オープン用)。
     /// <paramref name="listedPostCount"/> はスレ一覧に載っていたレス数 (分からなければ 0)。取得後に記録して、次に一覧を更新したときの
     /// 新着判定の基準にする (reddit 等は一覧の数が取得できるレス数より多いので、これが無いと毎回「更新あり」になる)。</summary>
-    public Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null, bool activate = true,
-                                        int listedPostCount = 0)
+    public async Task OpenThreadFromListAsync(string host, string directoryName, string key, string title, LogMarkState? stateHint = null, bool activate = true,
+                                              int listedPostCount = 0)
     {
+        // 5ch のヘッドライン (勢いランキング等) のスレは「つづきはこちら」と元スレへのリンクだけなので、元スレを開く
+        if (activate && string.Equals(host, ChBrowser.Services.Bbs.FiveChProvider.HeadlineHost, StringComparison.OrdinalIgnoreCase)
+            && await ResolveHeadlineTargetAsync(host, directoryName, key).ConfigureAwait(true) is { } target)
+        {
+            await NavigateAddressBarAsync(target).ConfigureAwait(true);
+            return;
+        }
         var board = ResolveBoard(host, directoryName, "");
         var info  = new ThreadInfo(key, title, listedPostCount, 0); // PostCount = 一覧のレス数 (新着判定の基準として記録する)。Order は使わない
-        return OpenThreadAsync(board, info, stateHint, activate);
+        await OpenThreadAsync(board, info, stateHint, activate).ConfigureAwait(true);
+    }
+
+    /// <summary>ヘッドラインのスレの dat (数百バイト) を読んで元スレの URL を返す。読めない / 書かれていなければ null (そのままヘッドラインのスレを開く)。
+    /// ログには残さない (保存しない)。</summary>
+    private async Task<string?> ResolveHeadlineTargetAsync(string host, string directoryName, string key)
+    {
+        try
+        {
+            var url   = $"https://{host}/{directoryName}/dat/{key}.dat";
+            var bytes = await _subjectClient.Http.GetByteArrayAsync(url).ConfigureAwait(true);
+            var text  = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(host).TextEncoding.GetString(bytes);
+            return ChBrowser.Services.Bbs.FiveChProvider.ExtractHeadlineTarget(text);
+        }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or TaskCanceledException)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[headline] {host}/{directoryName}/{key}: 元スレを引けません ({ex.Message})");
+            return null;
+        }
     }
 
     /// <summary>(host, dir, key) で開いている ThreadTab を引く。なければ null。</summary>

@@ -100,6 +100,88 @@ public sealed class ShitarabaProvider : IBbsProvider
         return hits;
     }
 
+    // -----------------------------------------------------------------
+    // 板一覧ペインの一覧 (ポータルのトップページの「掲示板ランキング」「注目スレッド」)
+    // -----------------------------------------------------------------
+
+    /// <summary>ポータルのトップ (UTF-8 HTML。jbbs.shitaraba.net/ はここへ転送される)。</summary>
+    public const string PortalUrl = "https://rentalbbs.shitaraba.com/";
+
+    public IReadOnlyList<ProviderListing> Listings { get; } = new[]
+    {
+        new ProviderListing("hot",       "🔥 ホットなスレッド"),
+        new ProviderListing("hotBoards", "🔥 ホットな板"),
+    };
+
+    public async System.Threading.Tasks.Task<ProviderListingResult> FetchListingAsync(
+        System.Net.Http.HttpClient http, string listingId, System.Threading.CancellationToken ct,
+        IProgress<ProviderListingResult>? progress = null)
+    {
+        if (listingId is not ("hot" or "hotBoards")) throw new NotSupportedException($"したらばには一覧「{listingId}」がありません。");
+        using var resp = await http.GetAsync(PortalUrl, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        var html = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        return listingId == "hotBoards"
+            ? ProviderListingResult.OfBoards(ParseRankingBoards(html))
+            : ProviderListingResult.OfThreads(ParseHotThreads(html));
+    }
+
+    // 掲示板ランキング: <h1 class="title-ranking"> から「注目スレッド」の見出しまでの、各板の <h2><a href="…/cat/num/">板名</a></h2><p>説明</p>
+    private static readonly Regex RankingBoardRegex = new(
+        @"<h2>\s*<a href=""https?://jbbs\.shitaraba\.net/(?<cat>[a-z]+)/(?<num>[0-9]+)/?""[^>]*>(?<name>[^<]*)</a>\s*</h2>\s*(?:<p>(?<desc>[\s\S]*?)</p>)?",
+        RegexOptions.Compiled);
+    // 注目スレッド: <a href="…/bbs/read.cgi/cat/num/key/l50"><strong>N.</strong> スレタイ</a>
+    private static readonly Regex HotThreadRegex = new(
+        @"<a href=""https?://jbbs\.shitaraba\.net/bbs/read\.cgi/(?<cat>[a-z]+)/(?<num>[0-9]+)/(?<key>[0-9]+)/[^""]*""[^>]*>\s*<strong>[0-9]+\.</strong>\s*(?<title>[\s\S]*?)</a>",
+        RegexOptions.Compiled);
+
+    /// <summary>トップページの「掲示板ランキング」(全般) の板。</summary>
+    public IReadOnlyList<BoardSearchHit> ParseRankingBoards(string html)
+    {
+        var start = html.IndexOf("title-ranking", StringComparison.Ordinal);
+        var end   = html.IndexOf("注目スレッド", start < 0 ? 0 : start, StringComparison.Ordinal);
+        if (start < 0) return Array.Empty<BoardSearchHit>();
+        var section = html[start..(end > start ? end : html.Length)];
+        var list = new List<BoardSearchHit>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match m in RankingBoardRegex.Matches(section))
+        {
+            var dir = m.Groups["cat"].Value + "/" + m.Groups["num"].Value;
+            if (!seen.Add(dir)) continue;
+            var name = System.Net.WebUtility.HtmlDecode(m.Groups["name"].Value).Trim();
+            var desc = System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups["desc"].Value, "<[^>]+>", "")).Trim();
+            list.Add(new BoardSearchHit(new Board(dir, name.Length > 0 ? name : dir, BoardUrl(CanonicalHost, dir), "", 0), desc));
+        }
+        return list;
+    }
+
+    /// <summary>トップページの「注目スレッド」(アクセス数順)。板名はページ内の板のリンクから引く (無ければディレクトリ名)。</summary>
+    public IReadOnlyList<ListedThread> ParseHotThreads(string html)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match m in RankingBoardRegex.Matches(html))
+            names.TryAdd(m.Groups["cat"].Value + "/" + m.Groups["num"].Value, System.Net.WebUtility.HtmlDecode(m.Groups["name"].Value).Trim());
+
+        var start = html.IndexOf("id=\"sort-accsess\"", StringComparison.Ordinal);
+        if (start < 0) start = html.IndexOf("注目スレッド", StringComparison.Ordinal);
+        if (start < 0) return Array.Empty<ListedThread>();
+        var end = html.IndexOf("</ol>", start, StringComparison.Ordinal);
+        var section = html[start..(end > start ? end : html.Length)];
+        var list = new List<ListedThread>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match m in HotThreadRegex.Matches(section))
+        {
+            var dir = m.Groups["cat"].Value + "/" + m.Groups["num"].Value;
+            var key = m.Groups["key"].Value;
+            if (!seen.Add(dir + "/" + key)) continue;
+            var title = System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups["title"].Value, "<[^>]+>", "")).Trim();
+            var boardName = names.TryGetValue(dir, out var n) && n.Length > 0 ? n : dir;
+            list.Add(new ListedThread(new Board(dir, boardName, BoardUrl(CanonicalHost, dir), "", 0),
+                                      new ThreadInfo(key, title, 0, list.Count + 1)));
+        }
+        return list;
+    }
+
     /// <summary>検索結果ページ (UTF-8 HTML) から板を取り出す。</summary>
     public IReadOnlyList<BoardSearchHit> ParseSearchResults(string html)
     {

@@ -14,7 +14,8 @@
 //   { type: 'setBoardTree', full: bool, providers: [...], reveal? } — 中身。full なら全体を作り直し、そうでなければ該当掲示板のノードだけ差し替え。
 //       reveal (掲示板 id) があれば、そのノードを見える位置までスクロールする (スレ一覧ペインの見出しの掲示板名をクリックしたとき)。
 //       revealBoard { host, dir } があれば、その板を選択して真ん中あたりまでスクロールする (カテゴリは C# が開いた状態で送ってくる)
-//       provider: { id, name, expanded, hasBoardList, supportsSearch, boardCount, emptyMessage, categories: [{ name, expanded, boards: [{ host, dir, name }] }] }
+//       provider: { id, name, expanded, hasBoardList, supportsSearch, boardCount, emptyMessage, categories: [{ name, expanded, boards: [{ host, dir, name }] }],
+//                   listings: [{ id, name }] }  — listings は掲示板の公式の一覧 (ホットなスレッド等)。押すと providerAction (action = 'listing:<id>')
 //   { type: 'setConfig', openOnSingleClick: bool }         — Phase 11b: クリック動作の設定
 //   { type: 'setShortcutBindings', bindings: {...} }        — Phase 16
 
@@ -91,12 +92,20 @@
               + '<summary class="provider-name">' + esc(pv.name)
               + (typeof pv.boardCount === 'number' ? ' <span class="provider-count">' + pv.boardCount + '</span>' : '')
               + '</summary>';
+        // 掲示板の公式の一覧 (ホットなスレッド / ホットな板 / おすすめ) と、板一覧を持たない掲示板 (したらば / reddit) の「検索」「表示済み板」。
+        // li.board と同じ見た目で、provider-action で見分ける
+        var acts = '';
+        var listings = pv.listings || [];
+        for (var li = 0; li < listings.length; li++)
+            acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="listing:' + esc(listings[li].id) + '">' + esc(listings[li].name) + '</li>';
         if (!pv.hasBoardList) {
-            // 板一覧を持たない掲示板 (したらば / reddit): 「検索」と「表示済み板」。li.board と同じ見た目で、provider-action で見分ける
-            h += '<ul class="boards provider-actions">';
             if (pv.supportsSearch)
-                h += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="search">\u{1F50D} 検索</li>';
-            h += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="shown">\u{1F4C1} 表示済み板</li></ul>';
+                acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="search">\u{1F50D} 検索</li>';
+            acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="shown">\u{1F4C1} 表示済み板</li>';
+        }
+        if (acts) h += '<ul class="boards provider-actions">' + acts + '</ul>';
+        if (!pv.hasBoardList) {
+            // 板一覧を持たない掲示板は上の項目だけ
         } else if (pv.emptyMessage) {
             h += '<div class="provider-empty">' + esc(pv.emptyMessage) + '</div>';
         } else {

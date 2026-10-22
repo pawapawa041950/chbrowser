@@ -13,8 +13,9 @@ namespace ChBrowser.ViewModels;
 /// タブは (提供者, 種類[, キーワード]) ごとに 1 枚で、タブの「更新」で検索し直す / 走査し直す。</summary>
 public sealed partial class MainViewModel
 {
-    /// <summary>板の行を並べるタブ (検索結果 / 表示済み板) の中身の作り方。タブ ID → 生成関数。</summary>
-    private readonly Dictionary<Guid, Func<Task<(List<ThreadListItem> Items, string Status)>>> _boardRowTabSources = new();
+    /// <summary>板の行を並べるタブ (検索結果 / 表示済み板 / 掲示板の一覧) の中身の作り方。タブ ID → 生成関数。
+    /// 生成関数にはタブが渡る (届いた分から表示する一覧は、取得の途中でタブの行を差し替える)。</summary>
+    private readonly Dictionary<Guid, Func<ThreadListTabViewModel, Task<(List<ThreadListItem> Items, string Status)>>> _boardRowTabSources = new();
 
     /// <summary>提供者ごとの直近の検索キーワード (ダイアログの初期値)。</summary>
     private readonly Dictionary<string, string> _lastBoardSearch = new(StringComparer.Ordinal);
@@ -39,7 +40,69 @@ public sealed partial class MainViewModel
             case "shown":
                 await OpenShownBoardsTabAsync(provider).ConfigureAwait(true);
                 break;
+            default:
+                // 掲示板が公式に出している一覧 (ホットなスレッド / ホットな板 / おすすめ)。action = "listing:<id>"
+                if (action.StartsWith("listing:", StringComparison.Ordinal)
+                    && provider.Listings.FirstOrDefault(l => l.Id == action["listing:".Length..]) is { } listing)
+                    await OpenListingTabAsync(provider, listing).ConfigureAwait(true);
+                break;
         }
+    }
+
+    /// <summary>掲示板の一覧 (<see cref="IBbsProvider.Listings"/>) のタブを開く。板の一覧なら板の行、スレの一覧ならいろいろな板のスレの行
+    /// (ログがあるスレは状態マーク付き)。タブの「更新」で取り直す。</summary>
+    public Task OpenListingTabAsync(IBbsProvider provider, ProviderListing listing)
+    {
+        var id = DeterministicTabId($"listing:{provider.Id}:{listing.Id}");
+        var header = $"{listing.Name} ({provider.DisplayName})";
+        return OpenBoardRowsTabAsync(id, header, async tab =>
+        {
+            // 何回にも分けて取る一覧 (reddit のおすすめ) は、届いた分からタブに並べる (Progress は UI スレッドで呼ばれる)
+            var progress = new Progress<ProviderListingResult>(partial =>
+            {
+                if (!tab.IsBusy) return;   // 取得が終わった後に遅れて届いた途中経過は無視
+                var rows = ListingItems(provider, partial);
+                tab.SetItems(rows, DateTimeOffset.UtcNow);
+                tab.Header        = $"{header} ({rows.Count} 取得中)";
+                tab.StatusMessage = $"{header} を取得中... ({rows.Count} 件)";
+            });
+            var result = await provider.FetchListingAsync(_subjectClient.Http, listing.Id, default, progress).ConfigureAwait(true);
+            var items  = ListingItems(provider, result);
+            return (items, $"{provider.DisplayName}「{listing.Name}」: {items.Count} 件");
+        });
+    }
+
+    /// <summary>一覧の中身 → スレ一覧の行 (板の行、またはいろいろな板のスレの行。ログがあるスレは状態マーク付き)。</summary>
+    private List<ThreadListItem> ListingItems(IBbsProvider provider, ProviderListingResult result)
+    {
+        var items = new List<ThreadListItem>();
+        foreach (var h in result.Boards)
+        {
+            var info = new ThreadInfo("", h.Board.BoardName, (int)Math.Min(int.MaxValue, h.Members ?? 0), items.Count + 1);
+            items.Add(new ThreadListItem(info, h.Board.Host, h.Board.DirectoryName,
+                h.Description.Length > 0 ? h.Description : $"{provider.DisplayName} {h.Board.Host}",
+                LogMarkState.None, Favorites.FindBoard(h.Board.Host, h.Board.DirectoryName) is not null, ThreadListItemKind.Board));
+        }
+        if (result.Threads.Count > 0)
+        {
+            // ログの状態は板ごとに判定する (いろいろな板のスレが混ざる)
+            var states = new Dictionary<(string, string, string), LogMarkState>();
+            foreach (var g in result.Threads.GroupBy(t => (t.Board.Host, t.Board.DirectoryName)))
+            {
+                var board = g.First().Board;
+                foreach (var (key, st) in BuildLogStates(board, g.Select(t => t.Info).ToList()))
+                    states[(board.Host, board.DirectoryName, key)] = st;
+            }
+            var favKeys = Favorites.CollectFavoriteThreadKeys();
+            foreach (var t in result.Threads)
+            {
+                var b = t.Board;
+                items.Add(new ThreadListItem(t.Info with { Order = items.Count + 1 }, b.Host, b.DirectoryName, b.BoardName,
+                    states.TryGetValue((b.Host, b.DirectoryName, t.Info.Key), out var st) ? st : LogMarkState.None,
+                    favKeys.Contains((b.Host, b.DirectoryName, t.Info.Key))));
+            }
+        }
+        return items;
     }
 
     /// <summary>板検索の結果タブを開く (同じ提供者・キーワードなら同じタブを使い、検索し直す)。</summary>
@@ -47,7 +110,7 @@ public sealed partial class MainViewModel
     {
         var id = DeterministicTabId($"boardsearch:{provider.Id}:{keyword}");
         var header = $"🔍 {provider.DisplayName}: {Truncate(keyword, 16)}";
-        return OpenBoardRowsTabAsync(id, header, async () =>
+        return OpenBoardRowsTabAsync(id, header, async _ =>
         {
             var hits = await provider.SearchBoardsAsync(_subjectClient.Http, keyword, default).ConfigureAwait(true);
             var items = new List<ThreadListItem>(hits.Count);
@@ -67,7 +130,7 @@ public sealed partial class MainViewModel
     {
         var id = DeterministicTabId($"shownboards:{provider.Id}");
         var header = $"📁 {provider.DisplayName}: 表示済み板";
-        return OpenBoardRowsTabAsync(id, header, async () =>
+        return OpenBoardRowsTabAsync(id, header, async _ =>
         {
             var scanner = new UnlistedBoardScanner(_paths, _settingClient);
             // 板一覧を持たない掲示板なので「一覧に載っているか」は問わず、この提供者の保存ルートの板をすべて出す
@@ -93,7 +156,7 @@ public sealed partial class MainViewModel
         });
     }
 
-    private async Task OpenBoardRowsTabAsync(Guid id, string header, Func<Task<(List<ThreadListItem> Items, string Status)>> source)
+    private async Task OpenBoardRowsTabAsync(Guid id, string header, Func<ThreadListTabViewModel, Task<(List<ThreadListItem> Items, string Status)>> source)
     {
         _boardRowTabSources[id] = source;
         var tab = AllThreadListTabs.FirstOrDefault(t => t.FavoritesFolderId == id);
@@ -129,7 +192,7 @@ public sealed partial class MainViewModel
             tab.IsBusy        = true;
             tab.Header        = $"{header} (取得中)";
             tab.StatusMessage = $"{header} を取得中...";
-            var (items, status) = await source().ConfigureAwait(true);
+            var (items, status) = await source(tab).ConfigureAwait(true);
             tab.SetItems(items, DateTimeOffset.UtcNow);
             tab.Header        = $"{header} ({items.Count})";
             tab.StatusMessage = status;

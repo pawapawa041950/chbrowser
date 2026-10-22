@@ -138,6 +138,36 @@ public sealed class FiveChProvider : IBbsProvider
         => throw new NotSupportedException("5ch は番号以降の差分取得 (DeltaByNumber) を持たない。Range で差分を取る。");
 
     /// <summary>Shift_JIS の subject.txt をパース。SJIS に無い文字 (絵文字等) は <c>&amp;#xXXXX;</c> で来るので HtmlDecode する。</summary>
+    // ---- 板一覧ペインの一覧 (ホットなスレッド) ----
+
+    /// <summary>公式の「勢い (全板)」ヘッドライン (headline.5ch.io/ikioig)。ヘッドラインのスレは「つづきはこちら」と元スレへのリンクだけなので、
+    /// 開くときに元スレへ飛ぶ (<see cref="HeadlineHost"/>、MainViewModel.OpenThreadFromListAsync)。</summary>
+    public IReadOnlyList<ProviderListing> Listings { get; } = new[] { new ProviderListing("hot", "🔥 ホットなスレッド") };
+
+    /// <summary>ヘッドライン (他の板のスレへのリンクを集めた板) のホスト。</summary>
+    public const string HeadlineHost = "headline.5ch.io";
+
+    private static readonly Board HotBoard = new("ikioig", "勢い（全板）", $"https://{HeadlineHost}/ikioig/", "ヘッドライン", 0);
+
+    public async System.Threading.Tasks.Task<ProviderListingResult> FetchListingAsync(
+        System.Net.Http.HttpClient http, string listingId, System.Threading.CancellationToken ct,
+        IProgress<ProviderListingResult>? progress = null)
+    {
+        if (listingId != "hot") throw new NotSupportedException($"5ch には一覧「{listingId}」がありません。");
+        var bytes = await http.GetByteArrayAsync(ThreadListUrl(HotBoard), ct).ConfigureAwait(false);
+        var list = new List<ListedThread>();
+        // 一覧の数はヘッドラインのスレのレス数 (いつも 2) で元スレのレス数ではないので 0 にする (数・勢いの列に意味の無い値を出さない)
+        foreach (var t in ParseThreadList(bytes)) list.Add(new ListedThread(HotBoard, t with { PostCount = 0 }));
+        return ProviderListingResult.OfThreads(list);
+    }
+
+    /// <summary>ヘッドラインのスレ (dat) から元スレの URL を取り出す (「つづきはこちらです &lt;URL&gt;」)。見つからなければ null。</summary>
+    public static string? ExtractHeadlineTarget(string datText)
+    {
+        var m = Regex.Match(datText, @"https?://[A-Za-z0-9.\-]+/test/read\.cgi/[A-Za-z0-9_]+/[0-9]+/?");
+        return m.Success ? m.Value : null;
+    }
+
     public IReadOnlyList<ThreadInfo> ParseThreadList(byte[] bytes)
         => ParseSubjectTxt(bytes, TextEncoding);
 

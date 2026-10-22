@@ -151,7 +151,8 @@ public sealed partial class MainViewModel
             .Select(p => new ChBrowser.Services.Render.BoardListProviderNode(
                 p.Id, p.DisplayName, !_providerExpanded.TryGetValue(p.Id, out var ex) || ex,
                 HasBoardList:   (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0,
-                SupportsSearch: p.SupportsBoardSearch))
+                SupportsSearch: p.SupportsBoardSearch,
+                Listings:       p.Listings))
             .ToList();
         BoardTreePush = new BoardTreeMessage(providerId is null,
             ChBrowser.Services.Render.BoardListHtmlBuilder.BuildTree(nodes, BoardCategories),

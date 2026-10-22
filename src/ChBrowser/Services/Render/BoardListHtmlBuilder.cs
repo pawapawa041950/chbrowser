@@ -44,8 +44,10 @@ public static class BoardListHtmlBuilder
                 empty = ChBrowser.Services.Bbs.BbsRegistry.FindById(pv.Id)?.BoardListEmptyHint is { Length: > 0 } hint
                     ? hint
                     : $"未取得 (メニューの 板一覧 → {pv.DisplayName}板一覧更新)";
+            var listings = new List<BoardTreeListing>();
+            foreach (var l in pv.Listings ?? System.Array.Empty<ChBrowser.Services.Bbs.ProviderListing>()) listings.Add(new BoardTreeListing(l.Id, l.Name));
             list.Add(new BoardTreeProvider(pv.Id, pv.DisplayName, pv.IsExpanded, pv.HasBoardList, pv.SupportsSearch,
-                pv.HasBoardList ? total : null, empty, cats));
+                pv.HasBoardList ? total : null, empty, cats, listings));
         }
         return list;
     }
@@ -81,12 +83,18 @@ public static class BoardListHtmlBuilder
 
 /// <summary>板一覧ペインのトップノード 1 つ (= 掲示板提供者)。</summary>
 /// <param name="HasBoardList">板一覧を取得できる掲示板か。false (したらば / reddit) なら「検索」「表示済み板」の項目を出す。</param>
-public sealed record BoardListProviderNode(string Id, string DisplayName, bool IsExpanded, bool HasBoardList = true, bool SupportsSearch = false);
+/// <param name="Listings">掲示板が公式に出している一覧 (ホットなスレッド等。<see cref="ChBrowser.Services.Bbs.IBbsProvider.Listings"/>)。</param>
+public sealed record BoardListProviderNode(string Id, string DisplayName, bool IsExpanded, bool HasBoardList = true, bool SupportsSearch = false,
+                                           IReadOnlyList<ChBrowser.Services.Bbs.ProviderListing>? Listings = null);
 
 /// <summary>板一覧ペインへ送る掲示板ノード 1 つ。<see cref="BoardCount"/> は板一覧を持つ掲示板だけ (見出しの件数)、
 /// <see cref="EmptyMessage"/> は板一覧が空のときの案内。板一覧を持たない掲示板は「検索」「表示済み板」の項目になる。</summary>
 public sealed record BoardTreeProvider(string Id, string Name, bool Expanded, bool HasBoardList, bool SupportsSearch,
-                                       int? BoardCount, string? EmptyMessage, IReadOnlyList<BoardTreeCategory> Categories);
+                                       int? BoardCount, string? EmptyMessage, IReadOnlyList<BoardTreeCategory> Categories,
+                                       IReadOnlyList<BoardTreeListing> Listings);
+
+/// <summary>掲示板ノードの先頭に並べる一覧の項目 (押すと action <c>listing:&lt;id&gt;</c>)。</summary>
+public sealed record BoardTreeListing(string Id, string Name);
 
 public sealed record BoardTreeCategory(string Name, bool Expanded, IReadOnlyList<BoardTreeBoard> Boards);
 

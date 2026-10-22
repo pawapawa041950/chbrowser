@@ -259,6 +259,16 @@ public interface IBbsProvider
     Task<IReadOnlyList<BoardSearchHit>> SearchBoardsAsync(HttpClient http, string keyword, CancellationToken ct)
         => throw new NotSupportedException($"{DisplayName} は板の検索に対応していません。");
 
+    /// <summary>板一覧ペインの掲示板ノードに並べる一覧 (掲示板が公式に出している「ホットなスレッド」「ホットな板」「おすすめ」等)。
+    /// 押すとスレ一覧ペインにその一覧のタブを開く (板の行 / いろいろな板のスレの行)。既定は無し。</summary>
+    IReadOnlyList<ProviderListing> Listings => Array.Empty<ProviderListing>();
+
+    /// <summary>一覧 (<see cref="Listings"/> の <see cref="ProviderListing.Id"/>) の中身を取る。
+    /// 何回にも分けて取る一覧 (reddit のおすすめ) は、取れた分までを <paramref name="progress"/> で知らせる (届いた分から表示するため)。</summary>
+    Task<ProviderListingResult> FetchListingAsync(HttpClient http, string listingId, CancellationToken ct,
+                                                  IProgress<ProviderListingResult>? progress = null)
+        => throw new NotSupportedException($"{DisplayName} には一覧「{listingId}」がありません。");
+
     /// <summary>レスへの評価 (いいね / 賛否) の仕様。null (既定) なら評価できない (評価値 <see cref="PostExtra.Score"/> があれば表示だけ)。
     /// reddit は賛成・反対・取り消し、ふたばの「そうだね」は加算のみ (取り消し不可)。</summary>
     VoteSpec? Voting => null;
@@ -324,6 +334,19 @@ public sealed record VoteResult(bool Ok, string? Message = null, bool AuthRequir
 
 /// <summary>板検索の 1 件。<see cref="Description"/> は説明文 (スレ一覧の「板」列に出す)、<see cref="Members"/> は購読者数など (「数」列)。</summary>
 public sealed record BoardSearchHit(Board Board, string Description, long? Members = null);
+
+/// <summary>板一覧ペインの掲示板ノードに並べる一覧 1 つ (<see cref="IBbsProvider.Listings"/>)。<see cref="Name"/> は表示名 (先頭に絵文字)。</summary>
+public sealed record ProviderListing(string Id, string Name);
+
+/// <summary>一覧に並べるスレ 1 つ (いろいろな板のスレが混ざるので、板も持つ)。</summary>
+public sealed record ListedThread(Board Board, ThreadInfo Info);
+
+/// <summary>一覧の中身: 板の行 (<see cref="Boards"/>) か、スレの行 (<see cref="Threads"/>)。</summary>
+public sealed record ProviderListingResult(IReadOnlyList<BoardSearchHit> Boards, IReadOnlyList<ListedThread> Threads)
+{
+    public static ProviderListingResult OfBoards(IReadOnlyList<BoardSearchHit> boards)   => new(boards, Array.Empty<ListedThread>());
+    public static ProviderListingResult OfThreads(IReadOnlyList<ListedThread> threads) => new(Array.Empty<BoardSearchHit>(), threads);
+}
 
 /// <summary>Snapshot 方式 (<see cref="ThreadFetchStrategy.Snapshot"/>) の提供者が実装する、スレ全体の取得 (B3)。
 /// 複数要求 (reddit の morechildren 等) を伴いうるので IO は提供者が持つ。採番・保存・差分判定は共通の

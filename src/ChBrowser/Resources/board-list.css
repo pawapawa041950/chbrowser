@@ -54,11 +54,14 @@ details.provider > summary::before {
 }
 details.provider[open] > summary::before { transform: translateY(-50%) rotate(90deg); }
 details.provider > summary .provider-count { color: #888; font-weight: 400; font-size: 11px; margin-left: 4px; }
-details.provider .provider-empty { color: #888; padding: 4px 6px 6px 30px; }
-/* 提供者配下ではカテゴリと板を 1 段深く */
+/* 提供者配下ではカテゴリと板を 1 段深く。並びはお気に入りペインのツリーと同じ:
+   フォルダ (カテゴリ) 以外の項目は同じ階層のフォルダの ▶ の位置から、1 段下の項目は 14px 右 (= フォルダ名の位置) から始める */
+details.provider .provider-empty { color: #888; padding: 4px 6px 6px 16px; }
 details.provider details.category > summary { padding-left: 30px; }
 details.provider details.category > summary::before { left: 16px; }
-details.provider li.board { padding-left: 34px; }
+details.provider li.board { padding-left: 30px; }
+/* 掲示板の直下の項目 (ホットなスレッド / 検索 / 表示済み板 等) はカテゴリと同じ階層なので ▶ の位置に揃える */
+details.provider > ul.provider-actions > li.board { padding-left: 16px; }
 
 /* ---- カテゴリ ---- */
 details.category {
