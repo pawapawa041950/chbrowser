@@ -13,7 +13,9 @@ namespace ChBrowser.Services.Api;
 
 /// <summary>dat 取得結果 (パース済みレス + dat 全体のバイト長)。<see cref="Dropped"/> = スレが dat 落ちしていた
 /// (5ch: dat が 404 で、過去ログ (read.cgi) から読み直せた場合。読み直せなかったときは 404 の例外になる)。</summary>
-public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize, bool Dropped = false)
+/// <see cref="ScoreUpdates"/> = 既に持っていたレスの評価値 (いいね数) が変わったもの (レス番号 → 新しい値。スナップショット方式の掲示板のみ)。
+public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize, bool Dropped = false,
+                                    IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore>? ScoreUpdates = null)
 {
     /// <summary>取得の失敗が「スレが無い (dat 落ち / スレ落ち)」によるものか (各掲示板とも 404 の <see cref="System.Net.Http.HttpRequestException"/> で表す)。</summary>
     public static bool IsDroppedError(System.Exception ex)
@@ -252,7 +254,22 @@ public sealed class DatClient
         if (!File.Exists(path)) return null;
 
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        return new DatFetchResult(DatParser.Parse(bytes), bytes.LongLength);
+        // 番号列付きログで保存する掲示板 (5ch の生 dat 以外) なのに版マーカーが無いファイルは壊れている
+        // (取得の途中でログが消され、続きだけがマーカー無しで書かれた等)。5ch の dat として読むと名前・日付がずれて
+        // 文字化けした表示になるので読まない (取得で丸ごと取り直す。取得側も同じ判定で置き換える)
+        if (ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).FetchStrategy != ChBrowser.Services.Bbs.ThreadFetchStrategy.RawDat
+            && !NumberedLogFormat.IsNumberedLog(bytes))
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[datLoad] {board.Host}/{board.DirectoryName}/{threadKey}: 版マーカーの無いログ ({bytes.Length} bytes) は壊れているので読みません (取り直します)");
+            return null;
+        }
+        var posts = DatParser.Parse(bytes);
+        // スナップショット方式 (reddit 等) は、取得のたびに更新した評価値 (いいね数) を meta.json に持つので、それを当てて出す
+        if (ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).FetchStrategy == ChBrowser.Services.Bbs.ThreadFetchStrategy.Snapshot
+            && ChBrowser.Services.Bbs.ThreadMeta.Load(_paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey)) is { Scores.Count: > 0 } meta)
+            posts = meta.ApplyScores(posts);
+        return new DatFetchResult(posts, bytes.LongLength);
     }
 
     /// <summary>dat の先頭 1 行だけ読んでスレタイトルを取り出す。

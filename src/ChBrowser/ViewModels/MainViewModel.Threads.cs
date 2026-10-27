@@ -23,6 +23,7 @@ public sealed partial class MainViewModel
     private void AppendPostsWithNg(ThreadTabViewModel tab, IReadOnlyList<Post> batch, bool isIncremental = false)
     {
         if (batch.Count == 0) return;
+        var perf = System.Diagnostics.Stopwatch.StartNew();   // 重さの調査用 (UI スレッドで動く)
         // dat の 1 レス目はスレタイトルを保持している。アドレスバーから直接スレを開いた経路では
         // タブ作成時 Title が空文字なので、最初にこのメソッドに来た batch の中で 1 レス目を見つけたら
         // タイトル / タブヘッダを埋める。お気に入り登録の Title もここで揃う。
@@ -51,6 +52,10 @@ public sealed partial class MainViewModel
 
         // NG 判定 AI: 選択中タブにレスが増えたら、新規分 (= 未判定) の判定を再開する。
         OnPostsAppendedForAiNg(tab);
+
+        if (perf.ElapsedMilliseconds >= 50)
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[perf] レスの追加 {batch.Count} 件 (タブ全体 {tab.Posts.Count} 件) に {perf.ElapsedMilliseconds} ms (UI スレッド) — {tab.Board.DirectoryName}/{tab.ThreadKey}");
     }
 
     // ---- 「自分の書き込みへの返信あり」検出 (= 状態マーク赤化) ----
@@ -264,6 +269,7 @@ public sealed partial class MainViewModel
                 ApplyFetchDelta(tab, prevCount, result, info.Title);
             }
 
+            if (result.ScoreUpdates is { Count: > 0 } openScores) tab.UpdateScores(openScores);   // 既存レスのいいね数の更新 (reddit 等)
             SaveFetchedPostCount(board, info.Key, result.Posts.Count, result.Posts.Count > 0 ? result.Posts[^1].Number : null,
                                  listedPostCount: info.PostCount);
             // dat 連番ベースの件数を記録 (= 後続の差分取得の境界に使う。NG 透明化では減らない)。
@@ -353,6 +359,7 @@ public sealed partial class MainViewModel
             var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
             var result     = await _datClient.FetchStreamingAsync(tab.Board, tab.ThreadKey, noProgress).ConfigureAwait(true);
             ApplyFetchDelta(tab, prevCount, result, tab.Header);
+            if (result.ScoreUpdates is { Count: > 0 } scores) tab.UpdateScores(scores);   // 既存レスのいいね数の更新 (reddit 等)
 
             SaveFetchedPostCount(tab.Board, tab.ThreadKey, result.Posts.Count, listedPostCount: listedPostCount);
             tab.FetchedPostCount = result.Posts.Count;

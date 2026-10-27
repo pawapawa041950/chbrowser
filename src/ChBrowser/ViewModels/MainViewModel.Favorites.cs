@@ -628,6 +628,7 @@ public sealed partial class MainViewModel
                 existing.HasReplyToOwn = false;
             }
             existing.DatSize = result.DatSize;
+            if (result.ScoreUpdates is { Count: > 0 } scores) existing.UpdateScores(scores);   // 既存レスのいいね数の更新 (reddit 等)
             SaveFetchedPostCount(board, info.Key, result.Posts.Count, listedPostCount: info.PostCount);
             existing.FetchedPostCount = result.Posts.Count;
             // 最終状態を ComputeMarkState で算定 (= dat 落ち > HasReplyToOwn が true なら RepliedToOwn > Cached)。

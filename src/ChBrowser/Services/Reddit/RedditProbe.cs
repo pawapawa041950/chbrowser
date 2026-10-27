@@ -16,11 +16,24 @@ namespace ChBrowser.Services.Reddit;
 /// 要求は通常の HttpClient に投げるので、実際のアプリの通信と同じ経路 (WebView2 セッション) を通る。</summary>
 public static class RedditProbe
 {
-    public static async Task<string> RunAsync(HttpClient http, string reportPath, CancellationToken ct)
+    public static async Task<string> RunAsync(HttpClient http, string reportPath, CancellationToken ct, RedditWebViewHost? host = null)
     {
         var sb = new StringBuilder();
         void L(string s) { sb.AppendLine(s); ChBrowser.Services.Logging.LogService.Instance.Write("[redditProbe] " + s); }
         L($"reddit 接続テスト {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
+
+        // 0. セッションの診断 (窓を出さず、通信経路を通さずに直接確かめる)
+        if (host is not null)
+        {
+            try
+            {
+                foreach (var line in await host.DiagnoseAsync(ct).ConfigureAwait(false)) L("0. " + line);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                L($"0. 診断に失敗: {ex.Message}");
+            }
+        }
 
         async Task<(int status, JsonDocument? json, string info)> Get(string url)
         {

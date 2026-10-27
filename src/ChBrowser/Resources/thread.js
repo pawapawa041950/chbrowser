@@ -462,6 +462,24 @@
         } catch (_) { /* never throw */ }
     }
 
+    // 重さの調査用: 200ms 以上の長い処理 (この表示の操作・描画が止まる) をログペインに出す。1 秒ごとにまとめて送る
+    (function () {
+        if (typeof PerformanceObserver === 'undefined') return;
+        let pending = [], timer = null;
+        try {
+            new PerformanceObserver(function (list) {
+                for (const e of list.getEntries()) if (e.duration >= 200) pending.push(Math.round(e.duration));
+                if (pending.length && !timer) timer = setTimeout(function () {
+                    timer = null;
+                    const total = pending.reduce(function (a, b) { return a + b; }, 0);
+                    debugLog('[perf] スレ表示の長い処理 ' + pending.length + ' 回 (計 ' + total + ' ms, 最長 ' + Math.max.apply(null, pending) +
+                             ' ms) / レス ' + (typeof allPosts !== 'undefined' ? allPosts.length : '?') + ' 件, 要素 ' + document.getElementsByTagName('*').length);
+                    pending = [];
+                }, 1000);
+            }).observe({ entryTypes: ['longtask'] });
+        } catch (_) { /* longtask 非対応 */ }
+    })();
+
     // 「スレ表示真っ白」現象の分析用フラグ。設定画面「全般」のデバッグチェック ON 時だけ true
     // (setConfig.debug で C# から同期)。OFF の間は分析フックは沈黙する。
     let DEBUG_DIAG = false;
@@ -1564,6 +1582,20 @@
         refreshVoteDom(n);
         if (window.chrome && window.chrome.webview) {
             window.chrome.webview.postMessage({ type: 'vote', number: n, dir: next, prev: prev });
+        }
+    }
+
+    /** updateScores: 再取得で分かった最新の評価値 (いいね数) と自分の評価 ({ 番号: { score, myVote } })。
+     *  レスの値を差し替え、そのレスの評価の表示だけ描き直す (本体 / ツリーの重複表示 / ポップアップの全箇所)。 */
+    function applyScoreUpdates(scores) {
+        if (!scores || typeof scores !== 'object') return;
+        for (const k of Object.keys(scores)) {
+            const n = parseInt(k, 10), s = scores[k];
+            const p = postsByNumber.get(n);
+            if (!p || !p.ext || !s || typeof s.score !== 'number') continue;
+            p.ext.score  = s.score;
+            p.ext.myVote = (typeof s.myVote === 'number') ? s.myVote : null;
+            refreshVoteDom(n);
         }
     }
 
@@ -5560,6 +5592,9 @@
                     break;
                 case 'updateVotes':
                     applyVoteChanges(msg.changes);
+                    break;
+                case 'updateScores':
+                    applyScoreUpdates(msg.scores);
                     break;
                 case 'updateAuthorProfiles':
                     applyAuthorProfiles(msg.profiles);

@@ -81,20 +81,33 @@ public sealed class ProviderTransportHandler : DelegatingHandler
 public static class ProviderRequestContext
 {
     private static readonly AsyncLocal<bool> _background = new();
+    private static readonly AsyncLocal<bool> _optional   = new();
 
-    public static bool IsBackground => _background.Value;
+    public static bool IsBackground => _background.Value || _optional.Value;
+
+    /// <summary>取れなくても困らない補助的な要求 (reddit の「続き」の展開等) か。弾かれても窓を出さず、ログイン状態も変えずに失敗を返す
+    /// (補助の要求だけが弾かれたときに「要確認」と誤って表示しない / 開いても確認画面が出ない API の URL で窓を出さない)。</summary>
+    public static bool IsOptional => _optional.Value;
 
     /// <summary><c>using (ProviderRequestContext.Background()) { … }</c> の範囲を自動処理として扱う。</summary>
     public static IDisposable Background()
     {
         var previous = _background.Value;
         _background.Value = true;
-        return new Scope(previous);
+        return new Scope(_background, previous);
     }
 
-    private sealed class Scope(bool previous) : IDisposable
+    /// <summary><c>using (ProviderRequestContext.Optional()) { … }</c> の範囲を「取れなくても困らない要求」として扱う (自動処理扱いも含む)。</summary>
+    public static IDisposable Optional()
     {
-        public void Dispose() => _background.Value = previous;
+        var previous = _optional.Value;
+        _optional.Value = true;
+        return new Scope(_optional, previous);
+    }
+
+    private sealed class Scope(AsyncLocal<bool> slot, bool previous) : IDisposable
+    {
+        public void Dispose() => slot.Value = previous;
     }
 }
 

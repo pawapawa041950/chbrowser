@@ -41,6 +41,13 @@ public sealed class VotesUpdateData
 }
 
 /// <summary>JS の <c>updateAuthorProfiles</c> に渡すペイロード (投稿者名 → 情報)。届いた分だけアイコンを差し込む。</summary>
+/// <summary>JS の <c>updateScores</c> に渡すペイロード (レス番号 → 最新の評価値と自分の評価)。</summary>
+public sealed class ScoresMessage
+{
+    public IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore> Scores { get; }
+    public ScoresMessage(IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore> scores) => Scores = scores;
+}
+
 public sealed class AuthorProfilesMessage
 {
     public IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> Profiles { get; }
@@ -430,6 +437,21 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <summary>投稿者情報の送信チャネル (AuthorProfilesUpdate 添付プロパティが観測して updateAuthorProfiles を送る)。</summary>
     [ObservableProperty]
     private AuthorProfilesMessage? _authorProfilesUpdate;
+
+    /// <summary>評価値 (いいね数) の更新の送信チャネル (ScoresUpdate 添付プロパティが観測して updateScores を送る)。</summary>
+    [ObservableProperty]
+    private ScoresMessage? _scoresUpdate;
+
+    /// <summary>再取得で分かった最新の評価値をレスに当て、JS へ送る (変わったレスの評価の表示だけが描き直される)。</summary>
+    public void UpdateScores(IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore> scores)
+    {
+        if (scores.Count == 0) return;
+        var list = new List<Post>(Posts.Count);
+        foreach (var p in Posts)
+            list.Add(p.Ext is { } ext && scores.TryGetValue(p.Number, out var s) ? p with { Ext = ext with { Score = s.Score, MyVote = s.MyVote } } : p);
+        Posts = list;
+        ScoresUpdate = new ScoresMessage(scores);
+    }
 
     /// <summary>投稿者情報を足して JS へ送る。</summary>
     public void AddAuthorProfiles(IReadOnlyDictionary<string, ChBrowser.Services.Bbs.AuthorProfile> profiles)

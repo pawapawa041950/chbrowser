@@ -133,6 +133,9 @@ public partial class App : Application
         // .NET Core 系では Shift_JIS が組み込みで使えないため CodePages プロバイダを登録
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
+        // UI スレッドが固まったらログペインに出す (アプリ全体が重くなる原因の調査用)
+        ChBrowser.Services.Logging.UiStallWatchdog.Start(Dispatcher);
+
         // ---- Phase 11: 設定読み込み (HiDPI / Timeout は次回起動時反映なのでここで取り込む) ----
         var paths        = new DataPaths();
         _paths           = paths;
@@ -446,7 +449,7 @@ public partial class App : Application
                 await auth.LogoutAsync(default);
             },
             Refresh:   () => auth.RefreshStateAsync(default),
-            RunProbe:  () => ChBrowser.Services.Reddit.RedditProbe.RunAsync(http, reportPath, default));
+            RunProbe:  () => ChBrowser.Services.Reddit.RedditProbe.RunAsync(http, reportPath, default, _redditHost));
     }
 
     /// <summary>MainViewModel と (もし開いていれば) SettingsViewModel の DonguriLoginStatus を同時更新する。

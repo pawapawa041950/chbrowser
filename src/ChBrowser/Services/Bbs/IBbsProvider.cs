@@ -369,6 +369,9 @@ public sealed record SnapshotFetchOptions(
     IReadOnlySet<string>?                       KnownParentIds = null,
     Func<IReadOnlyList<SnapshotPost>, Task>?    OnPartial      = null);
 
+/// <summary>レスの最新の評価値 (いいね数) と、その時点の自分の評価 (1 / -1 / null)。</summary>
+public sealed record PostScore(long Score, int? MyVote);
+
 /// <summary>スナップショット中の 1 投稿。<see cref="Number"/> は掲示板自身のレス番号 (4chan / ふたば。あればそのまま使う)、
 /// 無ければ (reddit) アプリが初見順に採番する。<see cref="ParentExternalId"/> が null / スレ本体の ID ならトップレベル。
 /// <see cref="Ext"/> の <c>ParentNumber</c> / <c>ExternalId</c> は <see cref="SnapshotThreadFetcher"/> が埋める。</summary>

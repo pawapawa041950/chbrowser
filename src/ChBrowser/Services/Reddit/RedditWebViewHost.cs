@@ -72,7 +72,118 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             }
         }).Task.Unwrap();
 
+    /// <summary>接続テスト用の診断: 隠しページの状態・Cookie の名前 (値は出さない)・要求の種類ごとの通り方を、
+    /// ログイン窓を出さずに (通信経路を通さず直接) 確かめて行ごとに返す。最後に隠しページを元に戻す。</summary>
+    public Task<IReadOnlyList<string>> DiagnoseAsync(CancellationToken ct)
+        => _dispatcher.InvokeAsync(async () =>
+        {
+            var lines = new List<string>();
+            await EnsureInitializedAsync().ConfigureAwait(true);
+            var wv = _webView!.CoreWebView2;
+            lines.Add($"UA: {wv.Settings.UserAgent}");
+
+            async Task Page(string label)
+            {
+                var raw = await wv.ExecuteScriptAsync(
+                    "JSON.stringify({href: location.href, title: document.title, type: document.contentType, " +
+                    "challenge: !!document.querySelector('input[name=js_challenge]'), text: (document.body ? document.body.innerText : '').slice(0, 80)})")
+                    .ConfigureAwait(true);
+                var json = JsonSerializer.Deserialize<string>(raw) ?? "";
+                lines.Add($"{label}: {json}");
+            }
+
+            async Task Cookies()
+            {
+                var cookies = await wv.CookieManager.GetCookiesAsync("https://www.reddit.com/").ConfigureAwait(true);
+                var names = new List<string>();
+                foreach (var c in cookies)
+                    names.Add($"{c.Name}({c.Domain}{(c.IsSession ? ", session" : $", 期限 {c.Expires:yyyy-MM-dd HH:mm}")}{(c.IsHttpOnly ? ", httpOnly" : "")}, {c.Value.Length}文字)");
+                lines.Add($"Cookie ({names.Count} 個): {string.Join(" / ", names)}");
+            }
+
+            async Task Try(string label, string url, bool jsonAccept, string? referrer = null)
+            {
+                try
+                {
+                    var headers = jsonAccept
+                        ? new[] { new KeyValuePair<string, string>("Accept", "application/json") }
+                        : Array.Empty<KeyValuePair<string, string>>();
+                    var r = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET", url, headers), ct, referrer).ConfigureAwait(true);
+                    var head = System.Text.Encoding.UTF8.GetString(r.Body, 0, Math.Min(r.Body.Length, 262144));
+                    var kind = RedditResponse.LooksLikeJson(r) ? "JSON"
+                             : RedditResponse.IsNetworkSecurityBlock(r) ? "network security"
+                             : head.Contains("js_challenge", StringComparison.Ordinal) ? "JS 確認ページ"
+                             : "その他";
+                    var extra = url.Contains("/api/me.json", StringComparison.Ordinal) && kind == "JSON"
+                        ? $" name={(RedditSessionAuth.ParseMe(r).Name is { Length: > 0 } nm ? nm : "(無し)")}" : "";
+                    lines.Add($"{label}: {r.Status} {r.Header("content-type")} {r.Body.Length}B → {kind}{extra}{(r.Redirected ? $" 転送先 {r.FinalUrl}" : "")}");
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    lines.Add($"{label}: 失敗 {ex.Message}");
+                }
+            }
+
+            async Task Probes(string prefix)
+            {
+                await Try($"{prefix} me.json (送り元=ホーム)", "https://www.reddit.com/api/me.json?raw_json=1", true).ConfigureAwait(true);
+                await Try($"{prefix} me.json (送り元=今のページ)", "https://www.reddit.com/api/me.json?raw_json=1", true, "about:client").ConfigureAwait(true);
+                await Try($"{prefix} r/popular/hot.json (送り元=ホーム)", "https://www.reddit.com/r/popular/hot.json?limit=5&raw_json=1", true).ConfigureAwait(true);
+                await Try($"{prefix} r/popular/hot.json (送り元=今のページ)", "https://www.reddit.com/r/popular/hot.json?limit=5&raw_json=1", true, "about:client").ConfigureAwait(true);
+            }
+
+            var wasRealPage = _onRealPage;
+            await NavigateAsync(HomeUrl).ConfigureAwait(true);
+            await Page("隠しページ").ConfigureAwait(true);
+            await Cookies().ConfigureAwait(true);
+            await Probes("[robots.txt 上]").ConfigureAwait(true);
+
+            // ホームを開いて (JS の確認ページがあればそれも通して) から、もう一度試す
+            await OpenRealPageAsync(ct).ConfigureAwait(true);
+            await Page("ホームを開いた後の隠しページ").ConfigureAwait(true);
+            await Probes("[ホーム上]").ConfigureAwait(true);
+
+            // 元の状態に戻す (送り元の指定だけで通っていたなら robots.txt に)
+            _onRealPage = wasRealPage;
+            if (!wasRealPage) await NavigateAsync(HomeUrl).ConfigureAwait(true);
+            return (IReadOnlyList<string>)lines;
+        }).Task.Unwrap();
+
+    /// <summary>fetch の送り元 (Referer) として名乗る URL。reddit は送り元が reddit のページでない要求 (robots.txt 等) を
+    /// ログイン中でも「network security」で弾くようになった (2026-10、接続テストの診断で確認)。</summary>
+    private const string ReferrerUrl = "https://www.reddit.com/";
+
+    /// <summary>隠しページを reddit のホームにした後か (送り元の指定だけでは通らなかったとき)。</summary>
+    private bool _onRealPage;
+
     private async Task<BrowserFetchResult> FetchOnUiAsync(BrowserFetchRequest request, CancellationToken ct)
+    {
+        var r = await FetchOnceOnUiAsync(request, ct).ConfigureAwait(true);
+        if (_onRealPage || !RedditResponse.IsNetworkSecurityBlock(r)) return r;
+
+        // 送り元を指定しても弾かれた: 隠しページで reddit のホームを開き (JS の確認ページがあれば通るのを待って)、そこから送り直す。
+        // 以後はホームを開いたままにする (EnsureOnHomeAsync は www.reddit.com 上なら移動しない)
+        ChBrowser.Services.Logging.LogService.Instance.Write("[reddit] robots.txt 上からの要求が弾かれたので、隠しページでホームを開いて送り直します");
+        await OpenRealPageAsync(ct).ConfigureAwait(true);
+        return await FetchOnceOnUiAsync(request, ct).ConfigureAwait(true);
+    }
+
+    /// <summary>隠しページで reddit のホームを開き、JS の確認ページが済むまで (最大 15 秒) 待つ。</summary>
+    private async Task OpenRealPageAsync(CancellationToken ct)
+    {
+        _onRealPage = true;
+        _webView!.CoreWebView2.IsMuted = true;   // ホームの動画等が隠しページで鳴らないように
+        await NavigateAsync("https://www.reddit.com/").ConfigureAwait(true);
+        for (var i = 0; i < 30; i++)
+        {
+            var raw = await _webView!.CoreWebView2.ExecuteScriptAsync(
+                "document.readyState === 'complete' && !document.querySelector('input[name=js_challenge]')").ConfigureAwait(true);
+            if (raw == "true") break;
+            await Task.Delay(500, ct).ConfigureAwait(true);
+        }
+    }
+
+    private async Task<BrowserFetchResult> FetchOnceOnUiAsync(BrowserFetchRequest request, CancellationToken ct, string? referrer = null)
     {
         await EnsureInitializedAsync().ConfigureAwait(true);
         await EnsureOnHomeAsync().ConfigureAwait(true);
@@ -98,6 +209,7 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             url     = request.Url,
             headers = ToHeaderObject(request.Headers),
             body    = request.Body is null ? null : Convert.ToBase64String(request.Body),
+            referrer = referrer ?? ReferrerUrl,
         });
         await _webView!.CoreWebView2.ExecuteScriptAsync(FetchScript.Replace("__SPEC__", spec)).ConfigureAwait(true);
         return await tcs.Task.ConfigureAwait(true);
@@ -117,6 +229,7 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
   const reply = (o) => { o.chbFetch = q.id; o.nonce = q.nonce; window.chrome.webview.postMessage(o); };
   try {
     const init = { method: q.method, headers: q.headers, credentials: 'include', redirect: 'follow', cache: 'no-store' };
+    if (q.referrer) init.referrer = q.referrer;
     if (q.body != null) init.body = Uint8Array.from(atob(q.body), c => c.charCodeAt(0));
     const r = await fetch(q.url, init);
     const buf = new Uint8Array(await r.arrayBuffer());
@@ -200,9 +313,11 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        var perf = System.Diagnostics.Stopwatch.StartNew();   // 重さの調査用 (UI スレッドで動く)
+        var json = e.WebMessageAsJson;
         try
         {
-            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return;
             if (!root.TryGetProperty("chbFetch", out var idEl) || idEl.GetString() is not { } id) return;
@@ -227,6 +342,9 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 root.TryGetProperty("redirected", out var rd) && rd.ValueKind == JsonValueKind.True,
                 headers,
                 Convert.FromBase64String(root.GetProperty("body").GetString() ?? "")));
+            if (perf.ElapsedMilliseconds >= 30)
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[perf] reddit の応答の受け取り {json.Length / 1024} KB に {perf.ElapsedMilliseconds} ms (UI スレッド)");
         }
         catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException or KeyNotFoundException)
         {

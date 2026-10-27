@@ -52,8 +52,14 @@ public sealed class WebViewTransport : IProviderTransport
         try
         {
             var result = await SendOnceAsync(fetchReq, ct).ConfigureAwait(false);
+            var first  = Classify(result);
+            if (first is Kind.Blocked or Kind.Expired) LogRejected(fetchReq, result, first);
 
-            switch (Classify(result))
+            // 補助の要求 (続きの展開等) は、弾かれても窓を出さず・ログイン状態も変えずに失敗を返す
+            if (first is Kind.Blocked or Kind.Expired && ProviderRequestContext.IsOptional)
+                return LoginRequiredResponse(request, result);
+
+            switch (first)
             {
                 case Kind.RateLimited:
                 {
@@ -219,6 +225,17 @@ public sealed class WebViewTransport : IProviderTransport
         if (r.Redirected && Uri.TryCreate(r.FinalUrl, UriKind.Absolute, out var final)) request.RequestUri = final;
         resp.RequestMessage = request;
         return resp;
+    }
+
+    /// <summary>弾かれた (ログイン切れ / 確認ページ) 応答の様子をログに出す (なぜ弾かれたかの調査用)。本文は先頭だけ。</summary>
+    private static void LogRejected(BrowserFetchRequest req, BrowserFetchResult r, Kind kind)
+    {
+        var head = System.Text.Encoding.UTF8.GetString(r.Body, 0, Math.Min(r.Body.Length, 300));
+        head = System.Text.RegularExpressions.Regex.Replace(head, @"\s+", " ");
+        var url = req.Url.Length > 160 ? req.Url[..160] + "…" : req.Url;
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[reddit] 弾かれた応答 ({kind}{(ProviderRequestContext.IsOptional ? ", 補助の要求" : "")}): {req.Method} {url} → {r.Status} {r.StatusText}" +
+            $"{(r.Redirected ? $", 転送先 {r.FinalUrl}" : "")}, content-type={r.Header("content-type")}, {r.Body.Length} bytes | {head}");
     }
 
     private static HttpResponseMessage LoginRequiredResponse(HttpRequestMessage request, BrowserFetchResult r)

@@ -27,6 +27,19 @@ public sealed class ThreadMeta
     /// <summary>投稿者名 → アカウント ID (投稿者情報の取得用)。取得のたびにスナップショットの全投稿から更新する
     /// (= この仕組みより前に保存したレスも、次の取得で分かるようになる)。</summary>
     public Dictionary<string, string> AuthorIds { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>レス番号 → 最新の評価値 (いいね数) と自分の評価。ログは追記だけなので、取得のたびに変わった評価値はここに持ち、
+    /// 表示するときにログの値の代わりに使う (<see cref="ApplyScores"/>)。</summary>
+    public Dictionary<long, PostScore> Scores { get; set; } = new();
+
+    /// <summary>ログから読んだレスに最新の評価値 (<see cref="Scores"/>) を当てる。</summary>
+    public IReadOnlyList<Post> ApplyScores(IReadOnlyList<Post> posts)
+    {
+        if (Scores.Count == 0) return posts;
+        var list = new List<Post>(posts.Count);
+        foreach (var p in posts)
+            list.Add(p.Ext is { } ext && Scores.TryGetValue(p.Number, out var s) ? p with { Ext = ext with { Score = s.Score, MyVote = s.MyVote } } : p);
+        return list;
+    }
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -43,6 +56,7 @@ public sealed class ThreadMeta
             if (meta is null) return null;
             meta.IdToNumber = new Dictionary<string, long>(meta.IdToNumber ?? new(), StringComparer.Ordinal);
             meta.AuthorIds  = new Dictionary<string, string>(meta.AuthorIds ?? new(), StringComparer.Ordinal);
+            meta.Scores   ??= new();
             return meta;
         }
         catch (Exception ex) when (ex is JsonException or IOException)
@@ -110,6 +124,10 @@ internal static class SnapshotThreadFetcher
         // 1. 既存ログと meta
         var existing  = new List<Post>();
         var hasLog    = false;
+        // 自分が最後に書いた時点のログの大きさ。追記の前に比べ、違えば (取得中にログが消された / 別の取得が書いた) 以降は保存しない
+        // (消されたファイルに追記すると、版マーカーの無い続きだけのファイルができて表示が壊れる)
+        long expectedLength = -1;
+        var abandoned = false;
         if (File.Exists(logPath))
         {
             var bytes = await File.ReadAllBytesAsync(logPath, ct).ConfigureAwait(false);
@@ -117,9 +135,17 @@ internal static class SnapshotThreadFetcher
             {
                 existing.AddRange(NumberedLogFormat.Parse(bytes));
                 hasLog = true;
+                expectedLength = bytes.LongLength;
             }
         }
         var meta = (hasLog ? ThreadMeta.Load(metaPath) : null) ?? new ThreadMeta { Provider = provider.Id };
+        // 前回までに更新した評価値を当てておく (比べる基準 / 取得結果に入る既存レスを最新にする)
+        if (meta.Scores.Count > 0)
+        {
+            var applied = meta.ApplyScores(existing);
+            existing.Clear();
+            existing.AddRange(applied);
+        }
         // meta が無い / 壊れている場合はログの拡張情報から対応表を復元する
         foreach (var p in existing)
             if (p.Ext?.ExternalId is { Length: > 0 } eid && !meta.IdToNumber.ContainsKey(eid))
@@ -155,20 +181,30 @@ internal static class SnapshotThreadFetcher
             maxNumber = added.Max(p => p.Number);
             fresh.AddRange(added);
 
-            // 保存 (新規はマーカー付きで作成、既存は追記)
-            var dir = Path.GetDirectoryName(logPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            if (hasLog)
+            // 保存 (新規はマーカー付きで作成、既存は追記)。取得中にログが消された / 書き換えられたら保存しない (表示はする)
+            if (hasLog && !abandoned && (!File.Exists(logPath) || new FileInfo(logPath).Length != expectedLength))
             {
-                await using var fs = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.None);
-                await fs.WriteAsync(NumberedLogFormat.SerializeAppend(added), ct).ConfigureAwait(false);
+                abandoned = true;
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[snapshotFetch] {board.DirectoryName}/{threadKey}: 取得中にログが削除 / 変更されたので、この取得の結果は保存しません");
             }
-            else
+            if (!abandoned)
             {
-                await File.WriteAllBytesAsync(logPath, NumberedLogFormat.Serialize(provider.Id, added), ct).ConfigureAwait(false);
-                hasLog = true;
+                var dir = Path.GetDirectoryName(logPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                if (hasLog)
+                {
+                    await using (var fs = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.None))
+                        await fs.WriteAsync(NumberedLogFormat.SerializeAppend(added), ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await File.WriteAllBytesAsync(logPath, NumberedLogFormat.Serialize(provider.Id, added), ct).ConfigureAwait(false);
+                    hasLog = true;
+                }
+                expectedLength = new FileInfo(logPath).Length;
+                meta.Save(metaPath);
             }
-            meta.Save(metaPath);
 
             // 通知 (最初は 10 件で早く描き始め、以降は 50 件単位)
             for (var i = 0; i < added.Count;)
@@ -194,15 +230,30 @@ internal static class SnapshotThreadFetcher
         if (snapshot.Notice is not null) meta.Notice = snapshot.Notice;
         foreach (var sp in snapshot.Posts)
             if (sp.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(sp.Name)) meta.AuthorIds[sp.Name] = aid;
-        if (File.Exists(logPath)) meta.Save(metaPath);
+
+        // 既に持っていたレスの評価値 (いいね数) の更新: 今回の応答に入っていた分だけ (追加の要求はしない)
+        var scoreUpdates = new Dictionary<long, PostScore>();
+        var indexByNumber = new Dictionary<long, int>(existing.Count);
+        for (var i = 0; i < existing.Count; i++) indexByNumber[existing[i].Number] = i;
+        foreach (var sp in snapshot.Posts)
+        {
+            if (sp.Ext?.Score is not long score || !meta.IdToNumber.TryGetValue(sp.ExternalId, out var n)
+                || !indexByNumber.TryGetValue(n, out var idx) || existing[idx].Ext is not { } oldExt) continue;
+            if (oldExt.Score == score && oldExt.MyVote == sp.Ext.MyVote) continue;
+            var ps = new PostScore(score, sp.Ext.MyVote);
+            scoreUpdates[n]  = ps;
+            meta.Scores[n]   = ps;
+            existing[idx]    = existing[idx] with { Ext = oldExt with { Score = score, MyVote = sp.Ext.MyVote } };
+        }
+        if (!abandoned && File.Exists(logPath)) meta.Save(metaPath);
         ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[snapshotFetch]   snapshot={snapshot.Posts.Count} posts, new={fresh.Count}, truncated={snapshot.Truncated}");
+            $"[snapshotFetch]   snapshot={snapshot.Posts.Count} posts, new={fresh.Count}, scoreUpdates={scoreUpdates.Count}, truncated={snapshot.Truncated}");
 
         var all = new List<Post>(existing.Count + fresh.Count);
         all.AddRange(existing);
         all.AddRange(fresh);
         var size = File.Exists(logPath) ? new FileInfo(logPath).Length : 0;
-        return new DatFetchResult(all, size);
+        return new DatFetchResult(all, size, ScoreUpdates: scoreUpdates.Count > 0 ? scoreUpdates : null);
     }
 
     /// <summary>スナップショットのうち未知の投稿に番号を振って <see cref="Post"/> にする (<paramref name="meta"/> の対応表も更新する)。

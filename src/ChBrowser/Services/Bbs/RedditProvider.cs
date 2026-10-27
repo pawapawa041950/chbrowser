@@ -441,8 +441,14 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             {
                 var batch = new List<string>();
                 while (queue.Count > 0 && batch.Count < MoreChildrenBatch) batch.Add(queue.Dequeue());
-                var mcUrl = $"{Origin}/api/morechildren.json?api_type=json&link_id=t3_{threadKey}&children={string.Join(",", batch)}&sort=old&raw_json=1";
-                (bytes, remaining) = await GetAsync(http, mcUrl, ct).ConfigureAwait(false);
+                var got = await FetchMoreChildrenAsync(http, threadKey, batch, ct).ConfigureAwait(false);
+                if (got is null)
+                {
+                    foreach (var id in batch) queue.Enqueue(id);   // 取れなかった分は「続きあり」として残す
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] more 展開を打ち切り (続きの取得が弾かれた)");
+                    break;
+                }
+                (bytes, remaining) = got.Value;
                 more = ParseMoreChildrenResponse(bytes);
             }
             else
@@ -450,7 +456,17 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 // 「continue this thread」: その枝だけをスレとして取り直す
                 var parent = continues.Dequeue();
                 var cUrl = $"{Origin}/r/{board.DirectoryName}/comments/{threadKey}/_/{parent}.json?sort=old&limit={CommentLimit}&raw_json=1";
-                (bytes, remaining) = await GetAsync(http, cUrl, ct).ConfigureAwait(false);
+                try
+                {
+                    using (ProviderRequestContext.Optional())
+                        (bytes, remaining) = await GetAsync(http, cUrl, ct).ConfigureAwait(false);
+                }
+                catch (HttpRequestException ex)
+                {
+                    continues.Enqueue(parent);   // 取れなかった枝は「続きあり」として残す
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] more 展開を打ち切り (continue this thread の取得に失敗: {ex.Message})");
+                    break;
+                }
                 var sub = ParseCommentsResponse(bytes);
                 more = new MoreResult(sub.Comments, sub.Mores, sub.Continues);
             }
@@ -467,6 +483,41 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[reddit] snapshot r/{board.DirectoryName}/{threadKey}: posts={posts.Count}, more calls={calls}, truncated={truncated}");
         return new ThreadSnapshot(posts, truncated);
+    }
+
+    /// <summary>「続き」(<c>/api/morechildren</c>) を取る。補助の要求として送り (弾かれても窓を出さない)、GET が弾かれたら同じ内容を POST で
+    /// 1 回だけ試す (API は POST も受け付ける)。どちらも駄目なら null (呼び出し側は展開を打ち切る)。</summary>
+    private async Task<(byte[] Bytes, double? Remaining)?> FetchMoreChildrenAsync(HttpClient http, string threadKey, List<string> batch, CancellationToken ct)
+    {
+        var children = string.Join(",", batch);
+        using var optional = ProviderRequestContext.Optional();
+        try
+        {
+            return await GetAsync(http, $"{Origin}/api/morechildren.json?api_type=json&link_id=t3_{threadKey}&children={children}&sort=old&raw_json=1", ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続きの取得 (GET) に失敗: {ex.Message} → POST で試します");
+        }
+        try
+        {
+            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["api_type"] = "json", ["link_id"] = "t3_" + threadKey, ["children"] = children, ["sort"] = "old", ["raw_json"] = "1",
+            });
+            using var resp = await http.PostAsync($"{Origin}/api/morechildren.json", content, ct).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            double? remaining = resp.Headers.TryGetValues("x-ratelimit-remaining", out var v)
+                && double.TryParse(v.FirstOrDefault(), NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続きの取得 (POST) に成功: {bytes.Length} bytes");
+            return (bytes, remaining);
+        }
+        catch (HttpRequestException ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続きの取得 (POST) にも失敗: {ex.Message}");
+            return null;
+        }
     }
 
     private static async Task<(byte[] Bytes, double? Remaining)> GetAsync(HttpClient http, string url, CancellationToken ct)

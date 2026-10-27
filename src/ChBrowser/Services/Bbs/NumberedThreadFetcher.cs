@@ -40,6 +40,7 @@ internal static class NumberedThreadFetcher
         var existing  = new List<Post>();
         var hasLog    = false;
         long maxNumber = 0;
+        long expectedLength = -1;   // 読んだ時点のログの大きさ (追記の前に比べ、違えば取得中に消された / 書き換えられたので保存しない)
         if (File.Exists(path))
         {
             var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
@@ -47,6 +48,7 @@ internal static class NumberedThreadFetcher
             {
                 existing.AddRange(NumberedLogFormat.Parse(bytes));
                 hasLog = true;
+                expectedLength = bytes.LongLength;
                 foreach (var p in existing) if (p.Number > maxNumber) maxNumber = p.Number;
             }
             // 版マーカー無し (壊れた / 想定外のファイル) は全取得で置き換える
@@ -85,7 +87,12 @@ internal static class NumberedThreadFetcher
         }
 
         // 4. 保存 (新規はマーカー付きで作成、既存は追記)。取れたものが無いときは触らない。
-        if (fresh.Count > 0)
+        //    取得中にログが消された / 書き換えられたら保存しない (消されたファイルに追記すると版マーカーの無いファイルができ、表示が壊れる)
+        var changed = hasLog && (!File.Exists(path) || new FileInfo(path).Length != expectedLength);
+        if (changed)
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[datFetch] {board.DirectoryName}/{threadKey}: 取得中にログが削除 / 変更されたので、この取得の結果は保存しません");
+        if (fresh.Count > 0 && !changed)
         {
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);

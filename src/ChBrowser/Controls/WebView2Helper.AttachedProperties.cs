@@ -414,6 +414,29 @@ public static partial class WebView2Helper
     }
 
     // ------------------------------------------------------------
+    // ScoresUpdate (スレ表示: 再取得で分かった最新の評価値 (いいね数) の増分通知)
+    // ------------------------------------------------------------
+
+    public static readonly DependencyProperty ScoresUpdateProperty =
+        DependencyProperty.RegisterAttached(
+            "ScoresUpdate",
+            typeof(object),
+            typeof(WebView2Helper),
+            new PropertyMetadata(null, OnScoresUpdateChanged));
+
+    public static object? GetScoresUpdate(DependencyObject d) => d.GetValue(ScoresUpdateProperty);
+    public static void    SetScoresUpdate(DependencyObject d, object? value) => d.SetValue(ScoresUpdateProperty, value);
+
+    private static void OnScoresUpdateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.ScoresMessage m) return;
+        var scores = new Dictionary<string, object?>();
+        foreach (var (n, s) in m.Scores) scores[n.ToString(System.Globalization.CultureInfo.InvariantCulture)] = new { score = s.Score, myVote = s.MyVote };
+        var json = JsonSerializer.Serialize(new { type = "updateScores", scores }, PostJsonOptions);
+        _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+    }
+
+    // ------------------------------------------------------------
     // VotesUpdate (スレ表示: レスの評価の確定 / 巻き戻しの増分通知)
     // ------------------------------------------------------------
 

@@ -79,6 +79,7 @@ public sealed class AuthorProfileCache
     /// <summary>取得結果を覚えて保存する。<paramref name="missing"/> は問い合わせたが見つからなかった投稿者名。</summary>
     public void Put(IBbsProvider provider, IReadOnlyDictionary<string, AuthorProfile> byName, IEnumerable<string> missing, DateTimeOffset now)
     {
+        var perf = System.Diagnostics.Stopwatch.StartNew();   // 重さの調査用 (UI スレッドで動く)
         var t = Table(provider);
         var epoch = now.ToUnixTimeSeconds();
         foreach (var (name, p) in byName) t[name] = new Entry { Profile = p, FetchedEpoch = epoch };
@@ -91,6 +92,9 @@ public sealed class AuthorProfileCache
             var tmp = path + ".tmp";
             File.WriteAllBytes(tmp, JsonSerializer.SerializeToUtf8Bytes(t, Options));
             File.Move(tmp, path, overwrite: true);
+            if (perf.ElapsedMilliseconds >= 30)
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[perf] 投稿者情報の保存 ({t.Count} 人分) に {perf.ElapsedMilliseconds} ms (UI スレッド)");
         }
         catch (IOException ex)
         {
