@@ -209,7 +209,31 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
     public async Task<IReadOnlyList<BoardSearchHit>> SearchBoardsAsync(HttpClient http, string keyword, CancellationToken ct)
     {
-        var url = $"{Origin}/subreddits/search.json?q={Uri.EscapeDataString(keyword)}&limit=50&raw_json=1";
+        var q   = Uri.EscapeDataString(keyword);
+        var url = $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1";
+        // 検索は reddit 側で弾かれやすい (2026-10、ログイン中・送り元を指定しても「network security」になる例があった) ので、
+        // まず窓を出さずに試し、駄目なら入力補完用の API (最大 10 件) で代わりに探す
+        foreach (var candidate in new[]
+                 {
+                     url,
+                     $"{Origin}/api/subreddit_autocomplete_v2.json?query={q}&include_over_18=true&include_profiles=false&limit=10&raw_json=1",
+                 })
+        {
+            try
+            {
+                byte[] got;
+                using (ProviderRequestContext.Optional())
+                    (got, _) = await GetAsync(http, candidate, ct).ConfigureAwait(false);
+                var hits = ParseSubredditListing(got);
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 板検索 {candidate.Split('?')[0]} → {hits.Count} 件");
+                return hits;
+            }
+            catch (HttpRequestException ex)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 板検索 {candidate.Split('?')[0]} が失敗: {ex.Message}");
+            }
+        }
+        // どちらも弾かれた: ログイン切れ等の可能性があるので、通常の要求として送る (必要ならログイン / 確認の窓が出る)
         var (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
         return ParseSubredditListing(bytes);
     }
@@ -250,7 +274,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     }
 
     /// <summary>ホームの「おすすめ」を HTML から読む: トップページ (/) の <c>&lt;shreddit-post&gt;</c> と、スクロールで読み込まれる続き
-    /// (<c>/svc/shreddit/feeds/home-feed?…</c>、ページ内の <c>src</c> に書かれている) を数ページたどる。
+    /// (<c>/svc/shreddit/feeds/interest-home-feed?…</c>、2026-10 に home-feed から改名。ページ内の <c>src</c> に書かれている) を数ページたどる。
     /// 1 ページは約 1MB・要求の間隔は 1 秒以上なので全部で 10 秒ほどかかる。ページを読むたびに取れた分を <paramref name="progress"/> で知らせる。</summary>
     private async Task<IReadOnlyList<ListedThread>> FetchHomeFeedHtmlAsync(HttpClient http, CancellationToken ct,
                                                                            IProgress<ProviderListingResult>? progress)
@@ -261,7 +285,24 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         string? next = $"{Origin}/";
         for (var page = 0; page < MaxPages && next is not null && list.Count < Want; page++)
         {
-            var (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
+            byte[] bytes;
+            if (page == 0)
+                (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
+            else
+            {
+                // 2 ページ目以降は取れなくても困らない: 弾かれても窓を出さず、それまでに取れた分を返す
+                try
+                {
+                    using (ProviderRequestContext.Optional())
+                        (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
+                }
+                catch (HttpRequestException ex)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write(
+                        $"[reddit listing] forYou: 続きのページの取得に失敗したので {list.Count} 件で打ち切ります ({ex.Message}): {next}");
+                    break;
+                }
+            }
             var html  = System.Text.Encoding.UTF8.GetString(bytes);
             var before = list.Count;
             var tags  = ParseShredditPosts(html, list, seen);
@@ -269,6 +310,25 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             var nextUrl = m.Success ? Origin + System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[reddit listing] forYou (HTML): {next} → {bytes.Length} bytes, shreddit-post={tags}, 一覧に足した件数={list.Count - before}, 続き={(nextUrl is null ? "なし" : nextUrl)}");
+            if (nextUrl is null)
+            {
+                // 続きの場所が見つからない (ページの作りが変わった等) ときの調査用: ページ内の部分読み込みの URL 候補を出す
+                var candidates = System.Text.RegularExpressions.Regex.Matches(html, @"(?<u>/svc/shreddit/[^""'\s<>]{0,200})")
+                    .Select(x => x.Groups["u"].Value).Distinct()
+                    .OrderByDescending(u => u.Contains("feed", StringComparison.OrdinalIgnoreCase)).Take(12).ToList();
+                // ページそのものも保存する (作りの変化を調べるため。毎回上書き)
+                try
+                {
+                    var dir = System.IO.Path.Combine(new ChBrowser.Services.Storage.DataPaths().Root, "reddit.com");
+                    System.IO.Directory.CreateDirectory(dir);
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, $"foryou_page{page + 1}.html"), bytes);
+                }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[reddit listing] forYou: 続きの URL が見つかりません。ページ内の /svc/shreddit/ の候補 {candidates.Count} 件: " +
+                    (candidates.Count == 0 ? $"(無し) 先頭: {System.Text.RegularExpressions.Regex.Replace(html.Length > 300 ? html[..300] : html, @"\s+", " ")}"
+                                           : string.Join(" | ", candidates.Select(System.Net.WebUtility.HtmlDecode))));
+            }
             next = nextUrl is not null && nextUrl != next ? nextUrl : null;
             if (next is not null && list.Count < Want && list.Count > before)
                 progress?.Report(ProviderListingResult.OfThreads(list.ToArray()));   // 続きがあるときだけ (最後は戻り値で渡す)
@@ -283,7 +343,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     private static readonly System.Text.RegularExpressions.Regex NsfwAttrRegex =
         new(@"\snsfw(?=[\s>=/])", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex HomeFeedNextRegex =
-        new(@"src=""(?<src>/svc/shreddit/feeds/home-feed[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"src=""(?<src>/svc/shreddit/feeds/(?:interest-)?home-feed\?[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PermalinkRegex =
         new(@"^/r/(?<sub>[A-Za-z0-9_]+)/comments/(?<id>[a-z0-9]+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
 

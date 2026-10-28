@@ -27,7 +27,7 @@ public static class RedditProbe
         {
             try
             {
-                foreach (var line in await host.DiagnoseAsync(ct).ConfigureAwait(false)) L("0. " + line);
+                foreach (var line in await host.DiagnoseAsync(ct, Path.GetDirectoryName(reportPath)).ConfigureAwait(false)) L("0. " + line);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -101,7 +101,11 @@ public static class RedditProbe
                     foreach (var n in new[] { Math.Min(100, moreIds.Count), Math.Min(150, moreIds.Count) }.Distinct())
                     {
                         var ids = string.Join(",", moreIds.Take(n));
-                        var (s4, mc, i4) = await Get($"https://www.reddit.com/api/morechildren.json?api_type=json&link_id=t3_{id}&children={ids}&sort=old&raw_json=1");
+                        // アプリと同じく「取れなくても困らない要求」として送る (弾かれても確認の窓を出さない)
+                        (int, JsonDocument?, string) got;
+                        using (ChBrowser.Services.Bbs.ProviderRequestContext.Optional())
+                            got = await Get($"https://www.reddit.com/api/morechildren.json?api_type=json&link_id=t3_{id}&children={ids}&sort=old&raw_json=1");
+                        var (s4, mc, i4) = got;
                         var things = mc?.RootElement.TryGetProperty("json", out var j) == true && j.TryGetProperty("data", out var jd)
                                      && jd.TryGetProperty("things", out var th) ? th.GetArrayLength() : -1;
                         var errors = mc?.RootElement.TryGetProperty("json", out var j2) == true && j2.TryGetProperty("errors", out var er) ? er.ToString() : "";

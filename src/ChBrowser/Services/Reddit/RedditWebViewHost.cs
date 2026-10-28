@@ -74,7 +74,7 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
 
     /// <summary>接続テスト用の診断: 隠しページの状態・Cookie の名前 (値は出さない)・要求の種類ごとの通り方を、
     /// ログイン窓を出さずに (通信経路を通さず直接) 確かめて行ごとに返す。最後に隠しページを元に戻す。</summary>
-    public Task<IReadOnlyList<string>> DiagnoseAsync(CancellationToken ct)
+    public Task<IReadOnlyList<string>> DiagnoseAsync(CancellationToken ct, string? sampleDir = null)
         => _dispatcher.InvokeAsync(async () =>
         {
             var lines = new List<string>();
@@ -101,8 +101,9 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 lines.Add($"Cookie ({names.Count} 個): {string.Join(" / ", names)}");
             }
 
-            async Task Try(string label, string url, bool jsonAccept, string? referrer = null)
+            async Task Try(string label, string url, bool jsonAccept, string? referrer = null, string? saveAs = null)
             {
+                await Task.Delay(300, ct).ConfigureAwait(true);   // 連続で送りすぎない
                 try
                 {
                     var headers = jsonAccept
@@ -117,6 +118,11 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                     var extra = url.Contains("/api/me.json", StringComparison.Ordinal) && kind == "JSON"
                         ? $" name={(RedditSessionAuth.ParseMe(r).Name is { Length: > 0 } nm ? nm : "(無し)")}" : "";
                     lines.Add($"{label}: {r.Status} {r.Header("content-type")} {r.Body.Length}B → {kind}{extra}{(r.Redirected ? $" 転送先 {r.FinalUrl}" : "")}");
+                    if (saveAs is not null && sampleDir is not null && r.Status == 200)
+                    {
+                        try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(sampleDir, saveAs), r.Body); }
+                        catch (System.IO.IOException) { }
+                    }
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
@@ -124,28 +130,115 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 }
             }
 
+            // アプリが使う読み取りの要求 (書き込み・評価は試さない)。送り元はアプリと同じ (ホーム)
+            const string O = "https://www.reddit.com";
+            var endpoints = new (string Label, string Url, string? Save)[]
+            {
+                ("me.json",                     $"{O}/api/me.json?raw_json=1", null),
+                ("板のスレ一覧 hot.json",        $"{O}/r/redditdev/hot.json?limit=5&raw_json=1", null),
+                ("板情報 about.json",            $"{O}/r/redditdev/about.json?raw_json=1", null),
+                ("スレ comments.json",           $"{O}/r/redditdev/comments/1wubcvf.json?sort=old&limit=20&raw_json=1", null),
+                ("ホットなスレ r/popular",       $"{O}/r/popular/hot.json?limit=5&raw_json=1", null),
+                ("ホットな板 subreddits/popular", $"{O}/subreddits/popular.json?limit=5&raw_json=1", null),
+                ("購読一覧 subreddits/mine",      $"{O}/subreddits/mine/subscriber.json?limit=5&raw_json=1", null),
+                ("板検索 subreddits/search",      $"{O}/subreddits/search.json?q=python&limit=5&raw_json=1", null),
+                ("板検索 autocomplete_v2",        $"{O}/api/subreddit_autocomplete_v2.json?query=python&include_over_18=true&include_profiles=false&limit=10&raw_json=1", null),
+                ("板検索 search_reddit_names",    $"{O}/api/search_reddit_names.json?query=python&include_over_18=true", null),
+                ("板検索 search.json type=sr",    $"{O}/search.json?q=python&type=sr&limit=5&raw_json=1", null),
+                ("板検索 HTML",                  $"{O}/search/?q=python&type=communities", "probe_search_communities.html"),
+                ("投稿者情報 user_data_by_account_ids", $"{O}/api/user_data_by_account_ids.json?ids=t2_4amlb", null),
+            };
             async Task Probes(string prefix)
             {
-                await Try($"{prefix} me.json (送り元=ホーム)", "https://www.reddit.com/api/me.json?raw_json=1", true).ConfigureAwait(true);
-                await Try($"{prefix} me.json (送り元=今のページ)", "https://www.reddit.com/api/me.json?raw_json=1", true, "about:client").ConfigureAwait(true);
-                await Try($"{prefix} r/popular/hot.json (送り元=ホーム)", "https://www.reddit.com/r/popular/hot.json?limit=5&raw_json=1", true).ConfigureAwait(true);
-                await Try($"{prefix} r/popular/hot.json (送り元=今のページ)", "https://www.reddit.com/r/popular/hot.json?limit=5&raw_json=1", true, "about:client").ConfigureAwait(true);
+                foreach (var (label, url, save) in endpoints)
+                    await Try($"{prefix} {label}", url, save is null, saveAs: save).ConfigureAwait(true);
+                await Try($"{prefix} me.json (送り元=今のページ)", $"{O}/api/me.json?raw_json=1", true, "about:client").ConfigureAwait(true);
             }
 
-            var wasRealPage = _onRealPage;
+            // コメントの続き (morechildren): アプリは GET が弾かれたら同じ内容を POST で送り直す。その両方を試す (読み取りのみ)
+            async Task MoreChildren(string prefix)
+            {
+                try
+                {
+                    await Task.Delay(300, ct).ConfigureAwait(true);
+                    var json = new[] { new KeyValuePair<string, string>("Accept", "application/json") };
+                    var me = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET", $"{O}/api/me.json?raw_json=1", json), ct).ConfigureAwait(true);
+                    var modhash = RedditSessionAuth.ParseMe(me).Modhash;
+                    await Task.Delay(300, ct).ConfigureAwait(true);
+                    var thread = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET",
+                        $"{O}/r/redditdev/comments/1wubcvf.json?sort=old&limit=20&raw_json=1", json), ct).ConfigureAwait(true);
+                    var ids = new List<string>();
+                    using (var doc = JsonDocument.Parse(thread.Body))
+                        foreach (var c in doc.RootElement[1].GetProperty("data").GetProperty("children").EnumerateArray())
+                            if (c.GetProperty("kind").GetString() == "more")
+                                foreach (var id in c.GetProperty("data").GetProperty("children").EnumerateArray())
+                                    if (ids.Count < 20 && id.GetString() is { Length: > 0 } s) ids.Add(s);
+                    if (ids.Count == 0) { lines.Add($"{prefix} 続き (morechildren): 続きの無いスレだったので未測定"); return; }
+
+                    var query = $"api_type=json&link_id=t3_1wubcvf&children={string.Join(",", ids)}&sort=old&raw_json=1";
+                    await Try($"{prefix} 続き morechildren (GET, {ids.Count} 件)", $"{O}/api/morechildren.json?{query}", true).ConfigureAwait(true);
+
+                    await Task.Delay(300, ct).ConfigureAwait(true);
+                    var headers = new List<KeyValuePair<string, string>>
+                    {
+                        new("Accept", "application/json"),
+                        new("Content-Type", "application/x-www-form-urlencoded"),
+                    };
+                    if (modhash is { Length: > 0 }) headers.Add(new("X-Modhash", modhash));
+                    var r = await FetchOnceOnUiAsync(new BrowserFetchRequest("POST", $"{O}/api/morechildren.json", headers,
+                        System.Text.Encoding.UTF8.GetBytes(query)), ct).ConfigureAwait(true);
+                    var things = -1;
+                    if (RedditResponse.LooksLikeJson(r))
+                    {
+                        using var doc = JsonDocument.Parse(r.Body);
+                        if (doc.RootElement.TryGetProperty("json", out var j) && j.TryGetProperty("data", out var d)
+                            && d.TryGetProperty("things", out var th)) things = th.GetArrayLength();
+                    }
+                    var kind = RedditResponse.LooksLikeJson(r) ? "JSON" : RedditResponse.IsNetworkSecurityBlock(r) ? "network security" : "その他";
+                    lines.Add($"{prefix} 続き morechildren (POST, {ids.Count} 件, modhash {(modhash is { Length: > 0 } ? "あり" : "なし")}): " +
+                              $"{r.Status} {r.Header("content-type")} {r.Body.Length}B → {kind}{(things >= 0 ? $" things={things}" : "")}");
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
+                                              or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException)
+                {
+                    lines.Add($"{prefix} 続き (morechildren): 失敗 {ex.Message}");
+                }
+            }
+
+            // あなたへのおすすめ: ホームの HTML と、そこに書かれている続きのページ (/svc/shreddit/feeds/home-feed?…)
+            async Task HomeFeed(string prefix)
+            {
+                try
+                {
+                    await Task.Delay(300, ct).ConfigureAwait(true);
+                    var home = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET", $"{O}/", Array.Empty<KeyValuePair<string, string>>()), ct).ConfigureAwait(true);
+                    var html = System.Text.Encoding.UTF8.GetString(home.Body);
+                    var posts = System.Text.RegularExpressions.Regex.Matches(html, @"<shreddit-post\b").Count;
+                    var m = System.Text.RegularExpressions.Regex.Match(html, @"src=""(?<src>/svc/shreddit/feeds/(?:interest-)?home-feed\?[^""]*)""");
+                    lines.Add($"{prefix} おすすめ ホーム HTML: {home.Status} {home.Body.Length}B shreddit-post={posts} 続き={(m.Success ? "あり" : "なし")}");
+                    if (!m.Success) return;
+                    await Try($"{prefix} おすすめ 続きのページ", O + System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value), false).ConfigureAwait(true);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    lines.Add($"{prefix} おすすめ: 失敗 {ex.Message}");
+                }
+            }
+
             await NavigateAsync(HomeUrl).ConfigureAwait(true);
             await Page("隠しページ").ConfigureAwait(true);
             await Cookies().ConfigureAwait(true);
             await Probes("[robots.txt 上]").ConfigureAwait(true);
+            await MoreChildren("[robots.txt 上]").ConfigureAwait(true);
+            await HomeFeed("[robots.txt 上]").ConfigureAwait(true);
 
-            // ホームを開いて (JS の確認ページがあればそれも通して) から、もう一度試す
+            // 比較用: ホームを開いて (JS の確認ページがあればそれも通して) から、もう一度試す
             await OpenRealPageAsync(ct).ConfigureAwait(true);
             await Page("ホームを開いた後の隠しページ").ConfigureAwait(true);
             await Probes("[ホーム上]").ConfigureAwait(true);
 
-            // 元の状態に戻す (送り元の指定だけで通っていたなら robots.txt に)
-            _onRealPage = wasRealPage;
-            if (!wasRealPage) await NavigateAsync(HomeUrl).ConfigureAwait(true);
+            // 元の robots.txt に戻す (アプリの通常の状態)
+            await NavigateAsync(HomeUrl).ConfigureAwait(true);
             return (IReadOnlyList<string>)lines;
         }).Task.Unwrap();
 
@@ -153,25 +246,14 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
     /// ログイン中でも「network security」で弾くようになった (2026-10、接続テストの診断で確認)。</summary>
     private const string ReferrerUrl = "https://www.reddit.com/";
 
-    /// <summary>隠しページを reddit のホームにした後か (送り元の指定だけでは通らなかったとき)。</summary>
-    private bool _onRealPage;
+    // 送り元を指定しても弾かれたときに隠しページでホームを開いて送り直す処理は外した: 接続テストの診断 (2026-10-28) で、
+    // 送り元の指定で通らない要求 (板検索・morechildren の GET) はホーム上からでも通らず、重いホームを開き続けるだけだったため
+    private Task<BrowserFetchResult> FetchOnUiAsync(BrowserFetchRequest request, CancellationToken ct)
+        => FetchOnceOnUiAsync(request, ct);
 
-    private async Task<BrowserFetchResult> FetchOnUiAsync(BrowserFetchRequest request, CancellationToken ct)
-    {
-        var r = await FetchOnceOnUiAsync(request, ct).ConfigureAwait(true);
-        if (_onRealPage || !RedditResponse.IsNetworkSecurityBlock(r)) return r;
-
-        // 送り元を指定しても弾かれた: 隠しページで reddit のホームを開き (JS の確認ページがあれば通るのを待って)、そこから送り直す。
-        // 以後はホームを開いたままにする (EnsureOnHomeAsync は www.reddit.com 上なら移動しない)
-        ChBrowser.Services.Logging.LogService.Instance.Write("[reddit] robots.txt 上からの要求が弾かれたので、隠しページでホームを開いて送り直します");
-        await OpenRealPageAsync(ct).ConfigureAwait(true);
-        return await FetchOnceOnUiAsync(request, ct).ConfigureAwait(true);
-    }
-
-    /// <summary>隠しページで reddit のホームを開き、JS の確認ページが済むまで (最大 15 秒) 待つ。</summary>
+    /// <summary>(診断用) 隠しページで reddit のホームを開き、JS の確認ページが済むまで (最大 15 秒) 待つ。</summary>
     private async Task OpenRealPageAsync(CancellationToken ct)
     {
-        _onRealPage = true;
         _webView!.CoreWebView2.IsMuted = true;   // ホームの動画等が隠しページで鳴らないように
         await NavigateAsync("https://www.reddit.com/").ConfigureAwait(true);
         for (var i = 0; i < 30; i++)
