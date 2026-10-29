@@ -42,6 +42,7 @@ public partial class AiChatWindow : Window
         Owner       = owner;
 
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "AiChat");   // 前回の大きさで開く
 
         // VM の表示更新イベントを購読 (すべて UI スレッド上で発火する)。
         _vm.UserMessageAdded += OnUserMessageAdded;

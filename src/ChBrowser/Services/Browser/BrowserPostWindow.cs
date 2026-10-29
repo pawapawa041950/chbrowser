@@ -50,6 +50,7 @@ public sealed class BrowserPostWindow : Window
         Title  = provider.BrowserPostWindowTitle;
         Width  = 820;
         Height = 860;
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "BrowserPost");   // 前回の大きさで開く
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var header = new TextBlock

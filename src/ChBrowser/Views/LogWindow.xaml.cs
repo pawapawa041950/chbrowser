@@ -18,6 +18,7 @@ public partial class LogWindow : Window
     public LogWindow()
     {
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "Log");   // 前回の大きさで開く
         Closing += LogWindow_Closing;
     }
 

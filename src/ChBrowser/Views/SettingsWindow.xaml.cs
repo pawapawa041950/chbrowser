@@ -14,6 +14,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(SettingsViewModel vm)
     {
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "Settings");   // 前回の大きさで開く
         DataContext = vm;
         _vm         = vm;
         // ウィンドウを閉じるときに debounce で保留中の保存があれば確定させる

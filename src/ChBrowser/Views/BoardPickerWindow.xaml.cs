@@ -22,6 +22,7 @@ public partial class BoardPickerWindow : Window
     public BoardPickerWindow(IReadOnlyList<BoardScopeViewModel> available, BoardScopeViewModel? current)
     {
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "BoardPicker");   // 前回の大きさで開く
         _all                 = available;
         ResultList.ItemsSource = _filtered;
         ApplyFilter("");

@@ -35,6 +35,7 @@ public sealed class RedditLoginWindow : Window
         Title  = reason == RedditLoginReason.Login ? "reddit にログイン" : "reddit: ブラウザでの確認";
         Width  = 560;
         Height = 760;
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "RedditLogin");   // 前回の大きさで開く
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var header = new TextBlock

@@ -236,9 +236,12 @@ public partial class MainWindow : Window
             if (_logWindow is null)
             {
                 _logWindow = new Views.LogWindow { Owner = this };
-                // 初期位置は MainWindow の右隣 (= 画面端を超えそうなら下にずらす)
-                _logWindow.Left = Math.Max(0, Left + Width - _logWindow.Width - 40);
-                _logWindow.Top  = Math.Max(0, Top + 60);
+                // 初期位置は MainWindow の右隣 (= 画面端を超えそうなら下にずらす)。前回の位置を保存してあればそれを使う
+                if (!ChBrowser.Services.Storage.WindowSizeStore.HasSaved("Log"))
+                {
+                    _logWindow.Left = Math.Max(0, Left + Width - _logWindow.Width - 40);
+                    _logWindow.Top  = Math.Max(0, Top + 60);
+                }
                 _logWindow.UserClosed += (_, _) =>
                 {
                     if (_vm is not null) _vm.IsLogPaneVisible = false;

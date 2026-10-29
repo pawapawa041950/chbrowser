@@ -14,6 +14,7 @@ public partial class NgWindow : Window
     public NgWindow(NgWindowViewModel vm)
     {
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "Ng");   // 前回の大きさで開く
         DataContext = vm;
         _vm         = vm;
         Closed += (_, _) => _vm.NotifyClosed();

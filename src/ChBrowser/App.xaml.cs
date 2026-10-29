@@ -212,6 +212,8 @@ public partial class App : Application
 
         // ウィンドウ/ペインサイズの永続化
         var layoutStorage = new LayoutStorage(paths);
+        // サブウィンドウ (AI チャット / 設定 / NG / ログ …) の大きさ
+        ChBrowser.Services.Storage.WindowSizeStore.Initialize(paths);
         // ビューアウィンドウのサイズ/位置はメイン (= MainWindow) と同じ layout.json に同居して保存している。
         // 起動時に一度だけ読み出してキャッシュし、ビューアが lazy 生成された瞬間に適用する。
         // ビューア未使用でアプリを閉じた場合の再保存にも使うので、起動時に読み逃すと値が消える。
@@ -665,6 +667,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        ChBrowser.Services.Storage.WindowSizeStore.Flush();
         IsShuttingDown = true;
         _imageViewerWindow?.Close();
         _ngWindow?.Close();

@@ -18,6 +18,7 @@ public partial class ShortcutsWindow : Window
     public ShortcutsWindow(ShortcutsWindowViewModel vm)
     {
         InitializeComponent();
+        ChBrowser.Services.Storage.WindowSizeStore.Attach(this, "Shortcuts");   // 前回の大きさで開く
         DataContext = vm;
         _vm         = vm;
         Closing += ShortcutsWindow_Closing;
