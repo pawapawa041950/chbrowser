@@ -7,7 +7,7 @@
 //   { type: 'ready' }                                      — シェル読み込み完了 (C# は中身を全部送る)
 //   { type: 'openBoard', host, directoryName, name }       — 板クリック or ダブルクリック (設定による)
 //   { type: 'setCategoryExpanded', categoryName, expanded } — カテゴリの開閉トグル
-//   { type: 'providerAction', providerId, action }         — 板一覧の無い掲示板の「検索」(search) /「表示済み板」(shown)
+//   { type: 'providerAction', providerId, action }         — 板一覧の無い掲示板の「検索」(search) /「表示済み板」(shown) / 全掲示板の「ログ」(logs)
 //   { type: 'contextMenu', target: 'board', host, directoryName, name } — 板右クリック
 //   { type: 'shortcut'|'gesture', descriptor }              — Phase 16: ブリッジから dispatch 要求
 // C# → JS:
@@ -92,7 +92,8 @@
               + '<summary class="provider-name">' + esc(pv.name)
               + (typeof pv.boardCount === 'number' ? ' <span class="provider-count">' + pv.boardCount + '</span>' : '')
               + '</summary>';
-        // 掲示板の公式の一覧 (ホットなスレッド / ホットな板 / おすすめ) と、板一覧を持たない掲示板 (したらば / reddit) の「検索」「表示済み板」。
+        // 掲示板の公式の一覧 (ホットなスレッド / ホットな板 / おすすめ) と、板一覧を持たない掲示板 (したらば / reddit) の「検索」「表示済み板」、
+        // どの掲示板にもある「ログ」(その掲示板の取得済みスレの一覧)。
         // li.board と同じ見た目で、provider-action で見分ける
         var acts = '';
         var listings = pv.listings || [];
@@ -103,6 +104,7 @@
                 acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="search">\u{1F50D} 検索</li>';
             acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="shown">\u{1F4C1} 表示済み板</li>';
         }
+        acts += '<li class="board provider-action" data-provider="' + esc(pv.id) + '" data-action="logs">\u{1F4DC} ログ</li>';
         if (acts) h += '<ul class="boards provider-actions">' + acts + '</ul>';
         if (!pv.hasBoardList) {
             // 板一覧を持たない掲示板は上の項目だけ

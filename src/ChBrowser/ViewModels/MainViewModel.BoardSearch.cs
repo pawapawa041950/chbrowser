@@ -40,6 +40,9 @@ public sealed partial class MainViewModel
             case "shown":
                 await OpenShownBoardsTabAsync(provider).ConfigureAwait(true);
                 break;
+            case "logs":
+                await OpenProviderLogsTabAsync(provider).ConfigureAwait(true);
+                break;
             default:
                 // 掲示板が公式に出している一覧 (ホットなスレッド / ホットな板 / おすすめ)。action = "listing:<id>"
                 if (action.StartsWith("listing:", StringComparison.Ordinal)
@@ -122,6 +125,19 @@ public sealed partial class MainViewModel
                     LogMarkState.None, Favorites.FindBoard(h.Board.Host, h.Board.DirectoryName) is not null, ThreadListItemKind.Board));
             }
             return (items, $"{provider.DisplayName} の板検索「{keyword}」: {items.Count} 件");
+        });
+    }
+
+    /// <summary>その掲示板の取得済みスレ (ローカルにログがあるスレ) を全板分まとめた一覧タブを開く (全ログの掲示板別版)。
+    /// ネットワークは使わない。タブの「更新」で走査し直す。</summary>
+    public Task OpenProviderLogsTabAsync(IBbsProvider provider)
+    {
+        var id = DeterministicTabId($"logs:{provider.Id}");
+        var header = $"📜 {provider.DisplayName}: ログ";
+        return OpenBoardRowsTabAsync(id, header, _ =>
+        {
+            var items = BuildAllLogsItems(excludeFavorites: false, provider.Id);
+            return Task.FromResult((items, $"{provider.DisplayName} のログ: {items.Count} 件"));
         });
     }
 

@@ -499,14 +499,16 @@ public sealed partial class MainViewModel
     /// なければ dat の 1 行目から title を取って Dropped (茶) でマーク。
     /// <paramref name="excludeFavorites"/>=true ならお気に入り登録済みのスレを一覧から除外する。
     /// 板 dir が 2 階層の掲示板 (したらば <c>internet/12249</c>) は <c>data/&lt;root&gt;/internet/12249/*.dat</c> と入れ子になるので、
-    /// 1 階層目に *.dat が無ければ 1 段だけ降りて <c>"&lt;parent&gt;/&lt;child&gt;"</c> を dir 名として扱う。</summary>
-    private List<ThreadListItem> BuildAllLogsItems(bool excludeFavorites)
+    /// 1 階層目に *.dat が無ければ 1 段だけ降りて <c>"&lt;parent&gt;/&lt;child&gt;"</c> を dir 名として扱う。
+    /// <paramref name="providerId"/> を渡すとその掲示板の保存ルートだけを走査する (板一覧の掲示板ごとの「ログ」)。</summary>
+    private List<ThreadListItem> BuildAllLogsItems(bool excludeFavorites, string? providerId = null)
     {
         var items   = new List<ThreadListItem>();
         var favSet  = Favorites.CollectFavoriteThreadKeys();
 
         foreach (var rootDomain in ChBrowser.Services.Bbs.BbsRegistry.StorageRoots)
         {
+            if (providerId is not null && ChBrowser.Services.Bbs.BbsRegistry.ResolveByStorageRoot(rootDomain).Id != providerId) continue;
             var rootDir = System.IO.Path.Combine(_paths.Root, rootDomain);
             if (!System.IO.Directory.Exists(rootDir)) continue;
 
