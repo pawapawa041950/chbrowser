@@ -632,6 +632,7 @@ public sealed partial class MainViewModel
             existing.State = finalState;
             if (dropped) existing.StatusMessage = $"{existing.Header}{DroppedNote}";
             UpdateTruncatedNote(existing);   // 取り切れなかったら「続きあり」(reddit)
+            _ = LoadAuthorProfilesAsync(existing, fetchStale: !dropped);   // 投稿者のアイコン (reddit。新着の投稿者の分)
             if (existing.IsTranslationOn) _ = TranslateMissingAsync(existing);   // スレ全体の翻訳が ON なら新着も訳す
             return;
         }
@@ -714,6 +715,8 @@ public sealed partial class MainViewModel
         NotifyThreadListLogMark(board, info.Key, newTabState);
         tab.State = newTabState;
         if (dropped) tab.StatusMessage = $"{info.Title}{DroppedNote}";
+        // 投稿者のアイコン (reddit)。dat 落ちのスレは通信せず保存済みのものだけ出す
+        _ = LoadAuthorProfilesAsync(tab, fetchStale: !dropped);
         if (tab.IsTranslationOn) _ = TranslateMissingAsync(tab);   // スレ全体の翻訳が ON (保存済みの設定) なら未訳のレスを訳す
     }
 }
