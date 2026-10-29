@@ -780,6 +780,29 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         PersistConfigCallback?.Invoke(next);
     }
 
+    /// <summary>スレ一覧 (thread-list.js) 向けの設定 (<c>setConfig</c>): クリック動作と、列幅・隠している列。</summary>
+    private static string BuildThreadListConfigJson(AppConfig config)
+        => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type              = "setConfig",
+            openOnSingleClick = config.ThreadListOpenOnSingleClick,
+            columns           = new
+            {
+                widths = config.ThreadListColumnWidths ?? new System.Collections.Generic.Dictionary<string, int>(),
+                hidden = config.ThreadListHiddenColumns ?? new System.Collections.Generic.List<string>(),
+                order  = config.ThreadListColumnOrder   ?? new System.Collections.Generic.List<string>(),
+            },
+        });
+
+    /// <summary>スレ一覧の列幅・隠している列・並び順を保存し、開いているすべてのスレ一覧へ反映する
+    /// (見出しの境界のドラッグ / 見出しのドラッグ / 見出しの右クリックメニューから。どのタブ・ペインのスレ一覧も同じ列構成になる)。</summary>
+    public void SaveThreadListColumns(System.Collections.Generic.Dictionary<string, int> widths, System.Collections.Generic.List<string> hidden,
+                                      System.Collections.Generic.List<string> order)
+    {
+        UpdateAndPersistConfig(c => c with { ThreadListColumnWidths = widths, ThreadListHiddenColumns = hidden, ThreadListColumnOrder = order });
+        ThreadListConfigJson = BuildThreadListConfigJson(CurrentConfig);
+    }
+
     /// <summary>スレ表示 (thread.js) 向けの全タブ共通の設定 (<c>setConfig</c>)。<see cref="ApplyConfig"/> から作る
     /// (掲示板ごとの設定はタブの ProviderConfig)。</summary>
     private static string BuildThreadConfigJson(AppConfig config)
@@ -873,10 +896,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
         {
             type = "setConfig", openOnSingleClick = config.BoardListOpenOnSingleClick,
         });
-        ThreadListConfigJson = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            type = "setConfig", openOnSingleClick = config.ThreadListOpenOnSingleClick,
-        });
+        ThreadListConfigJson = BuildThreadListConfigJson(config);
 
         // NG 判定 AI: しきい値を UI ミラーに反映し、選択中タブがあれば即時に再フィルタ / 判定再開する
         // (= 設定画面でしきい値や接続先を変えた直後にも効く)。

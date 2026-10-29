@@ -259,6 +259,16 @@ public sealed record AppConfig
     /// <summary>スレッド一覧ペインで 1 クリックで開く。OFF でダブルクリック動作。即時反映。</summary>
     public bool ThreadListOpenOnSingleClick { get; init; } = true;
 
+    /// <summary>スレッド一覧の列幅 (列のキー → px)。見出しの境界をドラッグすると保存される。null / 無いキーは既定の幅。
+    /// キー: log / no / title / board / count / momentum / created。</summary>
+    public System.Collections.Generic.Dictionary<string, int>? ThreadListColumnWidths { get; init; }
+
+    /// <summary>スレッド一覧で隠している列のキー (見出しの右クリックメニューで切り替える)。null = すべて表示。</summary>
+    public System.Collections.Generic.List<string>? ThreadListHiddenColumns { get; init; }
+
+    /// <summary>スレッド一覧の列の並び順 (列のキー。見出しのドラッグで入れ替える)。null = 既定の並び。</summary>
+    public System.Collections.Generic.List<string>? ThreadListColumnOrder { get; init; }
+
     // ---- タブ表示 (= 設定画面「タブ」カテゴリ) ----
     // 旧 click action 設定 (Middle/Ctrl/Shift/Alt/DoubleClick) はショートカット & ジェスチャー
     // 設定ウィンドウ側に移設済み (= スレ一覧のタブ領域 / スレッドタブ表示領域 カテゴリ)。

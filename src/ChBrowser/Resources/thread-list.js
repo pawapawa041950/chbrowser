@@ -7,10 +7,12 @@
 //   { type: 'openBoard', host, directoryName, name }                     — 板行 (data-kind="board") のクリックで板を開く
 //   { type: 'threadListRowMenu', kind, host, directoryName, key, title } — 行の右クリック (kind: 'thread' | 'board')
 //   { type: 'paneActivated' }                                            — Phase 14: pane 内任意の mousedown (アドレスバー切替用)
+//   { type: 'threadListColumns', widths: { key: px }, hidden: [key], order: [key] } — 列幅のドラッグ / 見出しのドラッグでの並べ替え /
+//                                                                       見出しの右クリックで列を出し入れした (C# が保存して全スレ一覧へ setConfig)
 // C# → JS:
 //   { type: 'setItems', rows: [{ kind, key, host, dir, no, title, board, count, momentum, log, fav }, ...] } — 行の全体
 //   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
-//   { type: 'setConfig', openOnSingleClick: bool }                       — Phase 11b: クリック動作の設定
+//   { type: 'setConfig', openOnSingleClick: bool, columns: { widths, hidden, order } } — クリック動作の設定、列幅・隠している列・並び順
 
 (function() {
     'use strict';
@@ -53,6 +55,7 @@
 
     document.querySelectorAll('thead th.sortable').forEach(function(th) {
         th.addEventListener('click', function() {
+            if (suppressSortClick) return;   // 見出しをドラッグして並べ替えた直後のクリックは並べ替えにしない
             var isAsc = th.classList.contains('sort-asc');
             var dir   = isAsc ? -1 : 1;
             document.querySelectorAll('thead th.sortable').forEach(function(o) {
@@ -66,23 +69,15 @@
     // 列リサイザ — 各 <th> の右端に <span class="col-resizer"> を差し込み、
     // ドラッグで列幅を変更する。table-layout: fixed なので th.style.width が
     // そのままその列の確定幅になる。最右の列はリサイザ無し (右に列が無いので)。
-    // 幅は localStorage("chbrowser.threadlist.colwidths") に data-sort キーで保存。
-    var WIDTH_KEY = 'chbrowser.threadlist.colwidths';
+    // 幅と隠している列は C# に送って設定ファイルに保存し (このページは data: URL なので localStorage が使えない)、
+    // setConfig.columns で受け取って当てる (どのタブ・ペインのスレ一覧も同じ列構成になる)。
     var MIN_COL_WIDTH = 24;
 
-    function loadSavedWidths() {
-        try {
-            var raw = localStorage.getItem(WIDTH_KEY);
-            if (!raw) return {};
-            var obj = JSON.parse(raw);
-            return (obj && typeof obj === 'object') ? obj : {};
-        } catch (_) { return {}; }
-    }
-    function saveWidths(map) {
-        try { localStorage.setItem(WIDTH_KEY, JSON.stringify(map)); } catch (_) {}
-    }
-
-    var savedWidths = loadSavedWidths();
+    var savedWidths = {};      // data-sort キー → content-box の px
+    var hiddenCols  = [];      // 隠している列の data-sort キー
+    var DEFAULT_ORDER = ['log', 'no', 'title', 'board', 'count', 'created', 'momentum'];
+    var colOrder    = DEFAULT_ORDER.slice();   // 列の並び (見出しのドラッグで入れ替える)。行のセルもこの順で組み立てる
+    var suppressSortClick = false;
     var ths = Array.prototype.slice.call(document.querySelectorAll('thead th'));
 
     function paddingX(el) {
@@ -90,13 +85,68 @@
         return (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
     }
 
-    ths.forEach(function(th, idx) {
-        var key = th.dataset.sort;
-        if (key && savedWidths[key]) {
-            th.style.width = savedWidths[key] + 'px';
-        }
-        if (idx === ths.length - 1) return; // 最右列にはハンドル不要
+    function isHidden(key) { return hiddenCols.indexOf(key) >= 0; }
+    /** 見えている見出しを今の並び (DOM の順) で返す。 */
+    function visibleThs() {
+        return Array.prototype.slice.call(document.querySelectorAll('thead th'))
+            .filter(function(t) { return !isHidden(t.dataset.sort); });
+    }
 
+    function postColumns() {
+        if (!window.chrome || !window.chrome.webview) return;
+        window.chrome.webview.postMessage({ type: 'threadListColumns', widths: savedWidths, hidden: hiddenCols, order: colOrder });
+    }
+
+    /** 保存されていた並びを整える: 知らないキー・重複は捨て、足りない列 (後から増えた列) は既定の位置に差し込む。 */
+    function normalizeOrder(order) {
+        var res = [];
+        (Array.isArray(order) ? order : []).forEach(function(k) {
+            if (DEFAULT_ORDER.indexOf(k) >= 0 && res.indexOf(k) < 0) res.push(k);
+        });
+        DEFAULT_ORDER.forEach(function(k, i) {
+            if (res.indexOf(k) < 0) res.splice(Math.min(i, res.length), 0, k);
+        });
+        return res;
+    }
+
+    /** 見出しと各行のセルを colOrder の順に並べ直す (並びが変わったときだけ)。 */
+    function applyOrder() {
+        var headTr = document.querySelector('thead tr');
+        var current = Array.prototype.map.call(headTr.children, function(t) { return t.dataset.sort; });
+        if (current.join(',') === colOrder.join(',')) return;
+        colOrder.forEach(function(k) {
+            var th = headTr.querySelector('th[data-sort="' + k + '"]');
+            if (th) headTr.appendChild(th);
+        });
+        var rows = tbody.rows;
+        for (var i = 0; i < rows.length; i++) {
+            for (var j = 0; j < colOrder.length; j++) {
+                var td = rows[i].querySelector('td.col-' + colOrder[j]);
+                if (td) rows[i].appendChild(td);
+            }
+        }
+    }
+
+    /** 列幅と表示 / 非表示を見出しに当てる。隠す列は <style> で th / td ごと消す。
+     *  リサイザは「見えている列のうち最右以外」にだけ出す (右に列が無いので)。 */
+    function applyColumns() {
+        applyOrder();
+        ths.forEach(function(th) {
+            var key = th.dataset.sort;
+            th.style.width = key && savedWidths[key] ? savedWidths[key] + 'px' : '';
+        });
+        var css = hiddenCols.map(function(k) { return '.col-' + k + '{display:none}'; }).join('');
+        var style = document.getElementById('col-visibility');
+        if (!style) { style = document.createElement('style'); style.id = 'col-visibility'; document.head.appendChild(style); }
+        style.textContent = css;
+        var vis = visibleThs();
+        ths.forEach(function(th) {
+            var grip = th.querySelector('.col-resizer');
+            if (grip) grip.style.display = th === vis[vis.length - 1] ? 'none' : '';
+        });
+    }
+
+    ths.forEach(function(th) {
         var grip = document.createElement('span');
         grip.className = 'col-resizer';
         th.appendChild(grip);
@@ -114,7 +164,10 @@
             // padding を引いた content-box 値にしないと開始時点で padding ぶんずれる。
             //
             var startX = e.clientX;
-            var snapshot = ths.map(function(t) {
+            var vis = visibleThs();
+            var idx = vis.indexOf(th);
+            if (idx < 0 || idx === vis.length - 1) return;
+            var snapshot = vis.map(function(t) {
                 return { th: t, border: t.getBoundingClientRect().width, pad: paddingX(t) };
             });
             // border-box 値 + delta を content-box の style.width に書き戻すヘルパ。
@@ -154,7 +207,7 @@
                 var bW   = parseInt(bSnap.th.style.width, 10);
                 if (aKey && !isNaN(aW)) savedWidths[aKey] = aW;
                 if (bKey && !isNaN(bW)) savedWidths[bKey] = bW;
-                saveWidths(savedWidths);
+                postColumns();
             }
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup',   onUp);
@@ -164,6 +217,117 @@
         // click も念のため抑止 (Chromium 系は mousedown で防いでも click は飛ぶ場合がある)。
         grip.addEventListener('click', function(e) { e.stopPropagation(); });
     });
+    applyColumns();
+
+    // ---------- 見出しのドラッグで列の並べ替え ----------
+    // 見出しを 5px 以上動かすとドラッグ扱い。落とす位置 (見えている見出しの左右の中央で判定) に縦線を出し、
+    // 離したら colOrder を入れ替えて保存する。境界のリサイザの mousedown は stopPropagation 済みなのでここには来ない。
+    ths.forEach(function(th) {
+        th.addEventListener('mousedown', function(e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            var startX = e.clientX, dragging = false, marker = null, target = null;
+
+            function onMove(ev) {
+                if (!dragging) {
+                    if (Math.abs(ev.clientX - startX) < 5) return;
+                    dragging = true;
+                    th.classList.add('col-dragging');
+                    marker = document.createElement('div');
+                    marker.className = 'col-drop-marker';
+                    document.body.appendChild(marker);
+                }
+                var vis = visibleThs();
+                target = null;
+                for (var i = 0; i < vis.length; i++) {
+                    var r = vis[i].getBoundingClientRect();
+                    if (ev.clientX < r.left + r.width / 2) { target = { before: vis[i], x: r.left }; break; }
+                }
+                if (!target) target = { before: null, x: vis[vis.length - 1].getBoundingClientRect().right };
+                var hr = th.parentNode.getBoundingClientRect();
+                marker.style.left   = (target.x - 1) + 'px';
+                marker.style.top    = hr.top + 'px';
+                marker.style.height = hr.height + 'px';
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+                if (!dragging) return;
+                th.classList.remove('col-dragging');
+                if (marker) marker.remove();
+                suppressSortClick = true;
+                setTimeout(function() { suppressSortClick = false; }, 0);
+                if (!target || target.before === th) return;
+                var key = th.dataset.sort;
+                var order = colOrder.filter(function(k) { return k !== key; });
+                var idx = target.before ? order.indexOf(target.before.dataset.sort) : order.length;
+                if (idx < 0) return;
+                order.splice(idx, 0, key);
+                if (order.join(',') === colOrder.join(',')) return;
+                colOrder = order;
+                applyColumns();
+                postColumns();
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+        });
+    });
+
+    // ---------- 見出しの右クリック: 列の表示 / 非表示 ----------
+    var COLUMNS = [
+        { key: 'log',      label: '状態' },
+        { key: 'no',       label: 'No' },
+        { key: 'title',    label: 'タイトル', fixed: true },   // タイトルは常に表示
+        { key: 'board',    label: '板' },
+        { key: 'count',    label: '数' },
+        { key: 'created',  label: 'スレ建て日時' },
+        { key: 'momentum', label: '勢い' },
+    ];
+    var colMenu = null;
+
+    function closeColMenu() {
+        if (colMenu) { colMenu.remove(); colMenu = null; }
+    }
+
+    function openColMenu(x, y) {
+        closeColMenu();
+        colMenu = document.createElement('div');
+        colMenu.className = 'col-menu';
+        colOrder.map(function(k) { return COLUMNS.filter(function(c) { return c.key === k; })[0]; }).forEach(function(c) {
+            if (!c) return;
+            var item = document.createElement('div');
+            item.className = 'col-menu-item' + (isHidden(c.key) ? '' : ' checked') + (c.fixed ? ' disabled' : '');
+            item.textContent = c.label;
+            if (!c.fixed) {
+                item.addEventListener('click', function(ev) {
+                    ev.stopPropagation();
+                    if (isHidden(c.key)) hiddenCols = hiddenCols.filter(function(k) { return k !== c.key; });
+                    else hiddenCols = hiddenCols.concat([c.key]);
+                    applyColumns();
+                    postColumns();
+                    item.classList.toggle('checked', !isHidden(c.key));
+                });
+            }
+            colMenu.appendChild(item);
+        });
+        document.body.appendChild(colMenu);
+        // 画面からはみ出さない位置に出す
+        var r = colMenu.getBoundingClientRect();
+        colMenu.style.left = Math.max(0, Math.min(x, window.innerWidth  - r.width  - 2)) + 'px';
+        colMenu.style.top  = Math.max(0, Math.min(y, window.innerHeight - r.height - 2)) + 'px';
+    }
+
+    document.querySelector('thead').addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        openColMenu(e.clientX, e.clientY);
+    });
+    document.addEventListener('mousedown', function(e) {
+        if (colMenu && !colMenu.contains(e.target)) closeColMenu();
+    }, true);
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && colMenu) { closeColMenu(); e.stopPropagation(); }
+    }, true);
+    window.addEventListener('blur', closeColMenu);
 
     function openTr(tr) {
         if (!window.chrome || !window.chrome.webview) return;
@@ -238,17 +402,37 @@
 
     var LOG_CLASS = { 1: 'has-log', 2: 'has-update', 3: 'has-dropped', 4: 'has-replied-to-own' };
 
+    function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+    /** スレ建て日時 (Unix 秒) → ローカル時刻の「yyyy/MM/dd HH:mm」。不明 (0) なら空。 */
+    function fmtCreated(epoch) {
+        if (!epoch) return '';
+        var d = new Date(epoch * 1000);
+        return d.getFullYear() + '/' + pad2(d.getMonth() + 1) + '/' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    }
+
     /** 1 行分の HTML。スレ行と板行 (data-kind="board"、「板一覧以外の取得済み板」集約タブ) で列構成と data-* は同じ。
      *  td には省略表示 (text-overflow) されても元テキストが見えるよう title 属性を付ける。 */
+    /** 列のキー → セルの HTML を、今の列の並び (colOrder) で連結する。 */
+    function cellsHtml(cells) {
+        var h = '';
+        for (var i = 0; i < colOrder.length; i++) h += cells[colOrder[i]] || '';
+        return h;
+    }
+
     function rowHtml(r) {
         var title = esc(r.title), board = esc(r.board);
         if (r.kind === 'board') {
             return '<tr class="row-board" data-kind="board" data-key="" data-host="' + esc(r.host) + '" data-dir="' + esc(r.dir)
-                 + '" data-no="0" data-title="' + title + '" data-board="' + board + '" data-count="' + r.count + '" data-momentum="0" data-log="0">'
-                 + '<td class="col-log"><span class="log-mark"></span></td><td class="col-no"></td>'
-                 + '<td class="col-title" title="' + title + '">' + title + '</td>'
-                 + '<td class="col-board" title="' + board + '">' + board + '</td>'
-                 + '<td class="col-count" title="' + r.count + '">' + r.count + '</td><td class="col-momentum"></td></tr>';
+                 + '" data-no="0" data-title="' + title + '" data-board="' + board + '" data-count="' + r.count + '" data-momentum="0" data-created="0" data-log="0">'
+                 + cellsHtml({
+                       log:      '<td class="col-log"><span class="log-mark"></span></td>',
+                       no:       '<td class="col-no"></td>',
+                       title:    '<td class="col-title" title="' + title + '">' + title + '</td>',
+                       board:    '<td class="col-board" title="' + board + '">' + board + '</td>',
+                       count:    '<td class="col-count" title="' + r.count + '">' + r.count + '</td>',
+                       created:  '<td class="col-created"></td>',
+                       momentum: '<td class="col-momentum"></td>',
+                   }) + '</tr>';
         }
         var cls = (LOG_CLASS[r.log] ? LOG_CLASS[r.log] + ' ' : '') + (r.fav ? 'is-favorited ' : '');
         var m = esc(r.momentum || '0');
@@ -258,13 +442,16 @@
         return '<tr class="' + cls + '" data-key="' + esc(r.key) + '" data-host="' + esc(r.host) + '" data-dir="' + esc(r.dir)
              + '" data-no="' + r.no + '" data-title="' + title + '"' + (orig ? ' data-orig="' + orig + '"' : '')
              + ' data-board="' + board + '" data-count="' + r.count
-             + '" data-momentum="' + m + '" data-log="' + (r.log | 0) + '">'
-             + '<td class="col-log"><span class="log-mark"></span></td>'
-             + '<td class="col-no" title="' + r.no + '">' + r.no + '</td>'
-             + '<td class="col-title' + (orig ? ' translated' : '') + '" title="' + tip + '">' + title + '</td>'
-             + '<td class="col-board" title="' + board + '">' + board + '</td>'
-             + '<td class="col-count" title="' + r.count + '">' + r.count + '</td>'
-             + '<td class="col-momentum" title="' + m + '">' + m + '</td></tr>';
+             + '" data-momentum="' + m + '" data-created="' + (r.created || 0) + '" data-log="' + (r.log | 0) + '">'
+             + cellsHtml({
+                   log:      '<td class="col-log"><span class="log-mark"></span></td>',
+                   no:       '<td class="col-no" title="' + r.no + '">' + r.no + '</td>',
+                   title:    '<td class="col-title' + (orig ? ' translated' : '') + '" title="' + tip + '">' + title + '</td>',
+                   board:    '<td class="col-board" title="' + board + '">' + board + '</td>',
+                   count:    '<td class="col-count" title="' + r.count + '">' + r.count + '</td>',
+                   created:  '<td class="col-created">' + fmtCreated(r.created) + '</td>',
+                   momentum: '<td class="col-momentum" title="' + m + '">' + m + '</td>',
+               }) + '</tr>';
     }
 
     /** 行を全部差し替える。tbody 自体は残すのでクリック等のハンドラ・列幅・見出しの並べ替え状態はそのまま。
@@ -337,6 +524,12 @@
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;
+                }
+                if (msg.columns) {
+                    savedWidths = (msg.columns.widths && typeof msg.columns.widths === 'object') ? msg.columns.widths : {};
+                    hiddenCols  = Array.isArray(msg.columns.hidden) ? msg.columns.hidden.filter(function(k) { return k !== 'title'; }) : [];
+                    colOrder    = normalizeOrder(msg.columns.order);
+                    applyColumns();
                 }
             } else if (msg.type === 'setListSearch') {
                 // C# 側 ThreadListTabViewModel.SearchQuery の反映。空文字なら絞り込み解除。

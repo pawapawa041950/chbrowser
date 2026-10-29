@@ -85,6 +85,39 @@ tbody td.col-log { position: relative; }
 .col-board    { width: 140px; color: #555; }
 .col-count    { text-align: right;  width: 50px; }
 .col-momentum { text-align: right;  width: 60px; }
+.col-created  { text-align: right;  width: 110px; color: #555; }
+
+/* 見出しのドラッグでの並べ替え: つまんでいる見出しを薄く、落とす位置に縦線 */
+thead th.col-dragging { opacity: 0.45; }
+.col-drop-marker {
+    position: fixed;
+    width: 2px;
+    background: #1e88e5;
+    z-index: 50;
+    pointer-events: none;
+}
+
+/* 見出しの右クリックメニュー (列の表示 / 非表示) */
+.col-menu {
+    position: fixed;
+    z-index: 100;
+    background: #fff;
+    border: 1px solid #bbb;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    padding: 3px 0;
+    min-width: 150px;
+    user-select: none;
+}
+.col-menu-item {
+    padding: 3px 14px 3px 26px;
+    position: relative;
+    cursor: default;
+    white-space: nowrap;
+}
+.col-menu-item:hover { background: #e3eefb; }
+.col-menu-item.checked::before { content: '\2713'; position: absolute; left: 9px; }
+.col-menu-item.disabled { color: #999; }
+.col-menu-item.disabled:hover { background: transparent; }
 
 .log-mark {
     display: inline-block;

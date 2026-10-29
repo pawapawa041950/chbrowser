@@ -25,9 +25,10 @@ public static class ThreadListHtmlBuilder
         @"<table><thead><tr>" +
         @"<th class=""col-log sortable"" data-sort=""log"" data-sort-type=""num""></th>" +
         @"<th class=""col-no sortable sort-asc"" data-sort=""no"" data-sort-type=""num"">No</th>" +
-        @"<th class=""sortable"" data-sort=""title"" data-sort-type=""str"">タイトル</th>" +
+        @"<th class=""col-title sortable"" data-sort=""title"" data-sort-type=""str"">タイトル</th>" +
         @"<th class=""col-board sortable"" data-sort=""board"" data-sort-type=""str"">板</th>" +
         @"<th class=""col-count sortable"" data-sort=""count"" data-sort-type=""num"">数</th>" +
+        @"<th class=""col-created sortable"" data-sort=""created"" data-sort-type=""num"">スレ建て日時</th>" +
         @"<th class=""col-momentum sortable"" data-sort=""momentum"" data-sort-type=""num"">勢い</th>" +
         @"</tr></thead><tbody></tbody></table>";
 
@@ -50,7 +51,7 @@ public static class ThreadListHtmlBuilder
             var translated = translateTitle?.Invoke(t.Title);
             rows.Add(new ThreadListRow("thread", t.Key, item.Host, item.DirectoryName, t.Order, translated ?? t.Title, item.BoardName, t.PostCount,
                 momentum, (int)item.State, item.IsFavorited,   // Log: None=0, Cached=1, Updated=2, Dropped=3, RepliedToOwn=4
-                translated is null ? null : t.Title));
+                translated is null ? null : t.Title, CreatedEpoch(t) ?? 0));
         }
         return rows;
     }
@@ -75,6 +76,15 @@ public static class ThreadListHtmlBuilder
         var nowUnix = now.ToUnixTimeSeconds();
         var diff = Math.Max(1, nowUnix - threadUnix);
         return 86400.0 / diff * postCount;
+    }
+
+    /// <summary>スレ建て日時 (Unix 秒)。<see cref="ThreadInfo.CreatedEpoch"/> を優先し、無ければ 5ch 系の慣習どおり key を epoch とみなす。
+    /// お知らせスレの擬似的な将来日付 (9e9 秒以降) や、key が epoch でない掲示板の小さすぎる値 (2000 年より前) は不明 (null)。</summary>
+    private static long? CreatedEpoch(ThreadInfo t)
+    {
+        if (t.CreatedEpoch is long created && created > 0) return created;
+        if (!long.TryParse(t.Key, out var k)) return null;
+        return k is >= 946_684_800L and < 9_000_000_000L ? k : null;
     }
 
     private static string LoadShellHtml()
@@ -102,6 +112,7 @@ public static class ThreadListHtmlBuilder
 
 /// <summary>スレ一覧の 1 行 (<c>setItems</c> で JS へ送る)。<see cref="Kind"/> = "thread" / "board" (板そのものの行)。
 /// <see cref="Momentum"/> は表示用の文字列 (板の行は null)、<see cref="Log"/> は状態マーク (0〜4、並べ替えにも使う)。
-/// <see cref="Orig"/> はスレタイを AI 翻訳で表示しているときの原文 (<see cref="Title"/> は訳)。翻訳していなければ null。</summary>
+/// <see cref="Orig"/> はスレタイを AI 翻訳で表示しているときの原文 (<see cref="Title"/> は訳)。翻訳していなければ null。
+/// <see cref="Created"/> はスレ建て日時 (Unix 秒、不明なら 0。表示の書式は JS 側でローカル時刻にする)。</summary>
 public sealed record ThreadListRow(string Kind, string Key, string Host, string Dir, int No, string Title, string Board,
-                                   int Count, string? Momentum, int Log, bool Fav, string? Orig = null);
+                                   int Count, string? Momentum, int Log, bool Fav, string? Orig = null, long Created = 0);

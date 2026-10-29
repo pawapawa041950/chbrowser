@@ -156,6 +156,26 @@ public partial class ThreadListPane : UserControl
 
         if (type == "threadListRowMenu") { ShowThreadListRowContextMenu(payload); return; }
 
+        // 列幅をドラッグした / 見出しをドラッグして並べ替えた / 見出しの右クリックメニューで列を出し入れした → 保存してすべてのスレ一覧へ反映
+        if (type == "threadListColumns")
+        {
+            var widths = new System.Collections.Generic.Dictionary<string, int>(StringComparer.Ordinal);
+            if (payload.TryGetProperty("widths", out var wEl) && wEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                foreach (var p in wEl.EnumerateObject())
+                    if (p.Value.ValueKind == System.Text.Json.JsonValueKind.Number && p.Value.TryGetInt32(out var px) && px > 0)
+                        widths[p.Name] = px;
+            var hidden = new System.Collections.Generic.List<string>();
+            if (payload.TryGetProperty("hidden", out var hEl) && hEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                foreach (var h in hEl.EnumerateArray())
+                    if (h.GetString() is { Length: > 0 } k && k != "title") hidden.Add(k);   // タイトル列は隠さない
+            var order = new System.Collections.Generic.List<string>();
+            if (payload.TryGetProperty("order", out var oEl) && oEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                foreach (var o in oEl.EnumerateArray())
+                    if (o.GetString() is { Length: > 0 } k && !order.Contains(k)) order.Add(k);
+            main.SaveThreadListColumns(widths, hidden, order);
+            return;
+        }
+
         // ページ (シェル) を読み込んだ / 読み直した直後: 行を送り直す
         if (type == "ready")
         {
