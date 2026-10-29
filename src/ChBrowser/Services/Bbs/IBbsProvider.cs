@@ -362,12 +362,15 @@ public interface ISnapshotThreadProvider
 /// 親が既に子を持っていれば取り直さない)。
 /// <see cref="OnPartial"/> があれば、提供者は要求 1 回ごとに「今回新しく得た投稿」を渡してよい (1 回目の先頭はスレ本体)。
 /// 受け手 (<see cref="SnapshotThreadFetcher"/>) はその場で採番・保存・表示するので、大きいスレでも最初の要求の分から表示が始まる。
-/// 渡さなかった投稿は最後に <see cref="ThreadSnapshot"/> からまとめて処理される。</summary>
+/// 渡さなかった投稿は最後に <see cref="ThreadSnapshot"/> からまとめて処理される。
+/// <see cref="UnreachableIds"/> は前回までに「取りに行っても取れなかった」もの (提供者が <see cref="ThreadSnapshot.Unreachable"/> で返した値の蓄積。
+/// 提供者は続きの判定でこれを数えない)。</summary>
 public sealed record SnapshotFetchOptions(
     IReadOnlySet<string>                        KnownExternalIds,
     int                                         MaxExpansions  = 10,
     IReadOnlySet<string>?                       KnownParentIds = null,
-    Func<IReadOnlyList<SnapshotPost>, Task>?    OnPartial      = null);
+    Func<IReadOnlyList<SnapshotPost>, Task>?    OnPartial      = null,
+    IReadOnlySet<string>?                       UnreachableIds = null);
 
 /// <summary>レスの最新の評価値 (いいね数) と、その時点の自分の評価 (1 / -1 / null)。</summary>
 public sealed record PostScore(long Score, int? MyVote);
@@ -392,4 +395,8 @@ public sealed record SnapshotPost(
 /// <see cref="Truncated"/> は取り切れなかった分 (reddit の more) が残っていることを示す (次回取得で埋まる)。
 /// <see cref="Notice"/> はスレの状態のお知らせ (ふたば: 「27年6月頃消えます」)。null なら前回のお知らせを残す。
 /// 差分だけを返す提供者 (ふたば: 既知の番号より後だけ) は、<see cref="Posts"/> が新着分だけでもよい (採番済みの投稿は飛ばされる)。</summary>
-public sealed record ThreadSnapshot(IReadOnlyList<SnapshotPost> Posts, bool Truncated = false, string? ProviderCursor = null, string? Notice = null);
+/// <summary>スナップショット取得の結果。<see cref="Unreachable"/> は今回「取りに行っても取れなかった」と分かったもの
+/// (受け手が meta に足して、次回 <see cref="SnapshotFetchOptions.UnreachableIds"/> で渡す)。
+/// <see cref="TruncatedReason"/> は取り切れなかった理由を利用者に伝える文 (レート制限で中断した等。無ければ通常の「続きあり」)。</summary>
+public sealed record ThreadSnapshot(IReadOnlyList<SnapshotPost> Posts, bool Truncated = false, string? ProviderCursor = null, string? Notice = null,
+                                    IReadOnlyCollection<string>? Unreachable = null, string? TruncatedReason = null);

@@ -417,14 +417,19 @@ public sealed partial class MainViewModel
     /// <summary>状態表示に添える dat 落ちの知らせ。</summary>
     private const string DroppedNote = " — dat 落ち (このスレはもう更新されません)";
 
-    private const string TruncatedNote = " — 続きあり (未取得のレスがあります。もう一度更新すると続きを取得します)";
+    private const string TruncatedNoteText = "未取得のレスがあります。もう一度更新すると続きを取得します";
+    /// <summary>付けた「続きあり」の表示 (理由の文は取得ごとに変わるので、形で見つけて外す)。</summary>
+    private static readonly System.Text.RegularExpressions.Regex TruncatedNoteRegex = new(@" — 続きあり \([^)]*\)");
 
-    /// <summary>状態表示の「続きあり」を、今回の取得で取り切れたかに合わせて付け外しする (同じ表示に何度も付け足さない)。</summary>
+    /// <summary>状態表示の「続きあり」を、今回の取得で取り切れたかに合わせて付け外しする (同じ表示に何度も付け足さない)。
+    /// 提供者が理由 (レート制限で中断した等) を返していればそれを出す。</summary>
     private void UpdateTruncatedNote(ThreadTabViewModel tab, ChBrowser.Services.Bbs.ThreadMeta? meta = null)
     {
         meta ??= _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey);
-        var status = (tab.StatusMessage ?? "").Replace(TruncatedNote, "");
-        tab.StatusMessage = meta?.Truncated == true ? status + TruncatedNote : status;
+        var status = TruncatedNoteRegex.Replace(tab.StatusMessage ?? "", "");
+        tab.StatusMessage = meta?.Truncated == true
+            ? $"{status} — 続きあり ({(meta.TruncatedReason is { Length: > 0 } r ? r : TruncatedNoteText)})"
+            : status;
     }
 
     private ChBrowser.Services.Bbs.AuthorProfileCache? _authorProfileCache;

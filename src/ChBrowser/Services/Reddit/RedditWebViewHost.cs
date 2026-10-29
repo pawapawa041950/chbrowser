@@ -55,6 +55,24 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
     /// <summary>reddit のログイン Cookie の名前。</summary>
     public const string LoginCookieName = "reddit_session";
 
+    /// <summary>reddit の Cookie の値 (無ければ null)。Web 版の部分読み込みの POST に付ける <c>csrf_token</c> を読むのに使う。</summary>
+    public Task<string?> GetCookieValueAsync(string name)
+        => _dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                await EnsureInitializedAsync().ConfigureAwait(true);
+                var cookies = await _webView!.CoreWebView2.CookieManager.GetCookiesAsync("https://www.reddit.com/").ConfigureAwait(true);
+                foreach (var c in cookies)
+                    if (string.Equals(c.Name, name, StringComparison.Ordinal) && !string.IsNullOrEmpty(c.Value)) return c.Value;
+                return (string?)null;
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+            {
+                return null;
+            }
+        }).Task.Unwrap();
+
     public Task<bool?> HasLoginCookieAsync()
         => _dispatcher.InvokeAsync(async () =>
         {
@@ -177,6 +195,14 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
 
                     var query = $"api_type=json&link_id=t3_1wubcvf&children={string.Join(",", ids)}&sort=old&raw_json=1";
                     await Try($"{prefix} 続き morechildren (GET, {ids.Count} 件)", $"{O}/api/morechildren.json?{query}", true).ConfigureAwait(true);
+                    // ネット上で「通る」と報告されている別の経路 (2026-10): www の末尾スラッシュ付き、old.reddit.com、api.reddit.com。
+                    // 別ホストはそのホストのページに移ってから送る (同一オリジン)
+                    await Try($"{prefix} 続き morechildren (GET, www 末尾スラッシュ)", $"{O}/api/morechildren/.json?{query}", true).ConfigureAwait(true);
+                    await Try($"{prefix} 続き morechildren (GET, old.reddit.com)", $"https://old.reddit.com/api/morechildren.json?{query}", true,
+                              saveAs: "probe_morechildren_old.json").ConfigureAwait(true);
+                    await Try($"{prefix} 続き morechildren (GET, api.reddit.com)", $"https://api.reddit.com/api/morechildren.json?{query}", true).ConfigureAwait(true);
+                    await Try($"{prefix} スレ comments.json (GET, old.reddit.com)",
+                              $"https://old.reddit.com/r/redditdev/comments/1wubcvf.json?sort=old&limit=20&raw_json=1", true).ConfigureAwait(true);
 
                     await Task.Delay(300, ct).ConfigureAwait(true);
                     var headers = new List<KeyValuePair<string, string>>
@@ -268,7 +294,7 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
     private async Task<BrowserFetchResult> FetchOnceOnUiAsync(BrowserFetchRequest request, CancellationToken ct, string? referrer = null)
     {
         await EnsureInitializedAsync().ConfigureAwait(true);
-        await EnsureOnHomeAsync().ConfigureAwait(true);
+        var host = await EnsureOnOriginAsync(request.Url).ConfigureAwait(true);
 
         var id  = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<BrowserFetchResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -291,7 +317,7 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             url     = request.Url,
             headers = ToHeaderObject(request.Headers),
             body    = request.Body is null ? null : Convert.ToBase64String(request.Body),
-            referrer = referrer ?? ReferrerUrl,
+            referrer = referrer ?? (host == "www.reddit.com" ? ReferrerUrl : $"https://{host}/"),
         });
         await _webView!.CoreWebView2.ExecuteScriptAsync(FetchScript.Replace("__SPEC__", spec)).ConfigureAwait(true);
         return await tcs.Task.ConfigureAwait(true);
@@ -370,12 +396,16 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
         ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] session webview ready (profile={ProfileName}, ua={_webView.CoreWebView2.Settings.UserAgent})");
     }
 
-    /// <summary>fetch は reddit.com オリジンから行う必要がある (同一オリジンで Cookie が付く)。ページが他所へ行っていたら戻す。</summary>
-    private async Task EnsureOnHomeAsync()
+    /// <summary>fetch は要求先と同じオリジンから行う必要がある (同一オリジンで Cookie が付く。別オリジンは CORS で読めない)。
+    /// 要求先が reddit の別ホスト (old.reddit.com 等) ならそのホストの robots.txt へ、それ以外は www の robots.txt へ移る。移った先のホストを返す。</summary>
+    private async Task<string> EnsureOnOriginAsync(string requestUrl)
     {
+        var host = Uri.TryCreate(requestUrl, UriKind.Absolute, out var r) && r.Host.EndsWith(".reddit.com", StringComparison.OrdinalIgnoreCase)
+            ? r.Host.ToLowerInvariant() : "www.reddit.com";
         var src = _webView!.CoreWebView2.Source ?? "";
-        if (Uri.TryCreate(src, UriKind.Absolute, out var u) && u.Host.Equals("www.reddit.com", StringComparison.OrdinalIgnoreCase)) return;
-        await NavigateAsync(HomeUrl).ConfigureAwait(true);
+        if (Uri.TryCreate(src, UriKind.Absolute, out var u) && u.Host.Equals(host, StringComparison.OrdinalIgnoreCase)) return host;
+        await NavigateAsync(host == "www.reddit.com" ? HomeUrl : $"https://{host}/robots.txt").ConfigureAwait(true);
+        return host;
     }
 
     private Task NavigateAsync(string url)

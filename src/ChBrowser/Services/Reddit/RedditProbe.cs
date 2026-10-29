@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -98,27 +98,45 @@ public static class RedditProbe
                 ThreadStats(full, out var moreIds);
                 if (moreIds.Count > 0)
                 {
-                    foreach (var n in new[] { Math.Min(100, moreIds.Count), Math.Min(150, moreIds.Count) }.Distinct())
+                    // アプリの「続き」の取り方 (morechildren の代わり) を試す。アプリと同じく「取れなくても困らない要求」として送る
+                    var tree = ChBrowser.Services.Bbs.RedditProvider.ParseCommentsResponse(JsonSerializer.SerializeToUtf8Bytes(full.RootElement));
+                    var have = new HashSet<string>(tree.Comments.Select(c => c.ExternalId), StringComparer.Ordinal);
+                    // 4a. 返信の続き → 親コメントを起点にしたスレの JSON
+                    var replyMore = tree.Mores.Where(m => m.ParentId.StartsWith("t1_", StringComparison.Ordinal)).OrderByDescending(m => m.Count).FirstOrDefault();
+                    if (replyMore is not null)
                     {
-                        var ids = string.Join(",", moreIds.Take(n));
-                        // アプリと同じく「取れなくても困らない要求」として送る (弾かれても確認の窓を出さない)
                         (int, JsonDocument?, string) got;
                         using (ChBrowser.Services.Bbs.ProviderRequestContext.Optional())
-                            got = await Get($"https://www.reddit.com/api/morechildren.json?api_type=json&link_id=t3_{id}&children={ids}&sort=old&raw_json=1");
-                        var (s4, mc, i4) = got;
-                        var things = mc?.RootElement.TryGetProperty("json", out var j) == true && j.TryGetProperty("data", out var jd)
-                                     && jd.TryGetProperty("things", out var th) ? th.GetArrayLength() : -1;
-                        var errors = mc?.RootElement.TryGetProperty("json", out var j2) == true && j2.TryGetProperty("errors", out var er) ? er.ToString() : "";
-                        L($"4. morechildren (GET, children={n}): {i4} things={things} errors={errors}");
+                            got = await Get($"https://www.reddit.com/r/{sub}/comments/{id}/_/{replyMore.ParentId[3..]}.json?sort=old&limit=500&raw_json=1");
+                        var (_, pj, i4) = got;
+                        var st = pj is null ? null : ChBrowser.Services.Bbs.RedditProvider.ParseCommentsResponse(JsonSerializer.SerializeToUtf8Bytes(pj.RootElement));
+                        var hit = st is null ? 0 : replyMore.Children.Count(c => st.Comments.Any(x => x.ExternalId == "t1_" + c));
+                        L($"4a. 親コメント起点 ({replyMore.ParentId}, 続き {replyMore.Count} 件): {i4} comments={st?.Comments.Count ?? -1} 続きのうち取れた={hit}/{replyMore.Children.Count} 新規={st?.Comments.Count(c => !have.Contains(c.ExternalId)) ?? -1}");
+                    }
+                    else L("4a. 親コメント起点: 返信の続きが無いスレだったので未測定");
+                    // 4b. トップレベルの続き → 新しい順のスレの JSON
+                    var topMore = tree.Mores.FirstOrDefault(m => m.ParentId.StartsWith("t3_", StringComparison.Ordinal));
+                    {
+                        (int, JsonDocument?, string) got;
+                        using (ChBrowser.Services.Bbs.ProviderRequestContext.Optional())
+                            got = await Get($"https://www.reddit.com/r/{sub}/comments/{id}.json?sort=new&limit=500&raw_json=1");
+                        var (_, nj, i4) = got;
+                        var nt = nj is null ? null : ChBrowser.Services.Bbs.RedditProvider.ParseCommentsResponse(JsonSerializer.SerializeToUtf8Bytes(nj.RootElement));
+                        var hit = nt is null || topMore is null ? 0 : topMore.Children.Count(c => nt.Comments.Any(x => x.ExternalId == "t1_" + c));
+                        L($"4b. 新しい順 (sort=new): {i4} comments={nt?.Comments.Count ?? -1} 新規={nt?.Comments.Count(c => !have.Contains(c.ExternalId)) ?? -1} " +
+                          $"トップレベルの続きのうち取れた={hit}/{topMore?.Children.Count ?? 0}");
                     }
                 }
-                else L("4. morechildren: 続き (more) の無いスレだったので未測定");
+                else L("4. 続き (more) の無いスレだったので未測定");
             }
 
             // 5. 板情報
             var (_, about, i5) = await Get($"https://www.reddit.com/r/{sub}/about.json?raw_json=1");
             var ad = about?.RootElement.TryGetProperty("data", out var a) == true ? a : default;
             L($"5. r/{sub}/about: {i5} title={Trunc(Str(ad, "title"), 40)} subscribers={(ad.ValueKind == JsonValueKind.Object && ad.TryGetProperty("subscribers", out var su) ? su.ToString() : "")}");
+
+            // 8. スレの HTML と、その中の「続き」の部分読み込み (morechildren が GET / POST とも弾かれるため、その代わりを探す)
+            await ProbeThreadHtmlAsync(http, host, sub, id, Path.GetDirectoryName(reportPath) ?? ".", L, ct).ConfigureAwait(false);
         }
 
         // 6. 購読一覧
@@ -147,6 +165,100 @@ public static class RedditProbe
         try { await File.WriteAllTextAsync(reportPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false); }
         catch (IOException ex) { text += $"(レポートの保存に失敗: {ex.Message})"; }
         return text;
+    }
+
+    /// <summary>8. ブラウザ表示用のスレの HTML (<c>/r/{sub}/comments/{id}/</c>) を取って保存し、中の部分読み込み (<c>/svc/shreddit/...</c>) の
+    /// うちコメント関係のものを書き出し、「続き」(more-comments) を 2 件まで実際に取って保存する
+    /// (<c>probe_thread.html</c> / <c>probe_more_N.html</c>。Web 版がどうやって続きを読み込んでいるかを調べるため)。
+    /// 取れなくても困らない要求として送る (弾かれても窓を出さない)。読み取りのみ。</summary>
+    private static async Task ProbeThreadHtmlAsync(HttpClient http, RedditWebViewHost? host, string sub, string id, string dir, Action<string> L, CancellationToken ct)
+    {
+        async Task<(int Status, string Text, string Info)> GetText(string url)
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                using var optional = ChBrowser.Services.Bbs.ProviderRequestContext.Optional();
+                using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
+                var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                return ((int)resp.StatusCode, text,
+                        $"{(int)resp.StatusCode} {text.Length} 文字 {sw.ElapsedMilliseconds}ms [{resp.Content.Headers.ContentType?.MediaType}]");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                return (0, "", $"失敗: {ex.Message} ({sw.ElapsedMilliseconds}ms)");
+            }
+        }
+        void Save(string name, string text)
+        {
+            try { File.WriteAllText(Path.Combine(dir, name), text, new UTF8Encoding(false)); }
+            catch (IOException ex) { L($"   ({name} を保存できませんでした: {ex.Message})"); }
+        }
+        static int Count(string html, string tag) => System.Text.RegularExpressions.Regex.Matches(html, "<" + tag + @"\b").Count;
+
+        var (_, html, info) = await GetText($"https://www.reddit.com/r/{sub}/comments/{id}/").ConfigureAwait(false);
+        // スレタイ部分 (slug) の無い URL は、正しい URL へ移る (location.replace) だけのページが返るので、その先を取り直す
+        var redirect = System.Text.RegularExpressions.Regex.Match(html, @"location\.replace\(&quot;(?<u>/r/[^&]+)&quot;\)");
+        if (redirect.Success)
+        {
+            L($"8. スレの HTML (転送のページ): {info} → {redirect.Groups["u"].Value}");
+            (_, html, info) = await GetText("https://www.reddit.com" + redirect.Groups["u"].Value).ConfigureAwait(false);
+        }
+        Save("probe_thread.html", html);
+        L($"8. スレの HTML: {info} shreddit-comment={Count(html, "shreddit-comment")} (probe_thread.html に保存)");
+        if (html.Length == 0) return;
+
+        var urls = System.Text.RegularExpressions.Regex.Matches(html, @"(?:src|action|href)=""(?<u>/svc/shreddit/[^""]+)""")
+            .Select(m => System.Net.WebUtility.HtmlDecode(m.Groups["u"].Value)).Distinct().ToList();
+        var commentUrls = urls.Where(u => u.Contains("comment", StringComparison.OrdinalIgnoreCase)).ToList();
+        L($"8. 部分読み込みの URL {urls.Count} 件 (うちコメント関係 {commentUrls.Count} 件):");
+        foreach (var u in commentUrls.Take(12)) L("   " + Trunc(u, 240));
+
+        // 「続き」の要素の書き方の例 (前後 400 文字)
+        var at = html.IndexOf("more-comments", StringComparison.Ordinal);
+        if (at >= 0)
+            L("   例: " + System.Text.RegularExpressions.Regex.Replace(html[Math.Max(0, at - 400)..Math.Min(html.Length, at + 400)], @"\s+", " "));
+
+        // 続き (more-comments) は <faceplate-partial method="post"> の中の cursor を POST で送る。トップレベルの続き (ページ末尾) と
+        // 返信の続きを 1 つずつ、csrf_token (Cookie) を付けない / 付けるの 2 通りで試す
+        var partials = System.Text.RegularExpressions.Regex.Matches(html,
+                @"<faceplate-partial\b[^>]*src=""(?<u>/svc/shreddit/more-comments/[^""]+)""[^>]*>\s*<input type=""hidden"" name=""cursor"" value=""(?<c>[^""]+)""")
+            .Select(m => (Url: System.Net.WebUtility.HtmlDecode(m.Groups["u"].Value), Cursor: System.Net.WebUtility.HtmlDecode(m.Groups["c"].Value)))
+            .ToList();
+        L($"8. 続きの要素 (cursor 付き) {partials.Count} 件");
+        var picks = partials.Where(p => p.Url.Contains("top-level=1", StringComparison.Ordinal)).Take(1)
+            .Concat(partials.Where(p => !p.Url.Contains("top-level=1", StringComparison.Ordinal)).Take(1)).ToList();
+        var csrf = host is null ? null : await host.GetCookieValueAsync("csrf_token").ConfigureAwait(false);
+        L($"8. csrf_token Cookie: {(csrf is null ? "無し" : $"あり ({csrf.Length} 文字)")}");
+        var k = 0;
+        foreach (var (u, cursor) in picks)
+        {
+            foreach (var withCsrf in new[] { false, true })
+            {
+                if (withCsrf && csrf is null) continue;
+                k++;
+                var sw = Stopwatch.StartNew();
+                string text, mi;
+                try
+                {
+                    using var optional = ChBrowser.Services.Bbs.ProviderRequestContext.Optional();
+                    var form = new Dictionary<string, string> { ["cursor"] = cursor };
+                    if (withCsrf) form["csrf_token"] = csrf!;
+                    using var content = new FormUrlEncodedContent(form);
+                    using var resp = await http.PostAsync("https://www.reddit.com" + u, content, ct).ConfigureAwait(false);
+                    text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    mi = $"{(int)resp.StatusCode} {text.Length} 文字 {sw.ElapsedMilliseconds}ms [{resp.Content.Headers.ContentType?.MediaType}]";
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    text = ""; mi = $"失敗: {ex.Message} ({sw.ElapsedMilliseconds}ms)";
+                }
+                Save($"probe_more_{k}.html", text);
+                L($"8. 続き {k} (POST, {(u.Contains("top-level=1", StringComparison.Ordinal) ? "トップレベル" : "返信")}, csrf_token {(withCsrf ? "あり" : "なし")}): {mi} " +
+                  $"shreddit-comment={Count(text, "shreddit-comment")} (probe_more_{k}.html に保存) {Trunc(u, 160)}");
+            }
+        }
+        if (k == 0) L("8. 続き (more-comments) の要素が見つからなかったので未取得");
     }
 
     /// <summary>comments の 2 要素配列からコメント数・more・深さ・トップレベルの時刻順を数える。</summary>

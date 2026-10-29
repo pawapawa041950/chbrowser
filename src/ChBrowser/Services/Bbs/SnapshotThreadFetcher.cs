@@ -22,6 +22,8 @@ public sealed class ThreadMeta
     public long   LastFetchedEpoch { get; set; }
     /// <summary>直近の取得で取り切れなかった分 (reddit の more) が残ったか。</summary>
     public bool   Truncated { get; set; }
+    /// <summary>取り切れなかった理由 (提供者が返した、利用者向けの文)。無ければ通常の「続きあり」の表示。</summary>
+    public string? TruncatedReason { get; set; }
     /// <summary>スレの状態のお知らせ (ふたば: 「27年6月頃消えます」)。取得のたびに提供者が返したもので更新する。</summary>
     public string? Notice { get; set; }
     /// <summary>投稿者名 → アカウント ID (投稿者情報の取得用)。取得のたびにスナップショットの全投稿から更新する
@@ -30,6 +32,9 @@ public sealed class ThreadMeta
     /// <summary>レス番号 → 最新の評価値 (いいね数) と自分の評価。ログは追記だけなので、取得のたびに変わった評価値はここに持ち、
     /// 表示するときにログの値の代わりに使う (<see cref="ApplyScores"/>)。</summary>
     public Dictionary<long, PostScore> Scores { get; set; } = new();
+    /// <summary>取りに行っても取れなかったもの (reddit: 大きな枝・スレの真ん中のコメント ID、中身の無い「continue this thread」)。
+    /// 提供者が返し、次の取得で続きの判定から外す (= 取れない分を毎回取りに行かない)。取れたものは外す。</summary>
+    public HashSet<string> Unreachable { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>ログから読んだレスに最新の評価値 (<see cref="Scores"/>) を当てる。</summary>
     public IReadOnlyList<Post> ApplyScores(IReadOnlyList<Post> posts)
@@ -57,6 +62,7 @@ public sealed class ThreadMeta
             meta.IdToNumber = new Dictionary<string, long>(meta.IdToNumber ?? new(), StringComparer.Ordinal);
             meta.AuthorIds  = new Dictionary<string, string>(meta.AuthorIds ?? new(), StringComparer.Ordinal);
             meta.Scores   ??= new();
+            meta.Unreachable = new HashSet<string>(meta.Unreachable ?? new(), StringComparer.Ordinal);
             return meta;
         }
         catch (Exception ex) when (ex is JsonException or IOException)
@@ -219,7 +225,7 @@ internal static class SnapshotThreadFetcher
         var snapshot = await snapshotProvider.FetchSnapshotAsync(
             http, board, threadKey,
             new SnapshotFetchOptions(new HashSet<string>(meta.IdToNumber.Keys, StringComparer.Ordinal), maxExpansions, parentIds,
-                                     OnPartial: ConsumeAsync),
+                                     OnPartial: ConsumeAsync, UnreachableIds: new HashSet<string>(meta.Unreachable, StringComparer.Ordinal)),
             ct).ConfigureAwait(false);
 
         // 塊で渡されなかった残り (OnPartial を使わない提供者ならここで全部) を処理する。採番済みの ID は飛ばされる。
@@ -227,6 +233,9 @@ internal static class SnapshotThreadFetcher
 
         meta.LastFetchedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         meta.Truncated        = snapshot.Truncated;
+        meta.TruncatedReason  = snapshot.Truncated ? snapshot.TruncatedReason : null;
+        if (snapshot.Unreachable is { } unreachable) meta.Unreachable.UnionWith(unreachable);
+        meta.Unreachable.RemoveWhere(k => meta.IdToNumber.ContainsKey(k[(k.IndexOf(':') + 1)..]));   // 「種類:ID」の形 (種類は提供者が決める)
         if (snapshot.Notice is not null) meta.Notice = snapshot.Notice;
         foreach (var sp in snapshot.Posts)
             if (sp.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(sp.Name)) meta.AuthorIds[sp.Name] = aid;
