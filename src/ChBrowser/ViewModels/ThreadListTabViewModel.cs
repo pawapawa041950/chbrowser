@@ -210,7 +210,7 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     {
         Items = items;
         if (string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
-        ItemsPush        = new ThreadListItemsMessage(BuildRows(items, now));
+        ItemsPush        = new ThreadListItemsMessage(_sentRows = BuildRows(items, now));
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
         ItemsReplaced?.Invoke(this);
@@ -221,7 +221,27 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     public void ResendItems()
     {
         if (Items.Count == 0 && ItemsPush is null) return;   // まだ一覧を出していない
-        ItemsPush = new ThreadListItemsMessage(BuildRows(Items, DateTimeOffset.UtcNow));
+        ItemsPush = new ThreadListItemsMessage(_sentRows = BuildRows(Items, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>最後に送った行 (<see cref="SendChangedTitles"/> が差分を取るため)。</summary>
+    private IReadOnlyList<ThreadListRow>? _sentRows;
+
+    /// <summary>スレタイの表示 (訳 / 原文) が変わった行だけを送る (スレタイ翻訳の途中経過用)。
+    /// 訳が少し届くたびに全行を送り直すと、そのたびに一覧全体が組み直されて重いため。一覧が入れ替わっていたら全行を送る。</summary>
+    public void SendChangedTitles()
+    {
+        if (_sentRows is null || _sentRows.Count != Items.Count) { ResendItems(); return; }
+        var rows = BuildRows(Items, DateTimeOffset.UtcNow);
+        var changed = new List<ThreadListRow>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var (a, b) = (rows[i], _sentRows[i]);
+            if (a.Key != b.Key || a.Host != b.Host || a.Dir != b.Dir) { ResendItems(); return; }   // 並びが変わった
+            if (a.Title != b.Title || a.Orig != b.Orig) changed.Add(a);
+        }
+        _sentRows = rows;
+        if (changed.Count > 0) ItemsPush = new ThreadListItemsMessage(changed, partial: true);
     }
 
     /// <summary>シェル HTML を作り直す (CSS の再読み込み)。中身が変わればページが読み直され、<c>ready</c> で行が送り直される。</summary>
@@ -295,9 +315,15 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     }
 }
 
-/// <summary>スレ一覧の行の送信 (<c>setItems</c>)。class (参照同一性) なので同じ内容でも毎回送られる。</summary>
+/// <summary>スレ一覧の行の送信。class (参照同一性) なので同じ内容でも毎回送られる。
+/// <see cref="Partial"/> = false なら全行 (<c>setItems</c>)、true なら一部の行の差し替え (<c>updateRows</c>)。</summary>
 public sealed class ThreadListItemsMessage
 {
     public IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> Rows { get; }
-    public ThreadListItemsMessage(IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> rows) => Rows = rows;
+    public bool Partial { get; }
+    public ThreadListItemsMessage(IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> rows, bool partial = false)
+    {
+        Rows    = rows;
+        Partial = partial;
+    }
 }

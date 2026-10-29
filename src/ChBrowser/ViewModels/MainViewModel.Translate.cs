@@ -523,7 +523,7 @@ public sealed partial class MainViewModel
                 {
                     if (cts.IsCancellationRequested) return;
                     tab.StatusMessage = $"スレタイを翻訳中… {done}/{titles.Count}";
-                    tab.ResendItems();
+                    tab.SendChangedTitles();   // 訳が届いた行だけ差し替える (全行の送り直しは重い)
                 }, cts.Token).ConfigureAwait(true);
                 total += got;
                 if (got == 0) break;   // 1 件も訳せなかった (応答の形が合わない等): 同じものを送り続けない

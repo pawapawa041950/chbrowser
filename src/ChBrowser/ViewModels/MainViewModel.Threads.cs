@@ -197,6 +197,7 @@ public sealed partial class MainViewModel
         }
 
         var tab = CreateThreadTab(board, info);
+        tab.OpenPerf = System.Diagnostics.Stopwatch.StartNew();   // 重さの調査用 ([openPerf])
         // アドレスバー直接入力等で title が無い経路はタブ見出しが空のままになるため、
         // dat 取得が走るまでの間 placeholder を出しておく (= AppendPostsWithNg 内の
         // EnsureTitleFromDat で 1 レス目到着と同時に正しいタイトルに置き換わる)。
@@ -228,11 +229,17 @@ public sealed partial class MainViewModel
             tab.IsBusy = true;
 
             // ---- Step 1: ディスクにキャッシュ済の dat があれば先に表示する ----
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[openPerf] {info.Key}: タブ作成まで {tab.OpenPerf.ElapsedMilliseconds} ms (読了位置 {tab.ScrollTargetPostNumber?.ToString() ?? "なし"})");
             var local = await _datClient.LoadFromDiskAsync(board, info.Key).ConfigureAwait(true);
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[openPerf] {info.Key}: ログ読み込み完了 +{tab.OpenPerf.ElapsedMilliseconds} ms ({local?.Posts.Count ?? 0} 件)");
             var prevCount = 0;
             if (local is not null && local.Posts.Count > 0)
             {
                 AppendPostsWithNg(tab, local.Posts);
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[openPerf] {info.Key}: 表示への引き渡し (NG 判定込み) 完了 +{tab.OpenPerf.ElapsedMilliseconds} ms");
                 tab.DatSize       = local.DatSize;
                 prevCount         = local.Posts.Count;
                 // dat 連番ベースの件数で初期化 (= 取得失敗で Step 2 が走らなくても、後続 refresh の境界が正しくなる)。
@@ -309,6 +316,9 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
+            // 通信の失敗以外 (プログラムの不具合) は、原因の場所が分かるようスタックトレースごとログに残す
+            if (ex is not (System.Net.Http.HttpRequestException or OperationCanceledException or System.IO.IOException))
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[openThread] {board.DirectoryName}/{info.Key} の取得で想定外のエラー: {ex}");
             // ローカル dat が表示できていれば、タイトル/状態色は維持して状況だけステータス通知。
             if (tab.Posts.Count > 0)
             {

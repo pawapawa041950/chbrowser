@@ -164,7 +164,7 @@ public static partial class WebView2Helper
     private static void OnThreadListItemsPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.ThreadListItemsMessage m) return;
-        var json = JsonSerializer.Serialize(new { type = "setItems", rows = m.Rows }, PostJsonOptions);
+        var json = JsonSerializer.Serialize(new { type = m.Partial ? "updateRows" : "setItems", rows = m.Rows }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
     }
 
@@ -224,6 +224,11 @@ public static partial class WebView2Helper
         var tab   = wv.DataContext as ChBrowser.ViewModels.ThreadTabViewModel;
         var posts = data.Posts;
         var empty = tab is not null && tab.Posts.Count == posts.Count;   // このバッチがスレ表示の最初の分
+        // 重さの調査用: スレを開いた直後の初回表示なら、塊を作る時間と実際に送れた時刻をログに出す
+        var perf    = !data.IsIncremental && empty ? tab?.OpenPerf : null;
+        var perfKey = tab?.ThreadKey ?? "";
+        var serializeSw = perf is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        var chunkCount  = 0;
         for (var i = 0; i < posts.Count; )
         {
             var size  = i == 0 && empty ? ChBrowser.Services.Api.DatClient.StreamFirstBatchSize
@@ -250,10 +255,36 @@ public static partial class WebView2Helper
                                        : System.Array.Empty<long>(),
                 // 提供者依存のスレ表示設定 (レス番号の表示可否 / アンカー規則等)。JS はレス描画の前に適用する。
                 provider         = tab?.ProviderConfig,
+                // 重さの調査用: 初回表示の塊を作った時刻 (Unix ミリ秒)。JS が「届くまでの待ち」をログに出す
+                perfSentAt       = perf is null ? (long?)null : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             }, PostJsonOptions);
 
-            _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+            chunkCount++;
+            if (perf is null)
+            {
+                _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+                continue;
+            }
+            // 最初と最後の塊は、実際にスレ表示へ渡せた時刻を出す (ページの読み込み待ち・送信の順番待ちを含む)
+            var isFirst = chunkCount == 1;
+            var isLast  = i >= posts.Count;
+            var label   = isFirst && isLast ? "最初で最後の塊" : isFirst ? "最初の塊" : isLast ? "最後の塊" : null;
+            var send    = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
+            if (label is not null) _ = LogOpenPerfAfterAsync(send, perf, perfKey, $"{label} ({n} 件) をスレ表示へ送信");
         }
+        if (perf is not null && serializeSw is not null)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[openPerf] {perfKey}: {posts.Count} 件を {chunkCount} 個の塊に変換 {serializeSw.ElapsedMilliseconds} ms (+{perf.ElapsedMilliseconds} ms)");
+            tab!.OpenPerf = null;   // 初回表示の分はここまで (以後の差分取得は計らない)
+        }
+    }
+
+    /// <summary>(重さの調査用) 送信が終わった時点で、スレを開いてからの経過時間をログに出す。</summary>
+    private static async Task LogOpenPerfAfterAsync(Task send, System.Diagnostics.Stopwatch perf, string key, string what)
+    {
+        try { await send.ConfigureAwait(true); } catch { /* 送信の失敗は PostJsonWhenReadyAsync 側で記録済み */ }
+        ChBrowser.Services.Logging.LogService.Instance.Write($"[openPerf] {key}: {what} +{perf.ElapsedMilliseconds} ms");
     }
 
     /// <summary>スレ表示へ送るレス。本文の Markdown を整形表示する掲示板 (<see cref="ChBrowser.Services.Bbs.IBbsProvider.MarkdownBody"/>) なら、

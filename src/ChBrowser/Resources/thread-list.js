@@ -11,6 +11,7 @@
 //                                                                       見出しの右クリックで列を出し入れした (C# が保存して全スレ一覧へ setConfig)
 // C# → JS:
 //   { type: 'setItems', rows: [{ kind, key, host, dir, no, title, board, count, momentum, log, fav }, ...] } — 行の全体
+//   { type: 'updateRows', rows: [...] }                                  — 一部の行の差し替え (スレタイ翻訳の途中経過。host + dir + key で行を特定)
 //   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
 //   { type: 'setConfig', openOnSingleClick: bool, columns: { widths, hidden, order } } — クリック動作の設定、列幅・隠している列・並び順
 
@@ -484,6 +485,23 @@
         applyListSearch();
     }
 
+    /** 一部の行だけ差し替える (行の組み立ては setItems と同じ rowHtml。選択中の印は引き継ぐ)。
+     *  並べ替えはかけ直さない (スレタイの訳が入っただけで行が動くと読みにくい)。絞り込み中ならかけ直す。 */
+    function updateRows(rows) {
+        var tpl = document.createElement('tbody');
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            var old = tbody.querySelector('tr[data-host="' + r.host + '"][data-dir="' + r.dir + '"][data-key="' + r.key + '"]');
+            if (!old) continue;
+            tpl.innerHTML = rowHtml(r);
+            var tr = tpl.firstElementChild;
+            if (!tr) continue;
+            if (old === selected) { tr.classList.add('selected'); selected = tr; }
+            old.replaceWith(tr);
+        }
+        if (currentSearchQuery) applyListSearch();
+    }
+
     // C# からの増分通知 (LogMarkUpdate / setConfig) を受信
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function(e) {
@@ -521,6 +539,8 @@
                 });
             } else if (msg.type === 'setItems' && Array.isArray(msg.rows)) {
                 setItems(msg.rows);
+            } else if (msg.type === 'updateRows' && Array.isArray(msg.rows)) {
+                updateRows(msg.rows);
             } else if (msg.type === 'setConfig') {
                 if (typeof msg.openOnSingleClick === 'boolean') {
                     openOnSingleClick = msg.openOnSingleClick;

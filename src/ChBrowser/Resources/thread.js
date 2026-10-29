@@ -484,6 +484,12 @@
     // (setConfig.debug で C# から同期)。OFF の間は分析フックは沈黙する。
     let DEBUG_DIAG = false;
 
+    /** 動作を追うための細かいログ (塊ごと・操作ごとに出るもの)。デバッグ設定 (DEBUG_DIAG) のときだけアプリへ送る。
+     *  ふだんも送ると、アプリ側でログ 1 行ごとに UI スレッドを使うぶん表示が遅れる ([perf] / [openPerf] / エラーは debugLog で常に送る)。 */
+    function traceLog(msg) {
+        if (DEBUG_DIAG) debugLog(msg);
+    }
+
 
     // ---------- escape helpers ----------
     function escapeHtml(s) {
@@ -2156,7 +2162,7 @@
      *    - JS リロード (= 別タブ切替・再オープン) でも空に戻るので、再オープン直後で 0 件取得なら太字レスも 0 件。 */
     function markNewPosts() {
         if (sessionNewPostNumbers.size === 0) {
-            debugLog('markNewPosts: sessionNewPostNumbers is empty → no-op');
+            traceLog('markNewPosts: sessionNewPostNumbers is empty → no-op');
             return;
         }
         let added = 0;
@@ -2170,7 +2176,7 @@
                 missing++;
             }
         }
-        debugLog('markNewPosts: sessionNewPostNumbers.size=' + sessionNewPostNumbers.size
+        traceLog('markNewPosts: sessionNewPostNumbers.size=' + sessionNewPostNumbers.size
             + ', applied is-new to ' + added + ' element(s), missing=' + missing
             + ' (sample: ' + Array.from(sessionNewPostNumbers).slice(0, 5).join(',') + ')');
     }
@@ -2182,7 +2188,13 @@
     function recomputeMetaMaps() {
         currentIdMap.clear();
         currentWatchoiMap.clear();
-        for (const p of allPosts) {
+        addToMetaMaps(allPosts);
+    }
+
+    /** ID / ワッチョイの出現一覧に posts を足す (appendPosts は届いた分だけ足す。塊ごとに全レスを数え直すと
+     *  レスが多いスレほど 1 塊の処理が重くなるため)。posts は番号昇順で、既に足したレスより後ろのもの。 */
+    function addToMetaMaps(posts) {
+        for (const p of posts) {
             if (p.id) {
                 if (!currentIdMap.has(p.id)) currentIdMap.set(p.id, []);
                 currentIdMap.get(p.id).push(p.number);
@@ -3196,7 +3208,7 @@
                 // thumbExtractFailed=true の URL は過去に抽出失敗済みなので自動再試行はスキップ
                 // (= ユーザがクリックすると playMedia 側で extractKicked リセット + 再キック)。
                 slot.dataset.extractKicked = '1';
-                debugLog('[VideoSlot] extract KICK url=' + url);
+                traceLog('[VideoSlot] extract KICK url=' + url);
                 extractAndCacheVideoThumbnail(url);
             }
 
@@ -3335,7 +3347,7 @@
             try {
                 const w = video.videoWidth;
                 const h = video.videoHeight;
-                debugLog('[VideoSlot] extract capture(' + reason + ') url=' + url + ' size=' + w + 'x' + h + ' t=' + video.currentTime);
+                traceLog('[VideoSlot] extract capture(' + reason + ') url=' + url + ' size=' + w + 'x' + h + ' t=' + video.currentTime);
                 if (!w || !h) { cleanup(); return; }
                 // 長辺 240px まで縮小 (品質と通信量のバランス)
                 const max = 240;
@@ -3345,7 +3357,7 @@
                 canvas.height = Math.max(1, Math.round(h * scale));
                 canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
                 const dataUri = canvas.toDataURL('image/jpeg', 0.85);
-                debugLog('[VideoSlot] extract OK url=' + url + ' dataUriLen=' + dataUri.length);
+                traceLog('[VideoSlot] extract OK url=' + url + ' dataUriLen=' + dataUri.length);
                 if (window.chrome && window.chrome.webview) {
                     window.chrome.webview.postMessage({ type: 'videoThumbnailCache', url: url, dataUri: dataUri });
                 }
@@ -3906,7 +3918,7 @@
         if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
         if (markPostNumber == null) {
-            debugLog('updateNewPostsMarkBand: markPostNumber=null → no band');
+            traceLog('updateNewPostsMarkBand: markPostNumber=null → no band');
             return;
         }
 
@@ -3925,9 +3937,9 @@
                 band.id        = 'new-posts-mark-band';
                 band.className = 'new-posts-mark-band';
                 liveB.parentNode.insertBefore(band, liveB);
-                debugLog('updateNewPostsMarkBand[dt2]: placed before live section B (mark=' + markPostNumber + ')');
+                traceLog('updateNewPostsMarkBand[dt2]: placed before live section B (mark=' + markPostNumber + ')');
             } else {
-                debugLog('updateNewPostsMarkBand[dt2]: no live section B → no band');
+                traceLog('updateNewPostsMarkBand[dt2]: no live section B → no band');
             }
             return;
         }
@@ -3963,7 +3975,7 @@
             }
         }
         if (!target) {
-            debugLog('updateNewPostsMarkBand: target NOT found for mark=' + markPostNumber
+            traceLog('updateNewPostsMarkBand: target NOT found for mark=' + markPostNumber
                 + ' (allPosts=' + allPosts.length + ', root.children=' + root.children.length
                 + ', getElementById(r' + markPostNumber + ')=' + (direct ? 'exists-but-orphan' : 'null') + ')');
             return; // ラベルを出す場所がない
@@ -3973,7 +3985,7 @@
         band.id        = 'new-posts-mark-band';
         band.className = 'new-posts-mark-band';
         target.parentNode.insertBefore(band, target);
-        debugLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
+        traceLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
     }
 
     /** 比例スクロール復帰の基準 Y (ドキュメント座標)。
@@ -4054,7 +4066,7 @@
     function postOpenUrl(url) {
         if (!url) return;
         if (url.indexOf('http://') !== 0 && url.indexOf('https://') !== 0) return;
-        debugLog('postOpenUrl: sending url=' + url);
+        traceLog('postOpenUrl: sending url=' + url);
         if (window.chrome && window.chrome.webview) {
             window.chrome.webview.postMessage({ type: 'openUrl', url: url });
         }
@@ -5062,6 +5074,7 @@
         allPosts      = allPosts.filter(function (p) { return !set.has(p.number); });
         for (const n of set) { postsByNumber.delete(n); unregisterPostNumber(n); }
         currentReverseIndex = buildReverseIndex();
+        recomputeMetaMaps();   // ID / ワッチョイの出現一覧から消したレスを外す (appendPosts は足すだけなので)
 
         // 3) 残レスの返信バッジを総再計算 (消したレスへの ref が他のバッジから減るため)。
         //    対象番号は DOM 上の全 post-no から集める (= primary に加え、ツリー系の embedded copy /
@@ -5349,7 +5362,7 @@
             pendingBulkDelta = [];
         }
 
-        debugLog('appendPosts: batch=' + batch.length
+        traceLog('appendPosts: batch=' + batch.length
             + ' (numbers ' + batch[0].number + '..' + batch[batch.length-1].number + ')'
             + ', incremental=' + (incremental === true)
             + ', mark=' + mark
@@ -5404,6 +5417,7 @@
         const useDedupBulkRebuild = (vm().usesBulkDeltaRebuild() && isDelta);
         // 返信数バッジは 1 レスごとに更新せず、バッチの最後にまとめて更新する (要素の走査を 1 回にする)
         const badgeNums = new Set();
+        const addedPosts = [];   // この塊で実際に足したレス (重複で飛ばした分を除く)
 
         // 1 レスずつ: 内部状態を更新して replayPostIntoDom で「reverseIndex → DOM 挿入 → 親バッジ更新」を実施。
         // dedupTree-delta だけは DOM 挿入を rebuildSectionB に任せるので、ここでは reverseIndex とバッジだけ更新する。
@@ -5411,10 +5425,11 @@
             // 防御: dat 連番は一意なので、既に保持しているレス番号は二重 append しない
             // (= 万一 C# 側が境界計算ミスで既出レスを再送しても、allPosts / DOM が二重化しないようにする)。
             if (postsByNumber.has(p.number)) {
-                debugLog('appendPosts: skip duplicate number=' + p.number);
+                traceLog('appendPosts: skip duplicate number=' + p.number);
                 continue;
             }
             allPosts.push(p);
+            addedPosts.push(p);
             postsByNumber.set(p.number, p);
             registerPostNumber(p.number);
             registerAttachments(p);
@@ -5481,7 +5496,7 @@
         // ID / ワッチョイの装飾: 今回入った要素はすぐ付ける。件数が変わったグループ (= 今回のレスと同じ ID/ワッチョイ) の
         // 既存レスの付け直し (しきい値の変化 "5 件超え → 赤化" や [N/M] の M に追従) は、届き終わってから後処理でまとめて行う
         // (reddit は ID = 投稿者名で 1 人数十件になり、バッチごとに付け直すとそれだけで重い)。
-        recomputeMetaMaps();
+        addToMetaMaps(addedPosts);
         for (const n of metaGroupMembers(batch)) metaRegroupPending.add(n);
         const inserted = insertedSinceDecorate;
         insertedSinceDecorate = [];
@@ -5511,9 +5526,53 @@
             if (reached && (!scrollAlignedAt || now - scrollAlignedAt >= 1000)) {
                 scrollAlignedAt = now;
                 tryScrollToTarget();
+                openPerfCheckScroll();
             }
         }
     };
+
+    // ---------- 重さの調査用: 開いた直後の初回表示の時刻 ([openPerf]) ----------
+    // C# が初回表示の塊に perfSentAt (塊を作った時刻) を付けて送る。最初の塊の受信・全件の描画完了・読了位置への
+    // スクロール完了を、最初の塊を受けてからの経過と時計の時刻付きでログに出す (ログはアプリ側の都合で遅れて届くことがあるため)。
+    let openPerf = null;   // { t0, key, receivedBatches, renderMs, scrolled, done }
+    function clockText() {
+        const d = new Date();
+        const p = function (n, w) { return String(n).padStart(w || 2, '0'); };
+        return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
+    }
+    function openPerfLog(text) {
+        if (!openPerf) return;
+        debugLog('[openPerf] JS: ' + text + ' (時刻 ' + clockText() + ')');
+    }
+    function openPerfBeforeBatch(msg) {
+        if (typeof msg.perfSentAt !== 'number' || msg.incremental === true) return;
+        if (!openPerf) {
+            openPerf = { t0: performance.now(), batches: 0, renderMs: 0, scrolled: false, done: false };
+            openPerfLog('最初の塊を受信 (' + (msg.posts ? msg.posts.length : 0) + ' 件、作られてから届くまで ' + (Date.now() - msg.perfSentAt) + ' ms)');
+        }
+        openPerf.batchStart = performance.now();
+    }
+    function openPerfAfterBatch(msg) {
+        if (!openPerf || openPerf.done || typeof msg.perfSentAt !== 'number' || msg.incremental === true) return;
+        openPerf.batches++;
+        openPerf.renderMs += performance.now() - openPerf.batchStart;
+        if (msg.hasMore !== true) {
+            openPerf.done = true;
+            openPerfLog('全 ' + allPosts.length + ' 件の描画が完了 +' + Math.round(performance.now() - openPerf.t0) + ' ms'
+                + ' (塊 ' + openPerf.batches + ' 個、描画処理の合計 ' + Math.round(openPerf.renderMs) + ' ms、要素 ' + document.getElementsByTagName('*').length + ')');
+            openPerfCheckScroll();
+            // 読了位置への最終的な合わせ込みは後処理 (runSettle) で行うので、それが済んだ頃にもう一度見る
+            setTimeout(openPerfCheckScroll, 600);
+        }
+    }
+    /** 読了位置まで届いて位置合わせ済みなら、1 回だけその時刻を出す。 */
+    function openPerfCheckScroll() {
+        if (!openPerf || openPerf.scrolled) return;
+        if (pendingScrollTarget == null) { openPerf.scrolled = true; openPerfLog('読了位置なし (先頭から表示)'); return; }
+        if (allPosts.length === 0 || allPosts[allPosts.length - 1].number < pendingScrollTarget) return;
+        openPerf.scrolled = true;
+        openPerfLog('読了位置 (' + pendingScrollTarget + ') へスクロール済み +' + Math.round(performance.now() - openPerf.t0) + ' ms (scrollY ' + Math.round(window.scrollY) + ')');
+    }
 
     /** 最後にまとめて描くために溜めている差分の塊 (appendPosts の hasMore 参照)。 */
     let pendingBulkDelta = [];
@@ -5549,6 +5608,8 @@
         postsByNumber           = new Map();
         currentReverseIndex     = new Map();
         resetQuoteIndex();
+        currentIdMap            = new Map();   // appendPosts は出現一覧に足すだけなので、ここで空にする
+        currentWatchoiMap       = new Map();
         pendingScrollTarget     = null;
         markPostNumber          = null;
         sessionNewPostNumbers.clear();
@@ -5581,7 +5642,9 @@
                     }
                     if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
                     mergeTranslations(msg.translations, msg.translatedShown, msg.translationsHtml);
+                    openPerfBeforeBatch(msg);
                     window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental, msg.hasMore === true);
+                    openPerfAfterBatch(msg);
                     break;
                 case 'updateOwnPosts':
                     // 自分マークの増分トグル (post-no メニュー → ToggleOwnPost 経由)。
@@ -5650,7 +5713,7 @@
                             for (const k of Object.keys(msg.authorProfiles)) authorProfiles.set(k, msg.authorProfiles[k]);
                         closeAuthorCard();
                         if (msg.filter && typeof msg.filter === 'object') currentFilter = normalizeFilter(msg.filter);
-                        debugLog('resyncThreadState: viewMode=' + viewMode
+                        traceLog('resyncThreadState: viewMode=' + viewMode
                             + ', posts=' + (Array.isArray(msg.posts) ? msg.posts.length : 0)
                             + ', markPostNumber=' + msg.markPostNumber
                             + ', scrollTarget=' + msg.scrollTarget);
@@ -5675,7 +5738,7 @@
                     // 既存ラベルを取り除く + scrollbar マーカーも消す。
                     // is-new (= sessionNewPostNumbers) は別管理なのでここでは触らない (= 太字状態は維持)。
                     markPostNumber = (typeof msg.value === 'number') ? msg.value : null;
-                    debugLog('setMarkPostNumber recv: value=' + msg.value
+                    traceLog('setMarkPostNumber recv: value=' + msg.value
                         + ', resolved markPostNumber=' + markPostNumber
                         + ', allPosts=' + allPosts.length
                         + ', viewMode=' + viewMode);
@@ -5811,13 +5874,13 @@
     document.addEventListener('visibilitychange', function () {
         if (!DEBUG_DIAG) return;
         var root = document.getElementById('posts');
-        debugLog('[visChange] state=' + document.visibilityState
+        traceLog('[visChange] state=' + document.visibilityState
             + ' posts=' + ((typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1)
             + ' dom=' + (root ? root.childElementCount : -1));
     });
     window.addEventListener('pageshow', function (e) {
         if (!DEBUG_DIAG) return;
-        debugLog('[pageshow] persisted=' + (e && e.persisted)
+        traceLog('[pageshow] persisted=' + (e && e.persisted)
             + ' posts=' + ((typeof allPosts !== 'undefined' && allPosts) ? allPosts.length : -1));
     });
 

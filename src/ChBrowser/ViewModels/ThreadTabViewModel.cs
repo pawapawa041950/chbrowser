@@ -326,6 +326,10 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// (複数ペイン化 Phase 3)。通常の新規オープンでは false (= appendPosts チャネルで描画される)。</summary>
     public bool NeedsResyncOnAttach { get; set; }
 
+    /// <summary>(重さの調査用) スレを開いてからの経過時間。ログからの初回表示を送り終えるまで動かし、
+    /// <c>[openPerf]</c> ログの基準にする (送り終えたら null)。</summary>
+    public System.Diagnostics.Stopwatch? OpenPerf { get; set; }
+
     /// <summary>JS に「このレスまでスクロールしてくれ」と push するためのトリガ (Phase 25)。
     /// 5ch.io スレ URL のクリック (= postNo 付き) で本タブにスクロール要求が来た時に、新しい
     /// <see cref="ScrollToPostRequest"/> インスタンスを setter することで AttachedProperty 経由で
