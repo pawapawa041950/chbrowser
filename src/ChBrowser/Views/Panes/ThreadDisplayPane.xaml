@@ -648,6 +648,10 @@
             </TabControl.ItemTemplate>
         </TabControl>
 
+        <!-- 予備のスレ表示 WebView の置き場所 (ページまで読み込み済みにしておき、新しいタブを開いたらタブへ移す。
+             ThreadDisplayPane.SpareWebView.cs)。見えないが、WebView を起こすにはウィンドウの中に置いておく必要がある。 -->
+        <Grid x:Name="SpareWebViewHost" Grid.Row="2" Visibility="Collapsed" IsHitTestVisible="False" />
+
         <ItemsControl Grid.Row="2" ItemsSource="{Binding Tabs}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
@@ -656,26 +660,9 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:ThreadTabViewModel}">
-                    <wv2:WebView2 ctrl:WebView2Helper.AppendBatch="{Binding LatestAppendBatch}"
-                                  ctrl:WebView2Helper.OwnPostsUpdate="{Binding OwnPostsUpdate}"
-                                  ctrl:WebView2Helper.VotesUpdate="{Binding VotesUpdate}"
-                                  ctrl:WebView2Helper.AuthorProfilesUpdate="{Binding AuthorProfilesUpdate}"
-                                  ctrl:WebView2Helper.ScoresUpdate="{Binding ScoresUpdate}"
-                                  ctrl:WebView2Helper.TranslationUpdate="{Binding TranslationUpdate}"
-                                  ctrl:WebView2Helper.MarkPostNumberPush="{Binding MarkPostNumber}"
-                                  ctrl:WebView2Helper.FilterPush="{Binding Filter}"
-                                  ctrl:WebView2Helper.ViewMode="{Binding ViewMode}"
-                                  ctrl:WebView2Helper.HidePostsPush="{Binding PendingHidePostNumbers}"
-                                  ctrl:WebView2Helper.AiHiddenPush="{Binding AiHiddenPostNumbers}"
-                                  ctrl:WebView2Helper.ScrollToPostPush="{Binding PendingScrollToPost}"
-                                  ctrl:WebView2Helper.ThreadConfigJson="{Binding DataContext.Main.ThreadConfigJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                  ctrl:WebView2Helper.ThreadProviderConfigJson="{Binding ProviderConfigJson}"
-                                  ctrl:WebView2Helper.ThreadShortcutsJson="{Binding DataContext.Main.ThreadShortcutsJson, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                  WebMessageReceived="ThreadViewWebView_WebMessageReceived"
-                                  CoreWebView2InitializationCompleted="ThreadViewWebView_CoreInitialized"
-                                  IsVisibleChanged="ThreadViewWebView_IsVisibleChanged"
-                                  Unloaded="ThreadViewWebView_Unloaded"
-                                  Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" />
+                    <!-- タブごとのスレ表示 WebView の入れ物。WebView は表示されたときにコードで入れる (予備があればそれ、
+                         無ければ新規。表示用の設定の結び付けも ThreadDisplayPane.SpareWebView.cs の BindThreadWebView) -->
+                    <Border Loaded="ThreadViewHost_Loaded" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>

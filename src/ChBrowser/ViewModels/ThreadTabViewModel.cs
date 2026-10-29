@@ -330,6 +330,10 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     /// <c>[openPerf]</c> ログの基準にする (送り終えたら null)。</summary>
     public System.Diagnostics.Stopwatch? OpenPerf { get; set; }
 
+    /// <summary>(重さの調査用) <see cref="OpenPerf"/> と同じ時計。WebView の起動とページの読み込みの時刻を出すのに使い、
+    /// ページの読み込みが終わったら null にする。</summary>
+    public System.Diagnostics.Stopwatch? OpenPerfWebView { get; set; }
+
     /// <summary>JS に「このレスまでスクロールしてくれ」と push するためのトリガ (Phase 25)。
     /// 5ch.io スレ URL のクリック (= postNo 付き) で本タブにスクロール要求が来た時に、新しい
     /// <see cref="ScrollToPostRequest"/> インスタンスを setter することで AttachedProperty 経由で

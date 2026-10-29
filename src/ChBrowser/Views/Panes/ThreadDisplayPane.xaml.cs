@@ -35,6 +35,9 @@ public partial class ThreadDisplayPane : UserControl
             ChBrowser.Services.Llm.ImageTranslator.Changed += OnImageTranslationChanged;
         };
         Unloaded += (_, __) => ChBrowser.Services.Llm.ImageTranslator.Changed -= OnImageTranslationChanged;
+        // 予備のスレ表示 WebView (新しいタブを開く速さのため。ThreadDisplayPane.SpareWebView.cs)
+        Loaded   += (_, __) => ScheduleSpareWebView(SpareFirstDelay);
+        Unloaded += (_, __) => DiscardSpareWebView();
     }
 
     /// <summary>NG 判定 AI のしきい値ボタン。左クリックでアタッチ済み ContextMenu (しきい値メニュー) を開く。

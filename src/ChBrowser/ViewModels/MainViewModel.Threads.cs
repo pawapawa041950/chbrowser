@@ -197,7 +197,10 @@ public sealed partial class MainViewModel
         }
 
         var tab = CreateThreadTab(board, info);
-        tab.OpenPerf = System.Diagnostics.Stopwatch.StartNew();   // 重さの調査用 ([openPerf])
+        // 重さの調査用 ([openPerf])。ログにはこのローカルの時計を使う (tab.OpenPerf は表示側が初回表示を送り終えると null にするので、
+        // ここから参照すると、WebView が先にできていて引き渡しの中で送り終えた場合に null 参照になる)
+        var openPerf = System.Diagnostics.Stopwatch.StartNew();
+        tab.OpenPerf = tab.OpenPerfWebView = openPerf;
         // アドレスバー直接入力等で title が無い経路はタブ見出しが空のままになるため、
         // dat 取得が走るまでの間 placeholder を出しておく (= AppendPostsWithNg 内の
         // EnsureTitleFromDat で 1 レス目到着と同時に正しいタイトルに置き換わる)。
@@ -230,16 +233,16 @@ public sealed partial class MainViewModel
 
             // ---- Step 1: ディスクにキャッシュ済の dat があれば先に表示する ----
             ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[openPerf] {info.Key}: タブ作成まで {tab.OpenPerf.ElapsedMilliseconds} ms (読了位置 {tab.ScrollTargetPostNumber?.ToString() ?? "なし"})");
+                $"[openPerf] {info.Key}: タブ作成まで {openPerf.ElapsedMilliseconds} ms (読了位置 {tab.ScrollTargetPostNumber?.ToString() ?? "なし"})");
             var local = await _datClient.LoadFromDiskAsync(board, info.Key).ConfigureAwait(true);
             ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[openPerf] {info.Key}: ログ読み込み完了 +{tab.OpenPerf.ElapsedMilliseconds} ms ({local?.Posts.Count ?? 0} 件)");
+                $"[openPerf] {info.Key}: ログ読み込み完了 +{openPerf.ElapsedMilliseconds} ms ({local?.Posts.Count ?? 0} 件)");
             var prevCount = 0;
             if (local is not null && local.Posts.Count > 0)
             {
                 AppendPostsWithNg(tab, local.Posts);
                 ChBrowser.Services.Logging.LogService.Instance.Write(
-                    $"[openPerf] {info.Key}: 表示への引き渡し (NG 判定込み) 完了 +{tab.OpenPerf.ElapsedMilliseconds} ms");
+                    $"[openPerf] {info.Key}: 表示への引き渡し (NG 判定込み) 完了 +{openPerf.ElapsedMilliseconds} ms");
                 tab.DatSize       = local.DatSize;
                 prevCount         = local.Posts.Count;
                 // dat 連番ベースの件数で初期化 (= 取得失敗で Step 2 が走らなくても、後続 refresh の境界が正しくなる)。

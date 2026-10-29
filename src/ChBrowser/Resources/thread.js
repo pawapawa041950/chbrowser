@@ -20,6 +20,9 @@
 // scroll target の同梱と tryScrollToTarget は「初回ロード時 (idx.json からの位置復元)」用。
 // scrollY 状態は WebView2 自身が保持するので、scrollTo(0,0) や save 抑制は不要。
 
+// 重さの調査用 ([openPerf]): この JS の実行が始まった時刻 / 初期化が終わった時刻 (ページの読み込み開始からの ms)
+var CHB_SCRIPT_START = performance.now();
+var CHB_SCRIPT_READY = 0;
 (function () {
     'use strict';
 
@@ -5548,6 +5551,10 @@
         if (typeof msg.perfSentAt !== 'number' || msg.incremental === true) return;
         if (!openPerf) {
             openPerf = { t0: performance.now(), batches: 0, renderMs: 0, scrolled: false, done: false };
+            // ページの読み込みの内訳 (ページの読み込み開始からの ms): JS の実行開始 / JS の初期化完了 / DOMContentLoaded / 最初の塊の受信
+            const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+            openPerfLog('ページ内訳: JS 実行開始 ' + Math.round(CHB_SCRIPT_START) + ' ms、JS 初期化完了 ' + Math.round(CHB_SCRIPT_READY)
+                + ' ms、DOMContentLoaded ' + (nav ? Math.round(nav.domContentLoadedEventEnd) : '?') + ' ms、最初の塊の受信 ' + Math.round(openPerf.t0) + ' ms');
             openPerfLog('最初の塊を受信 (' + (msg.posts ? msg.posts.length : 0) + ' 件、作られてから届くまで ' + (Date.now() - msg.perfSentAt) + ' ms)');
         }
         openPerf.batchStart = performance.now();
@@ -5921,4 +5928,5 @@
     } else {
         document.addEventListener('DOMContentLoaded', notifyReady);
     }
+    CHB_SCRIPT_READY = performance.now();   // 重さの調査用: JS の初期化 (この関数の実行) が終わった時刻
 })();

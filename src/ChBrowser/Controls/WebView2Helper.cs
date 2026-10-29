@@ -87,7 +87,26 @@ public static partial class WebView2Helper
     /// 失敗したら通常パスに fallback。完了後に <see cref="InstallWebResourceHandlers"/> を呼ぶ。
     /// PostDialog のプレビューペインなど、添付プロパティ経由を通らない WebView2 を初期化したいケースでも
     /// 同じ初期化 (warmup + 画像キャッシュ + pixiv Referer) を共有させるため internal 公開している。</summary>
+    /// <summary>(重さの調査用) スレを開いた直後のスレ表示なら、開いてからの経過時間付きで <c>[openPerf]</c> を出す。</summary>
+    private static void OpenPerfLog(WebView2 wv, string what)
+    {
+        if (wv.DataContext is ChBrowser.ViewModels.ThreadTabViewModel { OpenPerfWebView: { } w } tab)
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[openPerf] {tab.ThreadKey}: {what} +{w.ElapsedMilliseconds} ms");
+    }
+
     internal static async Task EnsureCoreAsync(WebView2 wv)
+    {
+        if (wv.CoreWebView2 is null)
+        {
+            OpenPerfLog(wv, "WebView 本体の起動を開始");
+            await EnsureCoreCoreAsync(wv).ConfigureAwait(true);
+            OpenPerfLog(wv, "WebView 本体の起動が完了");
+            return;
+        }
+        await EnsureCoreCoreAsync(wv).ConfigureAwait(true);
+    }
+
+    private static async Task EnsureCoreCoreAsync(WebView2 wv)
     {
         if (_environmentTask is not null)
         {
@@ -182,6 +201,35 @@ public static partial class WebView2Helper
         var s = HtmlNavStates.GetValue(wv, _ => new HtmlNavState());
         return s.CurrentNav?.Task ?? Task.CompletedTask;
     }
+
+    /// <summary>スレ表示のページ (シェル) の版。CSS の再読み込みで増える (予備の WebView が古いページを持っていないかの判定用)。</summary>
+    public static int ThreadShellVersion { get; private set; }
+
+    /// <summary>予備のスレ表示 WebView を、ページの読み込みまで済ませておく (タブを開いたときにその分を待たなくて済む)。
+    /// ウィンドウの中に置かれていること (Loaded) を待ってから起こす。失敗しても例外は出さない (使うときに通常どおりやり直す)。</summary>
+    public static async Task PrewarmThreadShellAsync(WebView2 wv)
+    {
+        try
+        {
+            if (!wv.IsLoaded)
+            {
+                var loaded = new TaskCompletionSource();
+                void OnLoaded(object? s, RoutedEventArgs e) { wv.Loaded -= OnLoaded; loaded.TrySetResult(); }
+                wv.Loaded += OnLoaded;
+                await loaded.Task.ConfigureAwait(true);
+            }
+            await EnsureCoreAsync(wv).ConfigureAwait(true);
+            await GetOrStartThreadShellNav(wv).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WebView2Helper] prewarm failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>スレ表示のページの読み込みが済んでいるか (予備の WebView を使ったときのログ用)。</summary>
+    public static bool IsThreadShellReady(WebView2 wv)
+        => ShellStates.TryGetValue(wv, out var s) && s.NavigationTask is { IsCompletedSuccessfully: true };
 
     private static Task GetOrStartThreadShellNav(WebView2 wv)
     {
@@ -681,8 +729,11 @@ public static partial class WebView2Helper
             tcs.TrySetResult();
         }
         wv.CoreWebView2.NavigationCompleted += Handler;
+        OpenPerfLog(wv, "スレ表示のページの読み込みを開始");
         wv.CoreWebView2.NavigateToString(LoadThreadShellHtml());
         await tcs.Task.ConfigureAwait(true);
+        OpenPerfLog(wv, "スレ表示のページの読み込みが完了");
+        if (wv.DataContext is ChBrowser.ViewModels.ThreadTabViewModel t) t.OpenPerfWebView = null;
     }
 
     private static async Task NavigateToViewerShellAsync(WebView2 wv)
@@ -715,6 +766,7 @@ public static partial class WebView2Helper
     /// は新しい CSS を読み込んだシェル HTML を使う。</summary>
     public static void InvalidateShellCaches()
     {
+        ThreadShellVersion++;   // 読み込み済みの予備のスレ表示 WebView (古い CSS) を使わないように
         lock (ShellLock)              _shellHtmlCache              = null;
         lock (ViewerShellLock)        _viewerShellHtmlCache        = null;
         lock (ViewerDetailsShellLock) _viewerDetailsShellHtmlCache = null;
