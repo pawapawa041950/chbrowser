@@ -417,7 +417,8 @@ public sealed partial class MainViewModel
     /// <summary>「お気に入りチェック」: お気に入り登録スレの subject.txt を確認し、
     /// 新着があるスレを新規タブで開く。dat 落ちしたスレ (一覧が全スレを載せる掲示板で一覧から消えた / 取得で 404) は、
     /// 保存済みのログを「dat 落ち」の状態でタブに出す (お気に入りから外す判断ができるように)。
-    /// subject.txt 取得 / dat 取得の通信本数は合算で <see cref="AppConfig.BatchConcurrency"/> までに制限する。</summary>
+    /// subject.txt 取得 / dat 取得の通信本数は合算で <see cref="AppConfig.BatchConcurrency"/> までに制限する。
+    /// 一覧の取れた板から判定し、取得の済んだスレから順にタブへ出す (全部の取得を待たない)。</summary>
     public async Task CheckFavoritesAsync()
     {
         // 多数の要求をまとめて投げる自動処理: reddit のログインが切れていてもログイン窓は出さない (doc/reddit-design.md D37)
@@ -447,128 +448,122 @@ public sealed partial class MainViewModel
         // バッチ全体で 1 つの semaphore を共有 (合算で BatchConcurrency 本まで)
         var concurrency = Math.Max(1, CurrentConfig.BatchConcurrency);
         using var sem   = new SemaphoreSlim(concurrency, concurrency);
-        var dispatcher  = System.Windows.Application.Current?.Dispatcher;
+        var dispatcher  = System.Windows.Application.Current.Dispatcher;
 
-        // ---- subject.txt を並列取得 ----
-        var subjects    = new ConcurrentDictionary<(string, string), IReadOnlyList<ThreadInfo>>();
-        var subjectOk   = new ConcurrentDictionary<(string, string), bool>();   // 一覧を取得できた板 (失敗した板では dat 落ちと決めつけない)
+        // 板ごとに「一覧の取得 → 新着の判定 → 新着スレの取得 → 表示」を流す。一覧の取れた板から判定し、取得の済んだスレから
+        // 順に表示する (= reddit 等の遅い板を待たずに、他の板のスレは先に読める)。表示 (タブへの反映) は UI スレッドで 1 本ずつ。
+        var threadsByBoard = threads.GroupBy(ft => (ft.Host, ft.DirectoryName)).ToDictionary(g => g.Key, g => g.ToList());
+        var toDropped   = new List<(Board board, ThreadInfo info)>();   // UI スレッドでだけ触る
         var totalBoards = resolved.Count;
-        var subjDone    = 0;
+        int subjDone = 0, found = 0, datDone = 0, opened = 0;
+        using var openLock = new SemaphoreSlim(1, 1);
+        void Report() => StatusMessage = found == 0
+            ? $"お気に入りチェック: 一覧 {subjDone}/{totalBoards}"
+            : $"お気に入りチェック: 一覧 {subjDone}/{totalBoards}、更新スレ 取得 {datDone}/{found} (表示 {opened})";
+        Report();
 
-        StatusMessage = $"お気に入りチェック: subject 取得 0/{totalBoards}";
-
-        var subjectTasks = resolved.Select(async kv =>
+        async Task FetchAndOpenAsync(Board board, ThreadInfo info)
         {
-            await sem.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                try
-                {
-                    var infos = await _subjectClient.FetchAndSaveAsync(kv.Value).ConfigureAwait(false);
-                    subjects[kv.Key]  = infos;
-                    subjectOk[kv.Key] = true;
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[Favorites] subject {kv.Key} 失敗: {ex.Message}");
-                    subjects[kv.Key] = Array.Empty<ThreadInfo>();
-                }
-            }
-            finally
-            {
-                sem.Release();
-            }
-            var d = Interlocked.Increment(ref subjDone);
-            if (dispatcher is not null)
-            {
-                await dispatcher.InvokeAsync(
-                    () => StatusMessage = $"お気に入りチェック: subject 取得 {d}/{totalBoards}");
-            }
-        }).ToList();
-        await Task.WhenAll(subjectTasks).ConfigureAwait(true);
-
-        // ---- 新着判定。落ちたスレは dat 落ちとして別に集める。 ----
-        var toOpen    = new List<(Board board, ThreadInfo info)>();
-        var toDropped = new List<(Board board, ThreadInfo info)>();
-        foreach (var ft in threads)
-        {
-            var key = (ft.Host, ft.DirectoryName);
-            if (!subjects.TryGetValue(key, out var infos)) continue;
-            if (!resolved.TryGetValue(key, out var board)) continue;
-
-            var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
-            if (info is null)
-            {
-                // 一覧から消えた: 一覧が全スレを載せる掲示板 (5ch 等) で、一覧を取得できていれば dat 落ち。
-                // 一覧が一部だけの掲示板 (reddit) では「一覧に無い」は落ちたことを意味しないので何もしない
-                if (subjectOk.ContainsKey(key)
-                    && ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadListIsComplete)
-                    toDropped.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
-                continue;
-            }
-
-            // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
-            // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
-            var idx  = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
-            var prev = idx?.NewPostBaseline ?? 0;
-            if (info.PostCount > prev) toOpen.Add((board, info));
-        }
-
-        if (toOpen.Count == 0)
-        {
-            var droppedOnly = await OpenDroppedFavoritesAsync(toDropped).ConfigureAwait(true);
-            StatusMessage = "お気に入りチェック完了: 新着なし" + DroppedSummary(droppedOnly);
-            return;
-        }
-
-        // ---- dat を並列取得 (同じ semaphore を共有)。
-        //      取得本体だけを semaphore 配下、UI 反映は完了順に逐次。 ----
-        var totalUpdate = toOpen.Count;
-        var datDone     = 0;
-        StatusMessage = $"お気に入りチェック: 更新スレ取得 0/{totalUpdate}";
-
-        var datTasks = toOpen.Select(async pair =>
-        {
+            DatFetchResult? result = null;
+            Exception? error = null;
             await sem.WaitAsync().ConfigureAwait(false);
             try
             {
                 var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
-                var result     = await _datClient.FetchStreamingAsync(pair.board, pair.info.Key, noProgress).ConfigureAwait(false);
-                return (pair.board, pair.info, Result: (DatFetchResult?)result, Error: (Exception?)null);
+                result = await _datClient.FetchStreamingAsync(board, info.Key, noProgress).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Favorites] dat {pair.board.DirectoryName}/{pair.info.Key} 失敗: {ex.Message}");
-                return (pair.board, pair.info, Result: (DatFetchResult?)null, Error: (Exception?)ex);
+                Debug.WriteLine($"[Favorites] dat {board.DirectoryName}/{info.Key} 失敗: {ex.Message}");
+                error = ex;
             }
             finally
             {
                 sem.Release();
                 Interlocked.Increment(ref datDone);
             }
-        }).ToList();
 
-        // 結果を完了順ではなく開始順 (toOpen 順) に処理。
-        // 一括追加中はタブ自動アクティブ化を抑止 (activate:false) (= 連続追加でチカチカするため)。
-        // ※ ユーザが進行中に板一覧から開くタブは activate:true で来るので普通に選択される。
-        var i = 0;
-        foreach (var t in datTasks)
-        {
-            i++;
-            StatusMessage = $"お気に入りチェック: 更新スレ取得 {i}/{totalUpdate} (完了 {datDone}/{totalUpdate})";
-            var (board, info, result, error) = await t.ConfigureAwait(true);
-            if (result is null)
+            // 一括追加中はタブ自動アクティブ化を抑止 (activate:false) (= 連続追加でチカチカするため)。
+            // ※ ユーザが進行中に板一覧から開くタブは activate:true で来るので普通に選択される。
+            await dispatcher.InvokeAsync(async () =>
             {
-                // 取得で「スレが無い」(404) と分かった: dat 落ちとして出す
-                if (error is not null && DatFetchResult.IsDroppedError(error)) toDropped.Add((board, info));
-                continue;
-            }
-            try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
-            catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
+                await openLock.WaitAsync().ConfigureAwait(true);
+                try
+                {
+                    if (result is null)
+                    {
+                        // 取得で「スレが無い」(404) と分かった: dat 落ちとして出す
+                        if (error is not null && DatFetchResult.IsDroppedError(error)) toDropped.Add((board, info));
+                        return;
+                    }
+                    try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
+                    catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
+                    opened++;
+                }
+                finally
+                {
+                    openLock.Release();
+                    Report();
+                }
+            }).Task.Unwrap().ConfigureAwait(false);
         }
 
+        async Task CheckBoardAsync((string, string) key, Board board)
+        {
+            IReadOnlyList<ThreadInfo> infos;
+            var ok = false;
+            await sem.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                infos = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(false);
+                ok = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Favorites] subject {key} 失敗: {ex.Message}");
+                infos = Array.Empty<ThreadInfo>();
+            }
+            finally
+            {
+                sem.Release();
+            }
+
+            // ---- 新着判定 (UI スレッドで)。落ちたスレは dat 落ちとして別に集める。 ----
+            var opens = await dispatcher.InvokeAsync(() =>
+            {
+                subjDone++;
+                var list = new List<ThreadInfo>();
+                foreach (var ft in threadsByBoard[key])
+                {
+                    var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
+                    if (info is null)
+                    {
+                        // 一覧から消えた: 一覧が全スレを載せる掲示板 (5ch 等) で、一覧を取得できていれば dat 落ち。
+                        // 一覧が一部だけの掲示板 (reddit) では「一覧に無い」は落ちたことを意味しないので何もしない
+                        if (ok && ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadListIsComplete)
+                            toDropped.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
+                        continue;
+                    }
+
+                    // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
+                    // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
+                    var idx  = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
+                    var prev = idx?.NewPostBaseline ?? 0;
+                    if (info.PostCount > prev) list.Add(info);
+                }
+                found += list.Count;
+                Report();
+                return list;
+            });
+            await Task.WhenAll(opens.Select(info => FetchAndOpenAsync(board, info))).ConfigureAwait(false);
+        }
+
+        await Task.WhenAll(resolved.Select(kv => CheckBoardAsync(kv.Key, kv.Value))).ConfigureAwait(true);
+
         var droppedCount = await OpenDroppedFavoritesAsync(toDropped).ConfigureAwait(true);
-        StatusMessage = $"お気に入りチェック完了: 更新 {toOpen.Count} 件" + DroppedSummary(droppedCount);
+        StatusMessage = found == 0
+            ? "お気に入りチェック完了: 新着なし" + DroppedSummary(droppedCount)
+            : $"お気に入りチェック完了: 更新 {found} 件" + DroppedSummary(droppedCount);
     }
 
     private static string DroppedSummary(int count) => count > 0 ? $"、dat 落ち {count} 件" : "";
