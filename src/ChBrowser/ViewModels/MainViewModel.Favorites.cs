@@ -309,6 +309,18 @@ public sealed partial class MainViewModel
                 }
             }
 
+            // ログ状態は板ごとにまとめて 1 回で判定する (BuildLogStates は板フォルダの *.dat を列挙するので、
+            // スレ 1 件ごとに呼ぶと、お気に入りの数だけ板フォルダを列挙し直して UI スレッドが止まる)
+            var statesByBoard = new Dictionary<(string host, string dir), IReadOnlyDictionary<string, LogMarkState>>();
+            foreach (var (key, infos) in subjectByBoard)
+            {
+                var keys   = threads.Where(t => (t.Host, t.DirectoryName) == key).Select(t => t.ThreadKey).ToHashSet(StringComparer.Ordinal);
+                var listed = infos.Where(t => keys.Contains(t.Key)).ToList();
+                statesByBoard[key] = listed.Count == 0
+                    ? new Dictionary<string, LogMarkState>()
+                    : BuildLogStates(resolvedBoards[key], listed);
+            }
+
             var items     = new List<ThreadListItem>();
             var addedKeys = new HashSet<(string, string, string)>();
 
@@ -340,9 +352,7 @@ public sealed partial class MainViewModel
                 }
                 else
                 {
-                    var board  = resolvedBoards[key];
-                    var states = BuildLogStates(board, new[] { info });
-                    state = states.TryGetValue(info.Key, out var s) ? s : LogMarkState.None;
+                    state = statesByBoard[key].TryGetValue(info.Key, out var s) ? s : LogMarkState.None;
                 }
                 items.Add(new ThreadListItem(info, ft.Host, ft.DirectoryName, ft.BoardName, state, IsFavorited: true));
             }

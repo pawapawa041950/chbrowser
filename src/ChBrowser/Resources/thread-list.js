@@ -464,6 +464,7 @@
         var html = '';
         for (var i = 0; i < rows.length; i++) html += rowHtml(rows[i]);
         tbody.innerHTML = html;
+        listSearchApplied = false;   // 行は作り直したので印は残っていない
 
         selected = null;
         if (sel) {
@@ -564,13 +565,19 @@
     // 各タブが独自に保持する状態。タブ切替で C# が setListSearch を送り直すので、
     // ここでは「現在の WebView2 (= 1 タブ分) のクエリ」を保持するだけ。
     var currentSearchQuery = '';
+    /** 今、絞り込みの印 (filter-hidden / ハイライト) が付いている行があるか。無ければ、絞り込みなしの適用は何もしなくてよい。 */
+    var listSearchApplied = false;
 
     /** クエリにマッチしない行は filter-hidden で隠し、マッチする行は title セルに <mark.search-highlight> を入れる。
      *  クエリが空なら全行可視 + 既存ハイライト除去。data-title (= 元タイトル) で大文字小文字無視の部分一致判定。 */
     function applyListSearch() {
         if (!tbody) return;
-        var rows = tbody.querySelectorAll('tr');
         var query = currentSearchQuery || '';
+        // 絞り込みなしで、印の付いた行も無い (setItems で行を作り直した直後など): 全行を見て回らない
+        // (一覧を出すたびに全行の title セルを探して回ると、行が多い一覧ほど表示が遅れる)
+        if (!query && !listSearchApplied) return;
+        listSearchApplied = !!query;
+        var rows = tbody.querySelectorAll('tr');
         var queryLower = query.toLowerCase();
         var queryLen = query.length;
 

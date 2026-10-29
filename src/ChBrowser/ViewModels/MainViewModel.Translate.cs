@@ -435,7 +435,7 @@ public sealed partial class MainViewModel
         {
             if (tab.IsTitleTranslationOn) tab.TitlesShownOriginal.Add(title);
             else tab.TitlesShownTranslated.Remove(title);
-            tab.ResendItems();
+            tab.SendChangedTitles();   // その行だけ差し替える (全行の送り直しは一覧全体の組み直しになり重い)
             return;
         }
         if (Translation.CachedTitle(title) is null)
@@ -465,7 +465,7 @@ public sealed partial class MainViewModel
         }
         if (tab.IsTitleTranslationOn) tab.TitlesShownOriginal.Remove(title);
         else tab.TitlesShownTranslated.Add(title);
-        tab.ResendItems();
+        tab.SendChangedTitles();
     }
 
     /// <summary>スレ一覧の行の右クリック「翻訳文の削除」: そのタイトルの訳を消して原文に戻す (訳は全タブ共通なので、ほかのタブも原文に戻る)。
@@ -477,7 +477,7 @@ public sealed partial class MainViewModel
         {
             t.TitlesShownTranslated.Remove(title);
             t.TitlesShownOriginal.Remove(title);
-            t.ResendItems();
+            t.SendChangedTitles();
         }
         tab.StatusMessage = "スレタイの翻訳文を削除しました";
     }
@@ -538,7 +538,7 @@ public sealed partial class MainViewModel
         }
 
         if (!tab.IsTitleTranslationOn) return;   // 途中で OFF にした
-        tab.ResendItems();
+        tab.SendChangedTitles();   // 途中経過で送り切れていない行があれば送る (届いた分は送り済み)
         if (error is not null)
         {
             tab.StatusMessage = $"スレタイの翻訳に失敗しました: {error}";
