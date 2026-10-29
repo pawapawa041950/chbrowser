@@ -584,6 +584,8 @@ var CHB_SCRIPT_READY = 0;
     var VOTING = null;
     // 投稿者のアイコン (▸ の右) とプロフィールのカードを出す掲示板か (reddit)
     var AUTHOR_PROFILES = false;
+    // 投稿者のプロフィールページの URL の型 ({name} を置き換える)。投稿者情報が届く前のカードで使う
+    var AUTHOR_PROFILE_URL = null;
     var lastProviderConfigKey = '';
     function applyProviderConfig(cfg) {
         if (!cfg || typeof cfg !== 'object') return;
@@ -594,6 +596,7 @@ var CHB_SCRIPT_READY = 0;
         if (typeof cfg.watchoi === 'boolean') USE_WATCHOI = cfg.watchoi;
         if ('voting' in cfg) VOTING = (cfg.voting && typeof cfg.voting === 'object') ? cfg.voting : null;
         if (typeof cfg.authorProfiles === 'boolean') AUTHOR_PROFILES = cfg.authorProfiles;
+        if ('authorProfileUrl' in cfg) AUTHOR_PROFILE_URL = typeof cfg.authorProfileUrl === 'string' ? cfg.authorProfileUrl : null;
         if (typeof cfg.showPostNumbers === 'boolean') {
             SHOW_POST_NUMBERS = cfg.showPostNumbers;
             document.documentElement.classList.toggle('hide-post-numbers', !SHOW_POST_NUMBERS);
@@ -636,7 +639,7 @@ var CHB_SCRIPT_READY = 0;
             '.vote-btn.disabled{cursor:default}' +
             '.post-vote.pending{opacity:.5}' +
             '.post-avatar{display:inline-block;width:1.25em;height:1.25em;margin:0 .15em 0 .1em;vertical-align:-.3em;cursor:pointer}' +
-            '.post-avatar.empty{display:none}' +
+            '.post-avatar.empty{background:#c4c4c4;border-radius:50%}' +   // アイコン読み込み前の仮 (無地の丸。クリックできる)
             // 画像の文字の AI 翻訳: 訳のあるサムネイルの印 / 翻訳中の印 / マウスを乗せたときの訳のポップアップ
             '.image-slot.has-img-tr,.image-slot.img-tr-pending{position:relative}' +
             // 印は ::before (::after はサムネイルの大きさを変えるつまみに使っている)。右上に置く
@@ -1423,7 +1426,7 @@ var CHB_SCRIPT_READY = 0;
         return { parentLine: parentLine, score: score };
     }
 
-    /** 投稿者のアイコン (▸ の右)。投稿者情報がまだ届いていなければ空の枠 (非表示) を置き、届いたら updateAuthorProfiles で差し込む。
+    /** 投稿者のアイコン (▸ の右)。投稿者情報がまだ届いていなければ仮の丸を置き、届いたら updateAuthorProfiles で差し込む。
      *  退会済み ([deleted]) 等は出さない。クリックでプロフィールのカード。 */
     function buildAvatarHtml(p) {
         if (!AUTHOR_PROFILES || !p) return '';
@@ -1480,7 +1483,9 @@ var CHB_SCRIPT_READY = 0;
     }
     function showAuthorCard(name, anchorEl) {
         closeAuthorCard();
-        const prof = authorProfiles.get(name);
+        // 投稿者情報がまだ届いていない (アイコン読み込み前・取得を打ち切った) ときは、名前とプロフィールページへの入口だけ出す
+        const prof = authorProfiles.get(name)
+                  || (AUTHOR_PROFILE_URL ? { name: name, profileUrl: AUTHOR_PROFILE_URL.replace('{name}', encodeURIComponent(name)), pending: true } : null);
         if (!prof) return;
         const card = document.createElement('div');
         card.id = 'author-card';
@@ -1496,6 +1501,7 @@ var CHB_SCRIPT_READY = 0;
         }
         const cake = formatCakeDay(prof.createdEpoch);
         if (cake) h += '<div class="ac-cake">' + escapeHtml(cake) + '</div>';
+        if (prof.pending) h += '<div class="ac-cake">投稿者の情報はまだ読み込まれていません</div>';
         if (prof.profileUrl) h += '<button class="ac-open" type="button">プロフィールを開く</button>';
         card.innerHTML = h;
         const openBtn = card.querySelector('.ac-open');

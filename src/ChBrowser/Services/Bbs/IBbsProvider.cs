@@ -282,6 +282,10 @@ public interface IBbsProvider
     /// クリックでプロフィールのカードを出す。投稿者は名前で識別し、取得にはアカウント ID (<see cref="PostExtra.AuthorId"/>) を使う。</summary>
     bool SupportsAuthorProfiles => false;
 
+    /// <summary>投稿者のプロフィールページの URL の型 (<c>{name}</c> を投稿者名に置き換える)。投稿者情報がまだ届いていない
+    /// (アイコン読み込み前) ときのカードの「プロフィールを開く」に使う。null なら出さない。</summary>
+    string? AuthorProfileUrlTemplate => null;
+
     /// <summary>本文の Markdown を整形して表示するか (とその設定)。null なら整形しない (既定)。
     /// 整形する掲示板は取得時にレスの <see cref="PostExtra.Markdown"/> に元の Markdown を入れる。</summary>
     ChBrowser.Services.Render.MarkdownBodySpec? MarkdownBody => null;

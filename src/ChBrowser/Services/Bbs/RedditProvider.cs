@@ -1111,6 +1111,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     // -----------------------------------------------------------------
 
     public bool SupportsAuthorProfiles => true;
+    public string? AuthorProfileUrlTemplate => $"{Origin}/user/{{name}}/";
 
     /// <summary>本文は Markdown (reddit の記法)。相対リンク (<c>/r/xxx</c>) は reddit へ、<c>&gt;!…!&lt;</c> はネタバレ。</summary>
     public ChBrowser.Services.Render.MarkdownBodySpec MarkdownBody { get; } = new(Origin, Spoilers: true);

@@ -147,6 +147,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
             postNumberDigits = provider.PostNumberDigits,
             // 投稿者のアイコン (名前の前) とプロフィールのカード
             authorProfiles   = provider.SupportsAuthorProfiles,
+            authorProfileUrl = provider.AuthorProfileUrlTemplate,
             // レスの評価ボタン (null = 評価できない。評価値があれば表示だけ)
             voting           = provider.Voting is { } v
                 ? new { mode = v.Mode == ChBrowser.Services.Bbs.VoteMode.UpDown ? "updown" : "up", upLabel = v.UpLabel, downLabel = v.DownLabel, canUndo = v.CanUndo }
