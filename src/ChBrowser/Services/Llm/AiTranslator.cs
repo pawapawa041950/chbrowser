@@ -99,16 +99,28 @@ public static class AiTranslator
 
     // ---- アンカー・URL の保護 ----
 
+    // URL は [ ] で止める (Markdown のリンク [URL](URL) を 1 つの URL として包むと、訳文を戻すときに前の [ ごと置き換わってリンクが壊れる)
     private static readonly Regex ProtectRe = new(
-        @"(?:h?ttps?|sssp)://[^\s<>""]+|(?:>>|＞＞|≫)\s*\d+(?:\s*[-,，、]\s*\d+)*|>No\.\d+",
+        @"(?:h?ttps?|sssp)://[^\s<>""\[\]]+|(?:>>|＞＞|≫)\s*\d+(?:\s*[-,，、]\s*\d+)*|>No\.\d+",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex TokenRe = new(@"[⟦\[【]{1,2}\s*(\d+)\s*[⟧\]】]{1,2}", RegexOptions.Compiled);
+    /// <summary>訳文に ⟦n⟧ がそのまま残っているときはこちらだけで戻す (前後の [ ] まで巻き込んで消さない。
+    /// [1] / 【1】 等に書き換えられたときだけ <see cref="TokenRe"/> で拾う)。</summary>
+    private static readonly Regex ExactTokenRe = new(@"⟦\s*(\d+)\s*⟧", RegexOptions.Compiled);
 
     /// <summary>アンカーと URL を ⟦1⟧, ⟦2⟧ … に置き換える。</summary>
     public static (string Masked, List<string> Tokens) Mask(string plain)
     {
         var tokens = new List<string>();
-        var masked = ProtectRe.Replace(plain ?? "", m => { tokens.Add(m.Value); return "⟦" + tokens.Count + "⟧"; });
+        var masked = ProtectRe.Replace(plain ?? "", m =>
+        {
+            // 対になっていない末尾の ) は URL に含めない (Markdown のリンク (URL) の閉じ括弧。https://…/X_(Y) の ) は残す)
+            var v = m.Value;
+            var tail = "";
+            while (v.EndsWith(')') && v.Count(c => c == ')') > v.Count(c => c == '(')) { v = v[..^1]; tail = ")" + tail; }
+            tokens.Add(v);
+            return "⟦" + tokens.Count + "⟧" + tail;
+        });
         return (masked, tokens);
     }
 
@@ -116,7 +128,9 @@ public static class AiTranslator
     public static string Unmask(string text, IReadOnlyList<string> tokens)
     {
         var used = new HashSet<int>();
-        var s = TokenRe.Replace(text ?? "", m =>
+        text ??= "";
+        var re = text.Contains('⟦') ? ExactTokenRe : TokenRe;
+        var s = re.Replace(text, m =>
         {
             var i = int.Parse(m.Groups[1].Value) - 1;
             if (i < 0 || i >= tokens.Count) return m.Value;
