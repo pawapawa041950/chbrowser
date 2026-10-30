@@ -218,12 +218,13 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     public async Task<IReadOnlyList<BoardSearchHit>> SearchBoardsAsync(HttpClient http, string keyword, CancellationToken ct)
     {
         var q   = Uri.EscapeDataString(keyword);
-        var url = $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1";
-        // 検索は reddit 側で弾かれやすい (2026-10、ログイン中・送り元を指定しても「network security」になる例があった) ので、
-        // まず窓を出さずに試し、駄目なら入力補完用の API (最大 10 件) で代わりに探す
+        var url = $"https://old.reddit.com/subreddits/search.json?q={q}&limit=50&raw_json=1";
+        // www の検索は 2026-10-30 からログイン中でも「network security」で弾かれる (old.reddit.com の同じ検索は通る。接続テストで確認)。
+        // old.reddit → www → 入力補完用の API (最大 10 件) の順に、窓を出さずに試す
         foreach (var candidate in new[]
                  {
                      url,
+                     $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1",
                      $"{Origin}/api/subreddit_autocomplete_v2.json?query={q}&include_over_18=true&include_profiles=false&limit=10&raw_json=1",
                  })
         {
