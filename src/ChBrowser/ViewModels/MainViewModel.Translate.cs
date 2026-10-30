@@ -401,6 +401,41 @@ public sealed partial class MainViewModel
         SetTranslateStatus(tab, $"このスレの翻訳文を破棄しました ({removed.Count} レス)");
     }
 
+    // ---- 訳し直し (訳文を消してから LLM に送り直す) ----
+
+    /// <summary>そのレスを訳し直す (🌐 ボタンの右クリック / ▸ メニュー「このレスを再翻訳」)。訳している最中なら何もしない。</summary>
+    public Task RetranslatePostAsync(ThreadTabViewModel tab, long number)
+    {
+        if (tab.TranslatingPosts.Contains(number)) return Task.CompletedTask;
+        if (tab.Translations.Remove(number))
+        {
+            tab.TranslationsMarkdown.Remove(number);
+            if (tab.TranslatedShown.Remove(number)) PushTranslation(tab, hide: new[] { number });
+        }
+        return TranslatePostAsync(tab, number);
+    }
+
+    /// <summary>🌐 メニュー「このスレをすべて再翻訳する」: 実行中の翻訳を止め、訳文を全て消してから、スレ全体の翻訳を ON にして訳し直す。</summary>
+    public async Task RetranslateThreadAsync(ThreadTabViewModel tab)
+    {
+        if (!IsTranslateConfigured)
+        {
+            SetTranslateStatus(tab, NotConfiguredMessage);
+            StatusMessage = NotConfiguredMessage;
+            return;
+        }
+        tab.TranslateCts?.Cancel();
+        while (tab.IsTranslating || tab.TranslatingPosts.Count > 0) await Task.Delay(50).ConfigureAwait(true);   // 走っている分の後始末を待つ
+        var removed = tab.Translations.Keys.ToList();
+        tab.Translations.Clear();
+        tab.TranslatedShown.Clear();
+        tab.TranslationsMarkdown.Clear();
+        if (removed.Count > 0) PushTranslation(tab, removed: removed);
+        tab.IsTranslationOn = true;
+        SaveTranslation(tab);
+        await TranslateMissingAsync(tab).ConfigureAwait(true);
+    }
+
     // ---- スレ一覧ペイン: スレタイの翻訳 (タブごと・その場限り) ----
 
     /// <summary>スレ一覧ペインの 🌐: このタブのスレタイの翻訳の ON / OFF。ON にすると保存済みの訳をすぐ出し、残りを訳す。
@@ -482,6 +517,23 @@ public sealed partial class MainViewModel
         tab.StatusMessage = "スレタイの翻訳文を削除しました";
     }
 
+    /// <summary>スレ一覧の行の右クリック「スレッドタイトルを再翻訳」: そのタイトルの訳を消して LLM に送り直し、訳を表示する。
+    /// 訳は全タブ共通なので、ほかのタブの同じタイトルも新しい訳になる。</summary>
+    public async Task RetranslateTitleAsync(ThreadListTabViewModel tab, string title)
+    {
+        if (!IsTranslateConfigured)
+        {
+            tab.StatusMessage = NotConfiguredMessage;
+            StatusMessage     = NotConfiguredMessage;
+            return;
+        }
+        Translation.RemoveTitles(new[] { title });
+        tab.TitlesShownOriginal.Remove(title);
+        tab.TitlesShownTranslated.Remove(title);
+        await ToggleTitleTranslationAsync(tab, title).ConfigureAwait(true);   // 訳が無いので 1 件だけ訳して表示する
+        foreach (var t in AllThreadListTabs) if (!ReferenceEquals(t, tab)) t.SendChangedTitles();
+    }
+
     /// <summary>このタブのスレタイのうち、訳が保存されているものの数 (🌐 メニュー「…すべて破棄」の有効 / 無効)。</summary>
     public int CountTranslatedTitles(ThreadListTabViewModel tab)
         => TabTitles(tab).Count(t => Translation.CachedTitle(t) is not null);
@@ -496,6 +548,26 @@ public sealed partial class MainViewModel
         var removed = Translation.RemoveTitles(TabTitles(tab));
         foreach (var t in AllThreadListTabs) t.ResendItems();
         tab.StatusMessage = $"スレタイの翻訳文を破棄しました ({removed} 件)";
+    }
+
+    /// <summary>スレ一覧ペインの 🌐 メニュー「スレッド一覧をすべて再翻訳する」: このタブのスレタイの訳を全て消し、
+    /// 「スレッド一覧を全て翻訳する」を ON にして訳し直す。ほかのタブの同じタイトルも訳し直した訳になる。</summary>
+    public async Task RetranslateAllTitlesAsync(ThreadListTabViewModel tab)
+    {
+        if (!IsTranslateConfigured)
+        {
+            tab.StatusMessage = NotConfiguredMessage;
+            StatusMessage     = NotConfiguredMessage;
+            return;
+        }
+        tab.TitleTranslateCts?.Cancel();
+        while (tab.IsTranslatingTitles) await Task.Delay(50).ConfigureAwait(true);   // 走っている分の後始末を待つ
+        tab.ResetTitleOverrides();
+        Translation.RemoveTitles(TabTitles(tab));
+        tab.IsTitleTranslationOn = true;
+        foreach (var t in AllThreadListTabs) t.ResendItems();
+        await TranslateTitlesAsync(tab).ConfigureAwait(true);
+        foreach (var t in AllThreadListTabs) if (!ReferenceEquals(t, tab)) t.SendChangedTitles();
     }
 
     private static IEnumerable<string> TabTitles(ThreadListTabViewModel tab)

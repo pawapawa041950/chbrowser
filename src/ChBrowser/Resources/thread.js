@@ -15,6 +15,7 @@
 //   { type: 'gesture',  descriptor }        — Phase 16: マウスジェスチャー認識結果のディスパッチ要求
 //   { type: 'vote', number, dir, prev }     — レスの評価ボタン (dir: 1 / -1 / 0、prev: 押す前)。結果は updateVotes で返る
 //   { type: 'translatePost', number }       — 各レスの 🌐 ボタン → 翻訳 / 原文に戻す (AI 翻訳)
+//   { type: 'postTrContextMenu', number }   — 各レスの 🌐 ボタンの右クリック → 翻訳 / 再翻訳 / 翻訳文を削除 のメニュー
 //
 // 各タブが専属 WebView2 を持つので、タブ切替で DOM が再構築されることはない。
 // scroll target の同梱と tryScrollToTarget は「初回ロード時 (idx.json からの位置復元)」用。
@@ -4215,6 +4216,16 @@ var CHB_SCRIPT_READY = 0;
     // 右クリックは contextmenu イベントで拾い、ブラウザ既定メニューを抑制してから C# に送る。
     // 優先順位: post-no が一番強い → URL リンク (テキスト or 画像) → それ以外は何もしない (= 既定挙動)。
     document.addEventListener('contextmenu', function(e) {
+        // 0) 各レスの 🌐 ボタン (翻訳 / 再翻訳 / 翻訳文を削除 のメニュー)
+        const trBtn = e.target.closest && e.target.closest('.post-tr-btn');
+        if (trBtn && trBtn.dataset && trBtn.dataset.number) {
+            e.preventDefault();
+            e.stopPropagation();
+            const bn = parseInt(trBtn.dataset.number, 10);
+            if (!isNaN(bn) && window.chrome && window.chrome.webview)
+                window.chrome.webview.postMessage({ type: 'postTrContextMenu', number: bn });
+            return;
+        }
         // 1) post-no
         const postNo = e.target.closest && e.target.closest('.post-no');
         if (postNo && postNo.dataset && postNo.dataset.number) {

@@ -48,6 +48,8 @@
             <MenuItem Tag="reply" Header="返信"                  Click="PostNoReply_Click" />
             <MenuItem Tag="own"   Header="自分の書き込みにする"  Click="PostNoToggleOwn_Click" />
             <MenuItem Tag="translate" Header="このレスを翻訳"   Click="PostNoTranslate_Click" />
+            <MenuItem Tag="retranslate" Header="このレスを再翻訳" Click="PostNoRetranslate_Click"
+                      ToolTip="このレスの訳文を消して、AI に送り直す" />
             <MenuItem Tag="trDelete"  Header="翻訳文の削除"     Click="PostNoDeleteTranslation_Click"
                       ToolTip="このレスの訳文を消して原文に戻す (次に翻訳するときは AI に送り直す)" />
             <Separator />
@@ -56,6 +58,17 @@
                 <MenuItem Tag="ngId"      Click="PostNoNgId_Click" />
                 <MenuItem Tag="ngWatchoi" Click="PostNoNgWatchoi_Click" />
             </MenuItem>
+        </ContextMenu>
+
+        <!-- 各レスの 🌐 ボタンの右クリックメニュー。JS の postTrContextMenu メッセージを受けて HandlePostTrContextMenu が開く。
+             DataContext はレス番号メニューと同じ PostNoMenuContext (Click / Opened のハンドラを共用)。 -->
+        <ContextMenu x:Key="PostTrContextMenu" x:Shared="False"
+                     Opened="PostNoContextMenu_Opened">
+            <MenuItem Tag="translate"   Header="このレスを翻訳"   Click="PostNoTranslate_Click" />
+            <MenuItem Tag="retranslate" Header="このレスを再翻訳" Click="PostNoRetranslate_Click"
+                      ToolTip="このレスの訳文を消して、AI に送り直す" />
+            <MenuItem Tag="trDelete"    Header="翻訳文を削除"     Click="PostNoDeleteTranslation_Click"
+                      ToolTip="このレスの訳文を消して原文に戻す (次に翻訳するときは AI に送り直す)" />
         </ContextMenu>
 
         <!-- URL (本文中のテキストリンク / 画像/動画サムネ) 右クリック用コンテキストメニュー。
@@ -404,6 +417,9 @@
                                           IsChecked="{Binding SelectedTab.IsTranslationOn, Mode=OneWay}"
                                           Command="{Binding SelectedTab.ToggleTranslationCommand}"
                                           ToolTip="日本語以外のレスを全て翻訳する (新着も自動で翻訳)。もう一度選ぶと原文に戻す" />
+                                <MenuItem Header="このスレをすべて再翻訳する"
+                                          Click="RetranslateAll_Click"
+                                          ToolTip="このスレの訳文を全て消して、日本語以外のレスを全て AI に送り直す (「このスレを全て翻訳する」も ON にする)" />
                                 <Separator />
                                 <MenuItem Tag="discardAll" Header="本スレッドの翻訳文をすべて破棄"
                                           Click="DiscardAllTranslations_Click"

@@ -67,6 +67,21 @@ public partial class ThreadDisplayPane : UserControl
         main.DiscardAllTranslations(tab);
     }
 
+    /// <summary>🌐 メニュー「このスレをすべて再翻訳する」: 確認してから、このスレの訳文を全て消して訳し直す。</summary>
+    private void RetranslateAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ThreadPaneGroupViewModel g || Vm is not { } main) return;
+        if (g.SelectedTab is not { } tab) return;
+        if (tab.Translations.Count > 0)
+        {
+            var res = MessageBox.Show(Window.GetWindow(this) ?? Application.Current.MainWindow!,
+                $"このスレの翻訳文 ({tab.Translations.Count} レス分) をすべて消して、AI で翻訳し直します。よろしいですか？",
+                "再翻訳", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (res != MessageBoxResult.OK) return;
+        }
+        _ = main.RetranslateThreadAsync(tab);
+    }
+
     /// <summary>ヘッダの板名 (リンク): スレッド一覧ペインでその板を開く (開いていればそのタブを選んで更新)。</summary>
     private void BoardLinkButton_Click(object sender, RoutedEventArgs e)
     {
@@ -197,6 +212,7 @@ public partial class ThreadDisplayPane : UserControl
             case "vote":               HandleVote(sender, payload); break;
             case "translatePost":      HandleTranslatePost(sender, payload); break;
             case "postNoContextMenu":  HandlePostNoContextMenu(sender, payload); break;
+            case "postTrContextMenu":  HandlePostTrContextMenu(sender, payload); break;
             case "urlContextMenu":     HandleUrlContextMenu(sender, payload); break;
             case "imageTranslationQuery": HandleImageTranslationQuery(sender, payload); break;
             case "threadPreviewRequest": HandleThreadPreviewRequest(sender, payload); break;
@@ -960,6 +976,18 @@ public partial class ThreadDisplayPane : UserControl
         menu.IsOpen          = true;
     }
 
+    /// <summary>JS から「各レスの 🌐 ボタンが右クリックされた」通知を受け、PostTrContextMenu を開く。</summary>
+    private void HandlePostTrContextMenu(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!payload.TryGetProperty("number", out var nProp) || !nProp.TryGetInt64(out var num)) return;
+        if (TryFindResource("PostTrContextMenu") is not ContextMenu menu) return;
+        menu.PlacementTarget = wv;
+        menu.Placement       = PlacementMode.MousePoint;
+        menu.DataContext     = new PostNoMenuContext(wv, num, "", "", "", false);
+        menu.IsOpen          = true;
+    }
+
     /// <summary>メニューが開く瞬間に、対象レスの状態に合わせて項目の Header / IsEnabled を書き換える。
     /// - 「自分の書き込みにする / 解除」label をトグル
     /// - NG サブ項目に値を埋め (例: "名前 — 〜")、値が空のときは IsEnabled=false でグレーアウト</summary>
@@ -980,8 +1008,9 @@ public partial class ThreadDisplayPane : UserControl
                     mi.Header = ctx.Wv.DataContext is ThreadTabViewModel ttab && ttab.TranslatedShown.Contains(ctx.Number)
                         ? "原文に戻す" : "このレスを翻訳";
                     break;
+                case "retranslate":
                 case "trDelete":
-                    // 訳文があるレスだけ。訳している最中は消せない
+                    // 訳文があるレスだけ。訳している最中は消せない / 訳し直せない
                     mi.IsEnabled = ctx.Wv.DataContext is ThreadTabViewModel dtab
                                    && dtab.Translations.ContainsKey(ctx.Number) && !dtab.TranslatingPosts.Contains(ctx.Number);
                     break;
@@ -1009,6 +1038,15 @@ public partial class ThreadDisplayPane : UserControl
         if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
         if (tab.TranslatedShown.Contains(ctx.Number)) main.ShowOriginal(tab, ctx.Number);
         else _ = main.TranslatePostAsync(tab, ctx.Number);
+    }
+
+    /// <summary>レス番号メニュー / 🌐 ボタンの右クリック「このレスを再翻訳」: 訳文を消して AI に送り直す。</summary>
+    private void PostNoRetranslate_Click(object sender, RoutedEventArgs e)
+    {
+        if (PostNoCtxOf(sender) is not { } ctx) return;
+        if (Vm is not { } main) return;
+        if (ctx.Wv.DataContext is not ThreadTabViewModel tab) return;
+        _ = main.RetranslatePostAsync(tab, ctx.Number);
     }
 
     /// <summary>レス番号メニュー「翻訳文の削除」: そのレスの訳文を消して原文に戻す。</summary>

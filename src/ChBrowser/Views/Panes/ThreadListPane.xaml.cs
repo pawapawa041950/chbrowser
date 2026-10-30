@@ -87,6 +87,7 @@ public partial class ThreadListPane : UserControl
             {
                 case "all":        mi.IsChecked = tab?.IsTitleTranslationOn == true; mi.IsEnabled = tab is not null; break;
                 case "discardAll": mi.IsEnabled = has; break;
+                case "retranslateAll": mi.IsEnabled = tab is not null; break;
             }
         }
     }
@@ -97,6 +98,22 @@ public partial class ThreadListPane : UserControl
         if (Group is not { } g || Vm is not { } main) return;
         if (g.SelectedTab is null) return;
         _ = main.ToggleThreadListTranslationAsync(g.SelectedTab);
+    }
+
+    /// <summary>🌐 メニュー「スレッド一覧をすべて再翻訳する」: 確認してから、このタブのスレタイの訳を全て消して訳し直す。</summary>
+    private void RetranslateAllTitles_Click(object sender, RoutedEventArgs e)
+    {
+        if (Group is not { } g || Vm is not { } main) return;
+        if (g.SelectedTab is not { } tab) return;
+        var count = main.CountTranslatedTitles(tab);
+        if (count > 0)
+        {
+            var res = MessageBox.Show(Window.GetWindow(this) ?? Application.Current.MainWindow!,
+                $"このタブのスレタイの翻訳文 ({count} 件) をすべて消して、AI で翻訳し直します。よろしいですか？",
+                "再翻訳", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (res != MessageBoxResult.OK) return;
+        }
+        _ = main.RetranslateAllTitlesAsync(tab);
     }
 
     /// <summary>🌐 メニュー「スレッド一覧の翻訳文をすべて破棄」: 確認してから、このタブのスレタイの訳を全て消して原文に戻す。</summary>
@@ -264,6 +281,7 @@ public partial class ThreadListPane : UserControl
                     item.Header    = shown ? "原文に戻す" : "スレッドタイトルを翻訳";
                     item.IsEnabled = tab is not null && (shown || ChBrowser.Services.Llm.AiTranslator.NeedsTranslation(ctx.Title));
                     break;
+                case "trRetranslate":
                 case "trDelete":
                     item.IsEnabled = !string.IsNullOrEmpty(ctx.Title) && main.Translation.CachedTitle(ctx.Title) is not null;
                     break;
@@ -277,6 +295,14 @@ public partial class ThreadListPane : UserControl
         if (CtxOf(sender) is not { } ctx || Vm is not { } main) return;
         if (Group?.SelectedTab is not { } tab || string.IsNullOrEmpty(ctx.Title)) return;
         _ = main.ToggleTitleTranslationAsync(tab, ctx.Title);
+    }
+
+    /// <summary>行の右クリック「スレッドタイトルを再翻訳」: そのスレタイの訳を消して訳し直す。</summary>
+    private void ThreadListRowRetranslateTitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (CtxOf(sender) is not { } ctx || Vm is not { } main) return;
+        if (Group?.SelectedTab is not { } tab || string.IsNullOrEmpty(ctx.Title)) return;
+        _ = main.RetranslateTitleAsync(tab, ctx.Title);
     }
 
     /// <summary>行の右クリック「翻訳文の削除」: そのスレタイの訳を消して原文に戻す。</summary>

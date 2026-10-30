@@ -56,6 +56,8 @@
             <MenuItem Header="ログ削除"       Click="ThreadListRowDeleteLog_Click" />
             <Separator />
             <MenuItem Tag="trTitle"  Header="スレッドタイトルを翻訳" Click="ThreadListRowTranslateTitle_Click" />
+            <MenuItem Tag="trRetranslate" Header="スレッドタイトルを再翻訳" Click="ThreadListRowRetranslateTitle_Click"
+                      ToolTip="このスレタイの訳を消して、AI に送り直す" />
             <MenuItem Tag="trDelete" Header="翻訳文の削除"           Click="ThreadListRowDeleteTitleTranslation_Click"
                       ToolTip="このスレタイの訳を消して原文に戻す (次に翻訳するときは AI に送り直す)" />
         </ContextMenu>
@@ -193,6 +195,9 @@
                                 <MenuItem Tag="all" Header="スレッド一覧を全て翻訳する" IsCheckable="False"
                                           Click="TranslateAllTitles_Click"
                                           ToolTip="このタブの日本語以外のスレタイを全て翻訳する (このタブだけ。もう一度選ぶと原文に戻す。原文はタイトルにマウスを乗せると見られる)" />
+                                <MenuItem Tag="retranslateAll" Header="スレッド一覧をすべて再翻訳する"
+                                          Click="RetranslateAllTitles_Click"
+                                          ToolTip="このタブのスレタイの訳を全て消して、日本語以外のスレタイを全て AI に送り直す (「スレッド一覧を全て翻訳する」も ON にする)" />
                                 <Separator />
                                 <MenuItem Tag="discardAll" Header="スレッド一覧の翻訳文をすべて破棄"
                                           Click="DiscardAllTitleTranslations_Click"
