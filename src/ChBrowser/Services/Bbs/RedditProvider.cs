@@ -192,6 +192,61 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return new ThreadListPage(items, after);
     }
 
+    /// <summary>スレの状態を問い合わせる URL の候補 (<c>{0}</c> = <c>t3_a,t3_b,…</c>。どれも同じ Listing を返す)。
+    /// www の by_id / api/info は 2026-11-02 時点でログイン中でも「network security」で弾かれ、old.reddit は両方通る (接続テストで確認)。
+    /// 上から順に試し、通ったものを使い続ける。</summary>
+    private static readonly string[] ThreadStatusUrls =
+    {
+        "https://old.reddit.com/by_id/{0}.json?raw_json=1",
+        "https://old.reddit.com/api/info.json?id={0}&raw_json=1",
+    };
+    private static int s_threadStatusUrl;
+
+    /// <summary>スレの id 指定 (1 回 100 件まで) で、一覧に載っていないスレのコメント数とアーカイブ済みかを取る。
+    /// 板は問わない (id だけで引ける)。候補の URL が全部弾かれたら最後の例外を投げる。</summary>
+    public async Task<IReadOnlyList<ThreadStatus>?> FetchThreadStatusesAsync(
+        HttpClient http, Board board, IReadOnlyList<string> threadKeys, CancellationToken ct)
+    {
+        var result = new List<ThreadStatus>();
+        var keys = threadKeys.Where(k => !string.IsNullOrEmpty(k)).Distinct(StringComparer.Ordinal).ToList();
+        for (var b = 0; b < keys.Count; b += 100)
+        {
+            var ids = string.Join(",", keys.Skip(b).Take(100).Select(k => "t3_" + k));
+            for (var i = s_threadStatusUrl; ; i++)
+            {
+                var url = string.Format(CultureInfo.InvariantCulture, ThreadStatusUrls[i], ids);
+                try
+                {
+                    byte[] bytes;
+                    using (ProviderRequestContext.Optional())
+                        (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
+                    result.AddRange(ParseThreadStatuses(bytes));
+                    s_threadStatusUrl = i;
+                    break;
+                }
+                catch (HttpRequestException ex) when (i + 1 < ThreadStatusUrls.Length)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] スレの状態 {url.Split('?')[0]} が失敗: {ex.Message} (次の候補を試します)");
+                }
+            }
+        }
+        ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] スレの状態 {keys.Count} 件 → {result.Count} 件 ({ThreadStatusUrls[s_threadStatusUrl].Split('?')[0]})");
+        return result;
+    }
+
+    /// <summary>by_id の応答 (Listing t3) → スレの状態。レス数は <see cref="ParseThreadListPage"/> と同じ (コメント数 + 1)。</summary>
+    public IReadOnlyList<ThreadStatus> ParseThreadStatuses(byte[] bytes)
+    {
+        var archived = new HashSet<string>(StringComparer.Ordinal);
+        if (TryParse(bytes, out var doc))
+            using (doc)
+                if (doc.RootElement.TryGetProperty("data", out var data) && data.TryGetProperty("children", out var children)
+                    && children.ValueKind == JsonValueKind.Array)
+                    foreach (var c in children.EnumerateArray())
+                        if (c.TryGetProperty("data", out var d) && Bool(d, "archived") && Str(d, "id") is { Length: > 0 } id) archived.Add(id);
+        return ParseThreadListPage(bytes).Items.Select(i => new ThreadStatus(i, archived.Contains(i.Key))).ToList();
+    }
+
     /// <summary>about.json → 板情報。板名 (<c>BBS_TITLE</c>) は <c>r/名前</c> (reddit では名前で呼ぶのが普通なので title より優先)。</summary>
     public IReadOnlyDictionary<string, string> ParseBoardInfo(byte[] bytes)
     {

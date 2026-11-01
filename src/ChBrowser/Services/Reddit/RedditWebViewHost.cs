@@ -145,6 +145,9 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 ("板検索 subreddits/search",             $"{O}/subreddits/search.json?q=python&limit=5&raw_json=1"),
                 ("板検索 autocomplete_v2",               $"{O}/api/subreddit_autocomplete_v2.json?query=python&include_over_18=true&include_profiles=false&limit=10&raw_json=1"),
                 ("投稿者情報 user_data_by_account_ids",  $"{O}/api/user_data_by_account_ids.json?ids=t2_4amlb"),
+                // スレの状態 (お気に入りの巡回で、一覧に無いスレのコメント数を問い合わせる)。アプリが最初に使う old.reddit の by_id
+                // (www の by_id / api/info は 2026-11 時点でログイン中でも弾かれる)
+                ("スレの状態 old.reddit by_id",          $"https://old.reddit.com/by_id/t3_1wubcvf,t3_1xiix9r.json?raw_json=1"),
                 // 板検索はアプリが最初に使う old.reddit (www は 2026-10-30 からログイン中でも弾かれる)
                 ("板検索 old.reddit subreddits/search",  $"https://old.reddit.com/subreddits/search.json?q=python&limit=5&raw_json=1"),
             };

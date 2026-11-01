@@ -294,7 +294,17 @@ public interface IBbsProvider
     /// (<see cref="AuthorProfileFetch.Asked"/> に実際に問い合わせた ID を入れる。残りは次の機会に取る)。</summary>
     Task<AuthorProfileFetch> FetchAuthorProfilesAsync(HttpClient http, IReadOnlyCollection<string> authorIds, CancellationToken ct)
         => Task.FromResult(AuthorProfileFetch.Empty);
+
+    /// <summary>スレ一覧に載っていないスレ (<see cref="ThreadListIsComplete"/> が false の掲示板で、一覧の上位から外れたスレ) の
+    /// 今の状態 (レス数・もう書き込めないか) を、スレ本体を取らずにまとめて問い合わせる (お気に入りの巡回用)。
+    /// 対応していなければ null (既定)。問い合わせに失敗したら例外。返らなかったスレは結果に含めない。</summary>
+    Task<IReadOnlyList<ThreadStatus>?> FetchThreadStatusesAsync(HttpClient http, Board board, IReadOnlyList<string> threadKeys, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ThreadStatus>?>(null);
 }
+
+/// <summary><see cref="IBbsProvider.FetchThreadStatusesAsync"/> の 1 件。<see cref="Info"/> のレス数は一覧と同じ数え方。
+/// <see cref="Closed"/> = もう書き込めない (reddit のアーカイブ済み)。dat 落ちとして扱う。</summary>
+public sealed record ThreadStatus(ThreadInfo Info, bool Closed);
 
 /// <summary>投稿者情報の取得結果。<see cref="Found"/> はアカウント ID → 情報、<see cref="Asked"/> は問い合わせた ID
 /// (問い合わせたのに <see cref="Found"/> に無い = 退会・凍結等で見つからない)。</summary>

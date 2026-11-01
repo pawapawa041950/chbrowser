@@ -338,7 +338,8 @@ public sealed partial class MainViewModel
                     // 無い (= infos が空) ケースもありうる。その場合は Dropped と決めつけずに
                     // ローカルの dat があれば Cached、なければ None として表示する (= 誤情報を出さない)。
                     info = new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0);
-                    if (infos.Count == 0)
+                    // 一覧が一部だけの掲示板 (reddit 等) では「一覧に無い」は落ちたことを意味しないので、一覧が無いときと同じ扱い
+                    if (infos.Count == 0 || !ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(ft.Host).ThreadListIsComplete)
                     {
                         var board = resolvedBoards[key];
                         var datExists = System.IO.File.Exists(_paths.DatPath(board.Host, board.DirectoryName, ft.ThreadKey));
@@ -538,33 +539,79 @@ public sealed partial class MainViewModel
                 sem.Release();
             }
 
+            var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+
+            // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
+            // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
+            bool HasNew(FavoriteThread ft, ThreadInfo info)
+                => info.PostCount > (_threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey)?.NewPostBaseline ?? 0);
+
             // ---- 新着判定 (UI スレッドで)。落ちたスレは dat 落ちとして別に集める。 ----
-            var opens = await dispatcher.InvokeAsync(() =>
+            var (opens, unlisted) = await dispatcher.InvokeAsync(() =>
             {
                 subjDone++;
-                var list = new List<ThreadInfo>();
+                var list    = new List<ThreadInfo>();
+                var missing = new List<FavoriteThread>();
                 foreach (var ft in threadsByBoard[key])
                 {
                     var info = infos.FirstOrDefault(t => t.Key == ft.ThreadKey);
                     if (info is null)
                     {
                         // 一覧から消えた: 一覧が全スレを載せる掲示板 (5ch 等) で、一覧を取得できていれば dat 落ち。
-                        // 一覧が一部だけの掲示板 (reddit) では「一覧に無い」は落ちたことを意味しないので何もしない
-                        if (ok && ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).ThreadListIsComplete)
-                            toDropped.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
+                        // 一覧が一部だけの掲示板 (reddit) では「一覧に無い」は落ちたことを意味しないので、後でスレの状態を問い合わせる
+                        if (provider.ThreadListIsComplete)
+                        {
+                            if (ok) toDropped.Add((board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)));
+                        }
+                        else missing.Add(ft);
                         continue;
                     }
-
-                    // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
-                    // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
-                    var idx  = _threadIndex.Load(ft.Host, ft.DirectoryName, ft.ThreadKey);
-                    var prev = idx?.NewPostBaseline ?? 0;
-                    if (info.PostCount > prev) list.Add(info);
+                    if (HasNew(ft, info)) list.Add(info);
                 }
                 found += list.Count;
                 Report();
-                return list;
+                return (list, missing);
             });
+
+            // 一覧に載っていないスレ (reddit で上位から外れたスレ): スレ本体を取らずに今のレス数をまとめて問い合わせる (reddit は 100 件で 1 回)。
+            // 問い合わせられなければ (要求が弾かれた等) 1 件ずつスレを取りに行く
+            if (unlisted.Count > 0)
+            {
+                IReadOnlyList<ChBrowser.Services.Bbs.ThreadStatus>? statuses = null;
+                var failed = false;
+                await sem.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    statuses = await provider.FetchThreadStatusesAsync(_subjectClient.Http, board, unlisted.Select(f => f.ThreadKey).ToList(), default).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    ChBrowser.Services.Logging.LogService.Instance.Write($"[Favorites] スレの状態の問い合わせに失敗 {key}: {ex.Message} (1 件ずつ取得します)");
+                    failed = true;
+                }
+                finally
+                {
+                    sem.Release();
+                }
+                if (statuses is not null || failed)
+                {
+                    var more = await dispatcher.InvokeAsync(() =>
+                    {
+                        var list = new List<ThreadInfo>();
+                        foreach (var ft in unlisted)
+                        {
+                            if (failed) { list.Add(new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)); continue; }
+                            if (statuses!.FirstOrDefault(s => s.Info.Key == ft.ThreadKey) is not { } st) continue;   // 返らなかった (削除済み等)
+                            if (st.Closed) toDropped.Add((board, st.Info));   // もう書き込めない (reddit のアーカイブ済み) = dat 落ち
+                            else if (HasNew(ft, st.Info)) list.Add(st.Info);
+                        }
+                        found += list.Count;
+                        Report();
+                        return list;
+                    });
+                    opens.AddRange(more);
+                }
+            }
             await Task.WhenAll(opens.Select(info => FetchAndOpenAsync(board, info))).ConfigureAwait(false);
         }
 
