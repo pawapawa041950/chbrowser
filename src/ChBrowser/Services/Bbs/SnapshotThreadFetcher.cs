@@ -200,6 +200,8 @@ internal static class SnapshotThreadFetcher
             rootId ??= chunk[0].ExternalId;
             var added = AssignNumbers(chunk, rootId, meta, nameByNumber, maxNumber);
             if (added.Count == 0) return;
+            // 本文の Markdown の整形 (reddit) をここ (裏のスレッド) で済ませておく (スレ表示へ送るとき UI スレッドで整形しない)
+            ChBrowser.Services.Render.MarkdownBodyRenderer.Prewarm(added, provider.MarkdownBody);
             maxNumber = added.Max(p => p.Number);
             fresh.AddRange(added);
 

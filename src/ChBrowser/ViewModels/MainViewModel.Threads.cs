@@ -463,15 +463,24 @@ public sealed partial class MainViewModel
         if (!provider.SupportsAuthorProfiles || tab.Posts.Count == 0) return;
         try
         {
-            var idByName = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (n, id) in _datClient.LoadThreadMeta(tab.Board, tab.ThreadKey)?.AuthorIds ?? new())
-                idByName[n] = id;
-            foreach (var p in tab.Posts)
-                if (p.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(p.Name)) idByName[p.Name] = aid;
-            var names = tab.Posts.Select(p => p.Name).Where(n => idByName.ContainsKey(n)).Distinct(StringComparer.Ordinal).ToList();
+            // 投稿者名 → アカウント ID と、このスレの投稿者名の一覧は裏で作る (meta.json の読み込みと数千件の走査が
+            // 遅い PC で UI スレッドを止めていた)。保存済みの投稿者情報 (数万人分) の読み込みも裏で済ませておく
+            var posts = tab.Posts.ToList();
+            var board = tab.Board;
+            var key   = tab.ThreadKey;
+            var (idByName, names) = await Task.Run(() =>
+            {
+                var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var (n, id) in _datClient.LoadThreadMeta(board, key)?.AuthorIds ?? new())
+                    ids[n] = id;
+                foreach (var p in posts)
+                    if (p.Ext?.AuthorId is { Length: > 0 } aid && !string.IsNullOrEmpty(p.Name)) ids[p.Name] = aid;
+                return (ids, posts.Select(p => p.Name).Where(n => ids.ContainsKey(n)).Distinct(StringComparer.Ordinal).ToList());
+            }).ConfigureAwait(true);
             if (names.Count == 0) return;
 
             var cache = AuthorProfileCache;
+            await cache.PreloadAsync(provider).ConfigureAwait(true);
             tab.AddAuthorProfiles(cache.Get(provider, names.Where(n => !tab.AuthorProfiles.ContainsKey(n))));
 
             if (!fetchStale) return;

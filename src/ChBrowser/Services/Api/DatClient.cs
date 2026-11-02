@@ -77,10 +77,12 @@ public sealed class DatClient
         switch (provider.FetchStrategy)
         {
             case ChBrowser.Services.Bbs.ThreadFetchStrategy.Snapshot:
-                return await ChBrowser.Services.Bbs.SnapshotThreadFetcher
+                // 裏で動かす: 最初のログの読み込みがすぐ終わると、続くログの解析・meta.json の読み込みまで呼び出し元
+                // (UI スレッド) で進んでしまい、数千件のスレで UI を止めていた (提供者の通信は自前で UI スレッドへ回す)
+                return await Task.Run(() => ChBrowser.Services.Bbs.SnapshotThreadFetcher
                     .FetchAsync(_client.Http, provider, board, threadKey, path,
                                 _paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey), progress, ct,
-                                SnapshotMaxExpansions)
+                                SnapshotMaxExpansions), ct)
                     .ConfigureAwait(false);
             case ChBrowser.Services.Bbs.ThreadFetchStrategy.NumberedDelta:
                 return await ChBrowser.Services.Bbs.NumberedThreadFetcher
@@ -256,6 +258,13 @@ public sealed class DatClient
         var path = _paths.DatPath(board.Host, board.DirectoryName, threadKey);
         if (!File.Exists(path)) return null;
 
+        // 解析は裏で行う (数千件のスレで遅い PC だと UI スレッドを止めるため。ファイルの読み込みがすぐ終わると
+        // ConfigureAwait(false) でも呼び出し元のスレッドのまま続くので、Task.Run で確実に外へ出す)
+        return await Task.Run(() => LoadFromDiskCoreAsync(board, threadKey, path, ct), ct).ConfigureAwait(false);
+    }
+
+    private async Task<DatFetchResult?> LoadFromDiskCoreAsync(Board board, string threadKey, string path, CancellationToken ct)
+    {
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
         // 番号列付きログで保存する掲示板 (5ch の生 dat 以外) なのに版マーカーが無いファイルは壊れている
         // (取得の途中でログが消され、続きだけがマーカー無しで書かれた等)。5ch の dat として読むと名前・日付がずれて
@@ -272,6 +281,8 @@ public sealed class DatClient
         if (ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).FetchStrategy == ChBrowser.Services.Bbs.ThreadFetchStrategy.Snapshot
             && ChBrowser.Services.Bbs.ThreadMeta.Load(_paths.ThreadMetaPath(board.Host, board.DirectoryName, threadKey)) is { Scores.Count: > 0 } meta)
             posts = meta.ApplyScores(posts);
+        // 本文の Markdown の整形 (reddit) もここで済ませておく (スレ表示へ送るとき UI スレッドで整形しないように)
+        ChBrowser.Services.Render.MarkdownBodyRenderer.Prewarm(posts, ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).MarkdownBody);
         return new DatFetchResult(posts, bytes.LongLength);
     }
 

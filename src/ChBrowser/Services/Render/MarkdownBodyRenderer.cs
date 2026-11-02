@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -47,6 +48,14 @@ public static class MarkdownBodyRenderer
         var html = Render(md, spec);
         Cache.AddOrUpdate(ext, html ?? "");   // 整形できなかったことも覚える (毎回やり直さない)
         return html;
+    }
+
+    /// <summary>レスの Markdown を先に整形して覚えておく (取得・ログの読み込みの裏のスレッドで呼び、スレ表示へ送るときの
+    /// <see cref="HtmlFor"/> を覚えた結果を返すだけにする = UI スレッドで整形しない)。<paramref name="spec"/> が null なら何もしない。</summary>
+    public static void Prewarm(IEnumerable<Post> posts, MarkdownBodySpec? spec)
+    {
+        if (spec is null) return;
+        foreach (var p in posts) HtmlFor(p, spec);
     }
 
     private static readonly ConditionalWeakTable<string, string> TextCache = new();
