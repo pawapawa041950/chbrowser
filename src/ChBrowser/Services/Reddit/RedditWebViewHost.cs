@@ -150,6 +150,8 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 ("スレの状態 old.reddit by_id",          $"https://old.reddit.com/by_id/t3_1wubcvf,t3_1xiix9r.json?raw_json=1"),
                 // 板検索はアプリが最初に使う old.reddit (www は 2026-10-30 からログイン中でも弾かれる)
                 ("板検索 old.reddit subreddits/search",  $"https://old.reddit.com/subreddits/search.json?q=python&limit=5&raw_json=1"),
+                // アプリと同じ件数 (50) でも試す (2026-11-03 にアプリからだけ HTML / 404 が返った件の切り分け用)
+                ("板検索 old.reddit subreddits/search (limit=50)", $"https://old.reddit.com/subreddits/search.json?q=game&limit=50&raw_json=1"),
             };
             async Task Probes(string prefix)
             {

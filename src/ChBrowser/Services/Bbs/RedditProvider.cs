@@ -275,13 +275,16 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         var q   = Uri.EscapeDataString(keyword);
         var url = $"https://old.reddit.com/subreddits/search.json?q={q}&limit=50&raw_json=1";
         // www の検索は 2026-10-30 からログイン中でも「network security」で弾かれる (old.reddit.com の同じ検索は通る。接続テストで確認)。
-        // old.reddit → www → 入力補完用の API (最大 10 件) の順に、窓を出さずに試す
-        foreach (var candidate in new[]
-                 {
-                     url,
-                     $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1",
-                     $"{Origin}/api/subreddit_autocomplete_v2.json?query={q}&include_over_18=true&include_profiles=false&limit=10&raw_json=1",
-                 })
+        // old.reddit → www → 入力補完用の API (最大 10 件) の順に、窓を出さずに試す。
+        // 弾かれずに 0 件 (JSON 以外のページ等) が返ることもある (2026-11-03 の old.reddit。GetAsync の Accept 参照) ので、0 件なら次の候補も試す
+        var candidates = new[]
+        {
+            url,
+            $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1",
+            $"{Origin}/api/subreddit_autocomplete_v2.json?query={q}&include_over_18=true&include_profiles=false&limit=10&raw_json=1",
+        };
+        var answered = false;
+        foreach (var candidate in candidates)
         {
             try
             {
@@ -289,18 +292,26 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 using (ProviderRequestContext.Optional())
                     (got, _) = await GetAsync(http, candidate, ct).ConfigureAwait(false);
                 var hits = ParseSubredditListing(got);
-                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 板検索 {candidate.Split('?')[0]} → {hits.Count} 件");
-                return hits;
+                ChBrowser.Services.Logging.LogService.Instance.Write(
+                    $"[reddit] 板検索 {candidate.Split('?')[0]} → {hits.Count} 件{(hits.Count == 0 ? $" ({got.Length} bytes: {SearchBodyHead(got)})" : "")}");
+                if (hits.Count > 0) return hits;
+                answered = true;
             }
             catch (HttpRequestException ex)
             {
                 ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 板検索 {candidate.Split('?')[0]} が失敗: {ex.Message}");
             }
         }
-        // どちらも弾かれた: ログイン切れ等の可能性があるので、通常の要求として送る (必要ならログイン / 確認の窓が出る)
+        // どこかが弾かれずに 0 件を返した: 本当に該当なし
+        if (answered) return Array.Empty<BoardSearchHit>();
+        // どれも弾かれた: ログイン切れ等の可能性があるので、通常の要求として送る (必要ならログイン / 確認の窓が出る)
         var (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
         return ParseSubredditListing(bytes);
     }
+
+    /// <summary>0 件だった検索の応答の先頭 (空の Listing か、JSON 以外かを見分ける調査用)。</summary>
+    private static string SearchBodyHead(byte[] bytes)
+        => System.Text.RegularExpressions.Regex.Replace(Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 120)), @"\s+", " ");
 
     // ---- 板一覧ペインの一覧 (ホット / おすすめ) ----
 
@@ -794,7 +805,12 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
     private static async Task<(byte[] Bytes, double? Remaining)> GetAsync(HttpClient http, string url, CancellationToken ct)
     {
-        using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
+        // .json の要求には JSON を求めると明示する: old.reddit の検索は 2026-11-03 から、これが無いと HTML のページ (200) を返す
+        // (接続テストは付けていて JSON が返る。ユーザ環境で確認)。HTML を読む要求 (ホームのおすすめ) には付けない
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (Uri.TryCreate(url, UriKind.Absolute, out var u) && u.AbsolutePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            req.Headers.Accept.ParseAdd("application/json");
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         if (resp.Headers.TryGetValues("x-ratelimit-reset", out var rs)
             && double.TryParse(rs.FirstOrDefault(), NumberStyles.Float, CultureInfo.InvariantCulture, out var reset))

@@ -25,8 +25,9 @@ public sealed class RedditSessionAuth : IProviderAuth
     public const string MeUrl = "https://www.reddit.com/api/me.json?raw_json=1";
     public const string LoginUrl = "https://www.reddit.com/login/";
 
-    /// <summary>このセッション (WebView2) 経由で送るホスト。</summary>
-    public static IReadOnlyList<string> RoutedHosts { get; } = new[] { "www.reddit.com" };
+    /// <summary>このセッション (WebView2) 経由で送るホスト。old.reddit.com (板検索・スレの状態・続きの予備) も、
+    /// 2026-11-03 から匿名だとログインページへ転送されるようになったのでセッション経由で送る。</summary>
+    public static IReadOnlyList<string> RoutedHosts { get; } = new[] { "www.reddit.com", "old.reddit.com" };
 
     private readonly IBrowserFetcher _fetcher;
     private readonly IRedditLoginUi  _ui;
