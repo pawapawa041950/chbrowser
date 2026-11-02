@@ -230,10 +230,22 @@ public static partial class WebView2Helper
         var perfKey = tab?.ThreadKey ?? "";
         var serializeSw = perf is null ? null : System.Diagnostics.Stopwatch.StartNew();
         var chunkCount  = 0;
+        // 最初の分に読了位置のレスが後ろの方にあるとき (ログから開き直した等) は、そこまでを大きな塊で送る。
+        // 読了位置が届くまではスレの先頭が一瞬見えるだけ (届けば読了位置へ飛ぶ) なので小分けにする意味が無く、
+        // 塊ごとにスレ表示の画面の組み立て直しが走る分だけ遅くなる (2,000 件を 50 件ずつで、描画とは別に 0.5 秒程度)。
+        // 読了位置より後ろは読了位置を見ながら届くので、今までどおり小分けにして操作を止めない。
+        var readAheadUntil = 0;   // この位置 (posts の添字) までは大きな塊
+        if (empty && !data.IsIncremental && scrollTarget is long target)
+        {
+            var idx = -1;
+            for (var k = 0; k < posts.Count; k++) if (posts[k].Number >= target) { idx = k; break; }
+            if (idx >= ChBrowser.Services.Api.DatClient.StreamLaterBatchSize) readAheadUntil = idx + 1;
+        }
         for (var i = 0; i < posts.Count; )
         {
-            var size  = i == 0 && empty ? ChBrowser.Services.Api.DatClient.StreamFirstBatchSize
-                                        : ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
+            var size  = i < readAheadUntil ? Math.Min(ReadAheadBatchSize, readAheadUntil - i)
+                      : i == 0 && empty    ? ChBrowser.Services.Api.DatClient.StreamFirstBatchSize
+                                           : ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
             var n     = Math.Min(size, posts.Count - i);
             var chunk = n == posts.Count ? posts : posts.Skip(i).Take(n).ToList();
             i += n;
@@ -281,6 +293,10 @@ public static partial class WebView2Helper
             tab!.OpenPerf = null;   // 初回表示の分はここまで (以後の差分取得は計らない)
         }
     }
+
+    /// <summary>スレを開いたとき、読了位置までのレスを送る 1 通の件数 (<see cref="OnAppendBatchChanged"/>)。大きいほどスレ表示の
+    /// 画面の組み立て直しの回数が減って速いが、1 通の描画のあいだスレ表示が止まる (遅い PC で 500 件 150 ms 程度の見込み)。</summary>
+    private const int ReadAheadBatchSize = 500;
 
     /// <summary>(重さの調査用) 送信が終わった時点で、スレを開いてからの経過時間をログに出す。</summary>
     private static async Task LogOpenPerfAfterAsync(Task send, System.Diagnostics.Stopwatch perf, string key, string what)

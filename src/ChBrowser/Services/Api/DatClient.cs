@@ -146,6 +146,18 @@ public sealed class DatClient
                     finalSize = bytes.LongLength;
                     break;
                 }
+            case 416 when resp.Content.Headers.ContentRange?.Length == existing:
+                // Range Not Satisfiable だが、サーバの dat の大きさ (Content-Range: bytes */全体) が手元と同じ = 新着なし。
+                // 5ch は手元の末尾ちょうどから頼むと、増えていなければ 416 を返す。縮んだときと区別しないと
+                // 新着なしのたびに dat を丸ごと取り直してしまう (240KB で 1 秒程度)。304 と同じく既存をパースして通知
+                {
+                    var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+                    var posts = DatParser.Parse(bytes);
+                    allPosts.AddRange(posts);
+                    if (posts.Count > 0) progress.Report(posts);
+                    finalSize = bytes.LongLength;
+                    break;
+                }
             case 416: // Range Not Satisfiable - dat が縮んだ → 全取得し直し
                 {
                     using var req2  = new HttpRequestMessage(HttpMethod.Get, url);
