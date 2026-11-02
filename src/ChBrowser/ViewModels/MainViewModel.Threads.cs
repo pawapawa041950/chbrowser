@@ -136,8 +136,7 @@ public sealed partial class MainViewModel
             for (var i = prevCount; i < result.Posts.Count; i++) added.Add(result.Posts[i]);
             if (prevCount > 0)
             {
-                // ラベル位置は「件数 + 1」ではなく今回バッチの最小番号 (= 実番号が疎な掲示板でも正しい。5ch では同じ値)。
-                tab.MarkPostNumber = added.Min(p => p.Number);
+                SetNewPostsMark(tab, added, result.BackfillEndNumber);
                 ChBrowser.Services.Logging.LogService.Instance.Write(
                     $"[fetchDelta]   → set tab.MarkPostNumber={prevCount + 1}, then AppendPostsWithNg(added={added.Count}, incremental=true)");
             }
@@ -158,7 +157,7 @@ public sealed partial class MainViewModel
         {
             // 新着 0 件: 既存の「以降新レス」ラベルを消す (= mark 消去 → MarkPostNumberPush で JS にも push)。
             // 仕様: 状態マーク変更が起きるイベントなので、HasReplyToOwn も false にリセット (= 上書き許可)。
-            tab.MarkPostNumber = null;
+            ClearNewPostsMark(tab);
             tab.HasReplyToOwn  = false;
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[fetchDelta]   → 新着 0 件、tab.MarkPostNumber=null、HasReplyToOwn=false");
@@ -167,13 +166,31 @@ public sealed partial class MainViewModel
         else
         {
             // dat 縮小も「新着情報のクリア」と同等扱い (= mark / HasReplyToOwn 両方クリア)。
-            tab.MarkPostNumber = null;
+            ClearNewPostsMark(tab);
             tab.HasReplyToOwn  = false;
             ChBrowser.Services.Logging.LogService.Instance.Write(
                 $"[fetchDelta]   → dat 縮小、tab.MarkPostNumber=null、HasReplyToOwn=false");
             tab.StatusMessage = $"{headerForStatus}: dat 縮小 ({prevCount} → {result.Posts.Count})";
         }
         tab.DatSize = result.DatSize;
+    }
+
+    /// <summary>差分 <paramref name="added"/> の「以降新レス」ラベルを立てる。ラベル位置は「件数 + 1」ではなく差分の最小番号
+    /// (= 実番号が疎な掲示板でも正しい。5ch では同じ値)。差分の先頭に前回取り切れなかった中間 (reddit) があれば、
+    /// その最後の番号 (<paramref name="backfillEnd"/>) も渡し、JS がラベルを「未取得だった分」と「新レス」に分ける。
+    /// mark は <see cref="AppendPostsWithNg"/> より前に書く (= 同期 DP 発火時に JSON に乗せるため)。中間はそれより先。</summary>
+    private static void SetNewPostsMark(ThreadTabViewModel tab, IReadOnlyList<Post> added, long? backfillEnd)
+    {
+        var mark = added.Min(p => p.Number);
+        tab.BackfillEndPostNumber = backfillEnd is long be && be >= mark ? be : null;
+        tab.MarkPostNumber        = mark;
+    }
+
+    /// <summary>「以降新レス」ラベル (と中間の範囲) を消す。</summary>
+    private static void ClearNewPostsMark(ThreadTabViewModel tab)
+    {
+        tab.BackfillEndPostNumber = null;
+        tab.MarkPostNumber        = null;
     }
 
     /// <summary>スレ一覧でスレをダブルクリックしたとき呼ばれる。

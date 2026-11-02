@@ -148,6 +148,12 @@ var CHB_SCRIPT_READY = 0;
     //     dedup-tree の「親ごと描写」境界 (= 旧 incrementalPivotIndex) もこのラベルに統一。
     let markPostNumber = null;
 
+    // 差分のうち「前回の取得で取り切れなかった中間」(reddit) の最後のレス番号。null = 中間なし。
+    // 中間は markPostNumber からこの番号まで (C# が投稿時刻順に採番するので新着より前の番号に並ぶ)、それより後ろが新着。
+    // 中間があるときはラベルを「以降 未取得だった分」(markPostNumber の前) と「以降新レス」(新着の先頭の前) の 2 本にする。
+    // markPostNumber と一緒に appendPosts / resyncThreadState / setMarkPostNumber で届く。
+    let backfillEndNumber = null;
+
     // 「最新リフレッシュ (= 直近の delta batch group) で届いたレス番号」の集合。
     // section B (= 「以降新レス」ラベル以降) の描画コンテンツと、is-new (= レス No 太字) の判定の両方に使う。
     // 新しい refresh の境界 (= mark 値変化) で本 Set はリセットされ、前 refresh のレスは section A に昇格する。
@@ -2006,14 +2012,29 @@ var CHB_SCRIPT_READY = 0;
         const root = document.getElementById('posts');
         if (!root) return;
 
-        const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
-        if (liveOld) liveOld.remove();
+        removeDedupTree2LiveSections(root);
 
         if (!incNumbers || incNumbers.length === 0) return;
-        const forest = buildDedupTree2Forest(incNumbers);
+        // 中間 (前回取り切れなかった分) があれば、中間と新着を別の区画に分ける (= 「以降 未取得だった分」と「以降新レス」の
+        // 2 本のラベルの下に、それぞれの forest を描く)。新着の forest に出てくる中間の祖先は id 無しの複製になる
+        // (id は各区画の自分の分にだけ振る = 同じ id が 2 か所に出ない)。
+        if (hasBackfill()) {
+            const gap = [], fresh = [];
+            for (const n of incNumbers) (n <= backfillEndNumber ? gap : fresh).push(n);
+            renderDedupTree2LiveSection(root, gap,   new Set(gap.filter(n => idNumbers.has(n))),   'dt2-gap');
+            renderDedupTree2LiveSection(root, fresh, new Set(fresh.filter(n => idNumbers.has(n))), '');
+            return;
+        }
+        renderDedupTree2LiveSection(root, incNumbers, idNumbers, '');
+    }
+
+    /** dedupTree2 のライブ section B を 1 つ (numbers の forest) 末尾に描く。extraClass は中間の区画なら 'dt2-gap'。 */
+    function renderDedupTree2LiveSection(root, numbers, idNumbers, extraClass) {
+        if (numbers.length === 0) return;
+        const forest = buildDedupTree2Forest(numbers);
         if (forest.size === 0) return;
 
-        let html = '<div class="incremental-section dt2-live">';
+        let html = '<div class="incremental-section dt2-live' + (extraClass ? ' ' + extraClass : '') + '">';
         for (const node of forest.values()) {
             html += '<div class="incremental-block">';
             html += renderIncrementalForestNode(node, idNumbers, /*isEmbedded*/ false);
@@ -2021,6 +2042,11 @@ var CHB_SCRIPT_READY = 0;
         }
         html += '</div>';
         insertHtmlIntoContainer(root, html, /*before*/ null);
+    }
+
+    /** dedupTree2 のライブ section B (中間の区画があればそれも) を撤去する。凍結済みの区画には触れない。 */
+    function removeDedupTree2LiveSections(root) {
+        root.querySelectorAll(':scope > .incremental-section.dt2-live').forEach(function (el) { el.remove(); });
     }
 
     /** ケース1 (開いたままの差分取得): 「今リフレッシュ分 (sessionNewPostNumbers)」から section B を作る。
@@ -2041,8 +2067,7 @@ var CHB_SCRIPT_READY = 0;
         if (!root) return;
         // markPostNumber が無い (= 新着なし) ならライブ section B を消すだけ。
         if (markPostNumber == null) {
-            const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
-            if (liveOld) liveOld.remove();
+            removeDedupTree2LiveSections(root);
             return;
         }
         const incNumbers = [];
@@ -3912,20 +3937,14 @@ var CHB_SCRIPT_READY = 0;
     // markPostNumber は appendPosts のペイロードから受信して保持。
     // ラベル位置はリフレッシュで新着が来たときだけ動く (= 旧 readMark のように scroll で動かない)。
 
-    /** 「以降新レス」ラベル DOM を再配置する。
-     *
-     *  配置ロジック (優先度順):
-     *    1. r{markPostNumber} が #posts の直接の子なら、その前に挿入。
-     *    2. r{markPostNumber} が nested (= dedupTree section B のように forest 内に居る) なら、
-     *       そのレスを含む top-level 子要素の前に挿入する。
-     *       (※ section B の forest root は ancestor (= mark 未満の親) のことがあり id 無し。
-     *           したがって「root.children を id で検索」では届かないので必ず target から walk up する。)
-     *    3. 上記いずれも見つからなければ、root.children を頭から走査して
-     *       「番号 >= mark の最初の primary レス」または「番号 >= mark のレスを内包する top-level」を探す。 */
+    /** 「以降新レス」ラベル DOM を再配置する。r{markPostNumber} を内包する top-level 要素 (findMarkTarget) の前に置く。
+     *  中間 (前回取り切れなかった分) があれば、そこを「以降 未取得だった分」にし、新着の先頭の前に「以降新レス」を足す。 */
     function updateNewPostsMarkBand() {
-        // 既存ラベルを一旦取り除く (= 配置場所の更新も再挿入で行う)
-        const existing = document.getElementById('new-posts-mark-band');
-        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+        // 既存ラベルを一旦取り除く (= 配置場所の更新も再挿入で行う)。中間があるときの 2 本目 (以降新レス) も
+        for (const id of ['new-posts-mark-band', 'fresh-posts-mark-band']) {
+            const existing = document.getElementById(id);
+            if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+        }
 
         if (markPostNumber == null) {
             traceLog('updateNewPostsMarkBand: markPostNumber=null → no band');
@@ -3934,68 +3953,109 @@ var CHB_SCRIPT_READY = 0;
 
         const root = document.getElementById('posts');
         if (!root) return;
+        const backfill = hasBackfill();
+        const fresh    = backfill ? freshMarkNumber() : null;
 
         // dedupTree2 モード特例: ラベルは常に「ライブ section B (.dt2-live)」の直前に置く。
         //   ケース2 では同じレスが A の完全ツリーにも居て id 付きなので、汎用の getElementById('r'+mark) は
         //   A 側を拾ってしまい、ラベルが A の途中に入ってしまう。ライブ section B を直接 target にすればよい
         //   (ケース1 でも r{mark} の top-level は同じライブ section B なので結果は一致する)。
         //   ライブ section B が無い (= 新着 0) ならラベルは出さない。
+        //   中間があるときは中間の区画 (.dt2-gap) の前に「以降 未取得だった分」、新着の区画の前に「以降新レス」。
         if (viewMode === 'dedupTree2') {
-            const liveB = root.querySelector(':scope > .incremental-section.dt2-live');
-            if (liveB) {
-                const band = document.createElement('div');
-                band.id        = 'new-posts-mark-band';
-                band.className = 'new-posts-mark-band';
-                liveB.parentNode.insertBefore(band, liveB);
-                traceLog('updateNewPostsMarkBand[dt2]: placed before live section B (mark=' + markPostNumber + ')');
-            } else {
+            const lives = root.querySelectorAll(':scope > .incremental-section.dt2-live');
+            if (lives.length === 0) {
                 traceLog('updateNewPostsMarkBand[dt2]: no live section B → no band');
+                return;
             }
+            const gapSec   = backfill ? root.querySelector(':scope > .incremental-section.dt2-live.dt2-gap') : null;
+            const freshSec = Array.prototype.find.call(lives, function (el) { return !el.classList.contains('dt2-gap'); }) || null;
+            placeMarkBand(lives[0], gapSec ? 'backfill' : '');
+            if (gapSec && freshSec) placeFreshBand(freshSec);
+            traceLog('updateNewPostsMarkBand[dt2]: placed before live section B (mark=' + markPostNumber + ', backfillEnd=' + backfillEndNumber + ')');
             return;
         }
 
-        let target = null;
-        let route  = '';
-
-        // ① / ② r{markPostNumber} が DOM 上にあれば、それを内包する top-level 要素を target に
-        const direct = document.getElementById('r' + markPostNumber);
-        if (direct) {
-            let topLevel = direct;
-            while (topLevel && topLevel.parentNode !== root) topLevel = topLevel.parentNode;
-            if (topLevel && topLevel.parentNode === root) { target = topLevel; route = 'direct'; }
-        }
-
-        // ③ それでも見つからない (= 該当レスが DOM に存在しない) 場合は番号 >= mark を探す
-        if (!target) {
-            for (const post of root.children) {
-                const id = post.id;
-                // id 付きの primary レスならその番号で判定
-                if (id && id.startsWith('r')) {
-                    const n = parseInt(id.slice(1), 10);
-                    if (n >= markPostNumber) { target = post; route = 'fallback-id'; break; }
-                    continue;
-                }
-                // id 無しの top-level (= dedupTree section B の forest root が ancestor のとき) は
-                // 内部に r{>=mark} が居るかを後方互換的にチェックする
-                const inner = post.querySelector('[id^="r"]');
-                if (inner && inner.id) {
-                    const n = parseInt(inner.id.slice(1), 10);
-                    if (!isNaN(n) && n >= markPostNumber) { target = post; route = 'fallback-inner'; break; }
-                }
-            }
-        }
+        const target = findMarkTarget(root, markPostNumber);
         if (!target) {
             traceLog('updateNewPostsMarkBand: target NOT found for mark=' + markPostNumber
-                + ' (allPosts=' + allPosts.length + ', root.children=' + root.children.length
-                + ', getElementById(r' + markPostNumber + ')=' + (direct ? 'exists-but-orphan' : 'null') + ')');
+                + ' (allPosts=' + allPosts.length + ', root.children=' + root.children.length + ')');
             return; // ラベルを出す場所がない
         }
 
+        // 中間があるとき: 新着の先頭を内包する top-level の前に 2 本目を置く。中間と新着が同じ top-level に混ざる
+        // (= 旧 dedupTree の forest で新着が中間の配下に入った等) なら分けられないので、1 本で「未取得分 & 新レス」とする
+        let freshTarget = null;
+        if (backfill && fresh != null) {
+            freshTarget = findMarkTarget(root, fresh);
+            if (freshTarget === target || (freshTarget && !(target.compareDocumentPosition(freshTarget) & Node.DOCUMENT_POSITION_FOLLOWING)))
+                freshTarget = null;
+        }
+        placeMarkBand(target, !backfill ? '' : (fresh == null || freshTarget ? 'backfill' : 'backfill-mixed'));
+        if (freshTarget) placeFreshBand(freshTarget);
+        traceLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ', backfillEnd=' + backfillEndNumber
+            + ', fresh=' + fresh + ' (target.id=' + (target.id || '<none>') + ', freshBand=' + (freshTarget ? 'yes' : 'no') + ')');
+    }
+
+    /** 1 本目のラベル (id=new-posts-mark-band) を target の前に置く。kind: '' = 以降新レス、
+     *  'backfill' = 以降 未取得だった分、'backfill-mixed' = 以降 未取得分 & 新レス (文言は CSS)。 */
+    function placeMarkBand(target, kind) {
         const band = document.createElement('div');
         band.id        = 'new-posts-mark-band';
+        band.className = 'new-posts-mark-band' + (kind ? ' ' + kind : '');
+        target.parentNode.insertBefore(band, target);
+    }
+
+    /** 中間があるときの 2 本目のラベル (以降新レス) を target の前に置く。 */
+    function placeFreshBand(target) {
+        const band = document.createElement('div');
+        band.id        = 'fresh-posts-mark-band';
         band.className = 'new-posts-mark-band';
         target.parentNode.insertBefore(band, target);
-        traceLog('updateNewPostsMarkBand: placed for mark=' + markPostNumber + ' via ' + route + ' (target.id=' + (target.id || '<none>') + ')');
+    }
+
+    /** ラベル範囲 (markPostNumber〜) に中間 (前回取り切れなかった分) があるか。 */
+    function hasBackfill() {
+        return markPostNumber != null && backfillEndNumber != null && backfillEndNumber >= markPostNumber;
+    }
+
+    /** 中間より後ろの新着の先頭番号 (無ければ null)。 */
+    function freshMarkNumber() {
+        for (const p of allPosts) if (p.number > backfillEndNumber) return p.number;
+        return null;
+    }
+
+    /** ラベルを置く top-level 要素 (番号 num のレスを内包するもの) を探す。
+     *    1. r{num} が #posts の直接の子なら、それ。
+     *    2. r{num} が nested (= dedupTree section B のように forest 内に居る) なら、そのレスを含む top-level 子要素。
+     *       (※ section B の forest root は ancestor (= num 未満の親) のことがあり id 無し。
+     *           したがって「root.children を id で検索」では届かないので必ず target から walk up する。)
+     *    3. 上記いずれも見つからなければ、root.children を頭から走査して
+     *       「番号 >= num の最初の primary レス」または「番号 >= num のレスを内包する top-level」。 */
+    function findMarkTarget(root, num) {
+        const direct = document.getElementById('r' + num);
+        if (direct) {
+            let topLevel = direct;
+            while (topLevel && topLevel.parentNode !== root) topLevel = topLevel.parentNode;
+            if (topLevel && topLevel.parentNode === root) return topLevel;
+        }
+        for (const post of root.children) {
+            const id = post.id;
+            // id 付きの primary レスならその番号で判定
+            if (id && id.startsWith('r')) {
+                const n = parseInt(id.slice(1), 10);
+                if (n >= num) return post;
+                continue;
+            }
+            // id 無しの top-level (= dedupTree section B の forest root が ancestor のとき) は
+            // 内部に r{>=num} が居るかを後方互換的にチェックする
+            const inner = post.querySelector('[id^="r"]');
+            if (inner && inner.id) {
+                const n = parseInt(inner.id.slice(1), 10);
+                if (!isNaN(n) && n >= num) return post;
+            }
+        }
+        return null;
     }
 
     /** 比例スクロール復帰の基準 Y (ドキュメント座標)。
@@ -4042,7 +4102,7 @@ var CHB_SCRIPT_READY = 0;
         const scrollHeight = document.documentElement.scrollHeight;
         if (!scrollHeight) return;
 
-        // (1) 「以降新レス」境界 (1 本だけ)
+        // (1) 「以降新レス」境界 (中間があるときは「以降 未取得だった分」と「以降新レス」の 2 本)
         if (markPostNumber != null) {
             const band = document.getElementById('new-posts-mark-band');
             const ref  = band || document.getElementById('r' + markPostNumber);
@@ -4050,6 +4110,13 @@ var CHB_SCRIPT_READY = 0;
                 const m = document.createElement('div');
                 m.className = 'marker';
                 m.style.top = (ref.offsetTop / scrollHeight * 100) + '%';
+                track.appendChild(m);
+            }
+            const freshBand = document.getElementById('fresh-posts-mark-band');
+            if (freshBand) {
+                const m = document.createElement('div');
+                m.className = 'marker';
+                m.style.top = (freshBand.offsetTop / scrollHeight * 100) + '%';
                 track.appendChild(m);
             }
         }
@@ -5275,8 +5342,8 @@ var CHB_SCRIPT_READY = 0;
             // 新リフレッシュ境界 (ケース1): 旧ライブ section B を「凍結」する (= .dt2-live を外すだけ。
             //   中身も位置も保持し、以後作り直さない = 新ラベル以降だけが section B)。
             promoteOnNewRefresh(root) {
-                const liveOld = root.querySelector(':scope > .incremental-section.dt2-live');
-                if (liveOld) liveOld.classList.remove('dt2-live');
+                root.querySelectorAll(':scope > .incremental-section.dt2-live')
+                    .forEach(function (el) { el.classList.remove('dt2-live'); });   // 中間の区画があればそれも
             },
             // ケース1 (差分): ライブ section B を sessionNewPostNumbers (id 付き) から作り直す
             //   (= 凍結済み / section A には触れない)。
@@ -5364,7 +5431,7 @@ var CHB_SCRIPT_READY = 0;
      *           タブ閉じ / アプリ再起動でリセットされる)。
      *   - incremental: dat 差分追加フラグ。session-new (= is-new 太字対象) の積算 + dedupTree の section B
      *                  再構築経路の振り分けに使う。 */
-    window.appendPosts = function (batch, scrollTarget, mark, incremental, hasMore) {
+    window.appendPosts = function (batch, scrollTarget, mark, incremental, hasMore, backfillEnd) {
         if (!Array.isArray(batch) || batch.length === 0) return;
         const root = document.getElementById('posts');
         if (!root) return;
@@ -5431,6 +5498,7 @@ var CHB_SCRIPT_READY = 0;
         // 「以降新レス」ラベルは毎 batch で C# から最新値を受け取り上書き。null なら据え置きせずクリア
         // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
         markPostNumber = newMark;
+        backfillEndNumber = (newMark != null && typeof backfillEnd === 'number') ? backfillEnd : null;
 
         // 差分取得 (= isDelta) batch を、per-post 経路 ではなく末尾の section B 一括再構築経路にするか。
         // dedupTree のみ true (= 「ラベル以前 DOM 不可侵 / ラベル以降は祖先 chain forest」の仕様を表現するため)。
@@ -5636,6 +5704,7 @@ var CHB_SCRIPT_READY = 0;
         currentWatchoiMap       = new Map();
         pendingScrollTarget     = null;
         markPostNumber          = null;
+        backfillEndNumber       = null;
         sessionNewPostNumbers.clear();
         lastDeltaMark = null;
 
@@ -5667,7 +5736,7 @@ var CHB_SCRIPT_READY = 0;
                     if (msg.myVotes && typeof msg.myVotes === 'object') loadMyVotes(msg.myVotes);
                     mergeTranslations(msg.translations, msg.translatedShown, msg.translationsHtml);
                     openPerfBeforeBatch(msg);
-                    window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental, msg.hasMore === true);
+                    window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, msg.incremental, msg.hasMore === true, msg.backfillEnd);
                     openPerfAfterBatch(msg);
                     break;
                 case 'updateOwnPosts':
@@ -5715,6 +5784,7 @@ var CHB_SCRIPT_READY = 0;
                         sessionNewPostNumbers.clear();
                         lastDeltaMark       = null;
                         markPostNumber      = null;
+                        backfillEndNumber   = null;
                         pendingScrollTarget = null;
 
                         if (typeof msg.viewMode === 'string'
@@ -5744,9 +5814,10 @@ var CHB_SCRIPT_READY = 0;
                         if (Array.isArray(msg.posts) && msg.posts.length > 0) {
                             // appendPosts は incremental=false 経路で渡された posts を初期描画する。
                             // appendPosts 内で markNewPosts / decorateMeta / scrollToTarget 等もまとめて走る。
-                            window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, false);
+                            window.appendPosts(msg.posts, msg.scrollTarget, msg.markPostNumber, false, false, msg.backfillEnd);
                         } else if (typeof msg.markPostNumber === 'number') {
                             markPostNumber = msg.markPostNumber;
+                            backfillEndNumber = (typeof msg.backfillEnd === 'number') ? msg.backfillEnd : null;
                         }
                     })();
                     break;
@@ -5762,6 +5833,7 @@ var CHB_SCRIPT_READY = 0;
                     // 既存ラベルを取り除く + scrollbar マーカーも消す。
                     // is-new (= sessionNewPostNumbers) は別管理なのでここでは触らない (= 太字状態は維持)。
                     markPostNumber = (typeof msg.value === 'number') ? msg.value : null;
+                    backfillEndNumber = (markPostNumber != null && typeof msg.backfillEnd === 'number') ? msg.backfillEnd : null;
                     traceLog('setMarkPostNumber recv: value=' + msg.value
                         + ', resolved markPostNumber=' + markPostNumber
                         + ', allPosts=' + allPosts.length

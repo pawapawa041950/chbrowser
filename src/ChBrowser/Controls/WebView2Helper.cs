@@ -27,6 +27,10 @@ public interface IThreadDisplayBinding
     /// appendPosts のメッセージに同梱して JS に push し、ラベル描画と dedup-tree の境界判定に使う。</summary>
     long? MarkPostNumber { get; }
 
+    /// <summary>差分のうち前回取り切れなかった中間 (reddit) の最後のレス番号 (<see cref="MarkPostNumber"/> から、この番号まで)。
+    /// null なら中間なし。<see cref="MarkPostNumber"/> と一緒に JS へ送る。</summary>
+    long? BackfillEndPostNumber { get; }
+
     /// <summary>「自分の書き込み」としてマークされているレス番号集合。
     /// appendPosts のメッセージに同梱して JS に push し、レンダ時に「自分」バッジを表示させる。</summary>
     System.Collections.Generic.IReadOnlyCollection<long> OwnPostNumbers { get; }

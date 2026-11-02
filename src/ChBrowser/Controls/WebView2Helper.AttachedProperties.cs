@@ -204,6 +204,7 @@ public static partial class WebView2Helper
         var binding      = wv.DataContext as IThreadDisplayBinding;
         var scrollTarget = binding?.ScrollTargetPostNumber;
         var markPostNumber = binding?.MarkPostNumber;
+        var backfillEnd    = binding?.BackfillEndPostNumber;
         // 「自分の書き込み」のレス番号集合も併送 (= JS 側で「自分」バッジ表示)。
         // 集合は通常極小 (数件) なので毎バッチに同梱しても無害。
         var ownPosts     = binding?.OwnPostNumbers ?? System.Array.Empty<long>();
@@ -242,6 +243,7 @@ public static partial class WebView2Helper
                 posts            = PostsForPage(tab, chunk),
                 scrollTarget,
                 markPostNumber,
+                backfillEnd,
                 incremental      = data.IsIncremental,
                 hasMore          = i < posts.Count,
                 ownPostNumbers   = ownPosts,
@@ -354,6 +356,7 @@ public static partial class WebView2Helper
             posts          = PostsForPage(tab, tab.Posts),
             scrollTarget   = (long?)tab.ScrollTargetPostNumber,
             markPostNumber = (long?)tab.MarkPostNumber,
+            backfillEnd    = (long?)tab.BackfillEndPostNumber,
             ownPostNumbers = System.Linq.Enumerable.ToArray(tab.OwnPostNumbers),
             myVotes        = tab.MyVotes,
             authorProfiles = tab.AuthorProfiles,
@@ -517,7 +520,9 @@ public static partial class WebView2Helper
             $"[markPush] new value={e.NewValue?.ToString() ?? "null"} (was {e.OldValue?.ToString() ?? "null"})");
         // value は int? の boxed か null。JsonSerializer は null を JSON null としてシリアライズするので
         // JS 側で typeof === 'number' チェック → 数値なら設定、それ以外 (= null/undefined) なら markPostNumber=null。
-        var json = JsonSerializer.Serialize(new { type = "setMarkPostNumber", value = e.NewValue }, PostJsonOptions);
+        // 中間 (前回取り切れなかった分) の範囲も添える (ViewModel は mark より先に書いている)
+        var backfillEnd = (wv.DataContext as IThreadDisplayBinding)?.BackfillEndPostNumber;
+        var json = JsonSerializer.Serialize(new { type = "setMarkPostNumber", value = e.NewValue, backfillEnd }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.ThreadShell);
     }
 

@@ -670,6 +670,7 @@ public sealed partial class MainViewModel
             {
                 var added = new List<Post>(result.Posts.Count - prevCount);
                 for (var n = prevCount; n < result.Posts.Count; n++) added.Add(result.Posts[n]);
+                SetNewPostsMark(existing, added, result.BackfillEndNumber);   // 更新ボタンでの差分取得と同じくラベルを立てる
                 AppendPostsWithNg(existing, added, isIncremental: true);
                 // 仕様: 「差分取得で来た新着」が own への返信を含む場合だけ赤化フラグを立てる。
                 existing.HasReplyToOwn = DeltaHasReplyToOwn(existing, added);
@@ -750,7 +751,7 @@ public sealed partial class MainViewModel
             var delta = new List<Post>(result.Posts.Count - prevFetchedCount);
             for (var i = prevFetchedCount; i < result.Posts.Count; i++) delta.Add(result.Posts[i]);
             // mark は AppendPostsWithNg より前に書く必要がある (= 同期 DP 発火時に JSON に乗せるため)。
-            tab.MarkPostNumber = prevFetchedCount + 1;
+            SetNewPostsMark(tab, delta, result.BackfillEndNumber);
             AppendPostsWithNg(tab, delta, isIncremental: true);
             tab.HasReplyToOwn = DeltaHasReplyToOwn(tab, delta);
             ChBrowser.Services.Logging.LogService.Instance.Write(

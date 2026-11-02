@@ -15,8 +15,11 @@ namespace ChBrowser.Services.Api;
 /// (5ch: dat が 404 で、過去ログ (read.cgi) から読み直せた場合。読み直せなかったときは 404 の例外になる)。</summary>
 /// <see cref="ScoreUpdates"/> = 既に持っていたレスの評価値 (いいね数) が変わったもの (レス番号 → 新しい値。スナップショット方式の掲示板のみ)。
 public sealed record DatFetchResult(IReadOnlyList<Post> Posts, long DatSize, bool Dropped = false,
-                                    IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore>? ScoreUpdates = null)
+                                    IReadOnlyDictionary<long, ChBrowser.Services.Bbs.PostScore>? ScoreUpdates = null,
+                                    long? BackfillEndNumber = null)
 {
+    // BackfillEndNumber: 差分のうち、前回の取得で取り切れなかった中間 (reddit) の最後の番号。中間は差分の先頭から
+    // この番号までに並び、それより後ろが前回の取得以降の新着。中間が無ければ null。
     /// <summary>取得の失敗が「スレが無い (dat 落ち / スレ落ち)」によるものか (各掲示板とも 404 の <see cref="System.Net.Http.HttpRequestException"/> で表す)。</summary>
     public static bool IsDroppedError(System.Exception ex)
         => ex is System.Net.Http.HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound };

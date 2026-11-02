@@ -112,6 +112,8 @@ internal static class SnapshotThreadFetcher
 {
     private const int FirstBatchSize = ChBrowser.Services.Api.DatClient.StreamFirstBatchSize;
     private const int LaterBatchSize = ChBrowser.Services.Api.DatClient.StreamLaterBatchSize;
+    /// <summary>中間 (前回取れなかった分) と新着を投稿時刻で分けるときの、手元の時計と掲示板の時計のずれの見込み (秒)。</summary>
+    private const long BackfillClockMarginSeconds = 60;
 
     public static async Task<DatFetchResult> FetchAsync(
         HttpClient                     http,
@@ -172,13 +174,27 @@ internal static class SnapshotThreadFetcher
         // 3〜5 は提供者から届いた塊 (要求 1 回分) ごとに行う: 採番 → ログへ追記 → meta 保存 → 通知。
         // 塊ごとに採番するので、後の塊の投稿は前の塊より大きい番号になる (投稿時刻順は塊の中でだけ保たれる。
         // 親は必ず同じ塊か前の塊にいるので「親の番号 < 子の番号」は崩れない)。
+        // ただしログがある (= 差分取得) ときは、塊ごとには採番せず取得の最後にまとめて投稿時刻順に採番する。
+        // reddit は新着が先の塊で、前回取れなかった中間が後の塊で届くため、塊ごとだと中間が新着より後ろの番号になる
+        // (差分は取得が終わってから表示するので、まとめても表示が遅れることはない)。
         var fresh        = new List<Post>();
         var nameByNumber = new Dictionary<long, string>();
         foreach (var p in existing) nameByNumber[p.Number] = p.Name;
         string? rootId   = null;
         var limit        = existing.Count > 0 ? LaterBatchSize : FirstBatchSize;
+        var deferred     = existing.Count > 0 ? new List<SnapshotPost>() : null;
+        // 中間 (前回の取得で取り切れなかった分) の判定に使う、前回の取得の状態 (meta は取得の最後に上書きされる)
+        var prevTruncated    = meta.Truncated;
+        var prevFetchedEpoch = meta.LastFetchedEpoch;
 
-        async Task ConsumeAsync(IReadOnlyList<SnapshotPost> chunk)
+        Task ConsumeAsync(IReadOnlyList<SnapshotPost> chunk)
+        {
+            if (deferred is null) return NumberAndStoreAsync(chunk);
+            deferred.AddRange(chunk);
+            return Task.CompletedTask;
+        }
+
+        async Task NumberAndStoreAsync(IReadOnlyList<SnapshotPost> chunk)
         {
             if (chunk.Count == 0) return;
             rootId ??= chunk[0].ExternalId;
@@ -229,7 +245,27 @@ internal static class SnapshotThreadFetcher
             ct).ConfigureAwait(false);
 
         // 塊で渡されなかった残り (OnPartial を使わない提供者ならここで全部) を処理する。採番済みの ID は飛ばされる。
-        await ConsumeAsync(snapshot.Posts).ConfigureAwait(false);
+        if (deferred is not null)
+        {
+            deferred.AddRange(snapshot.Posts);   // 重複は採番で除かれる
+            await NumberAndStoreAsync(deferred).ConfigureAwait(false);
+        }
+        else
+        {
+            await NumberAndStoreAsync(snapshot.Posts).ConfigureAwait(false);
+        }
+
+        // 中間の範囲: 前回の取得が取り切れていなかったとき、今回の新規分の先頭から続く「前回の取得より前に書かれた」投稿
+        // (時刻順に採番したので、中間は新着より小さい番号に並ぶ)。時計のずれを見込んで 1 分の余裕を持たせる
+        long? backfillEnd = null;
+        if (deferred is not null && prevTruncated && prevFetchedEpoch > 0)
+        {
+            foreach (var p in fresh)
+            {
+                if (p.Ext?.CreatedEpoch is not long created || created <= 0 || created >= prevFetchedEpoch - BackfillClockMarginSeconds) break;
+                backfillEnd = p.Number;
+            }
+        }
 
         meta.LastFetchedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         meta.Truncated        = snapshot.Truncated;
@@ -256,13 +292,14 @@ internal static class SnapshotThreadFetcher
         }
         if (!abandoned && File.Exists(logPath)) meta.Save(metaPath);
         ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[snapshotFetch]   snapshot={snapshot.Posts.Count} posts, new={fresh.Count}, scoreUpdates={scoreUpdates.Count}, truncated={snapshot.Truncated}");
+            $"[snapshotFetch]   snapshot={snapshot.Posts.Count} posts, new={fresh.Count}, scoreUpdates={scoreUpdates.Count}, truncated={snapshot.Truncated}"
+            + (backfillEnd is long be ? $", 中間 {fresh[0].Number}..{be}" : ""));
 
         var all = new List<Post>(existing.Count + fresh.Count);
         all.AddRange(existing);
         all.AddRange(fresh);
         var size = File.Exists(logPath) ? new FileInfo(logPath).Length : 0;
-        return new DatFetchResult(all, size, ScoreUpdates: scoreUpdates.Count > 0 ? scoreUpdates : null);
+        return new DatFetchResult(all, size, ScoreUpdates: scoreUpdates.Count > 0 ? scoreUpdates : null, BackfillEndNumber: backfillEnd);
     }
 
     /// <summary>スナップショットのうち未知の投稿に番号を振って <see cref="Post"/> にする (<paramref name="meta"/> の対応表も更新する)。

@@ -580,6 +580,16 @@ body.slot-resizing * {
     user-select: none;
 }
 .new-posts-mark-band::before { content: '— 以降新レス —'; }
+/* 差分の先頭に前回の取得で取り切れなかった中間 (reddit) があるとき、その前のラベル (新着の前には通常の「以降新レス」が別に付く)。
+   中間と新着が同じ塊に混ざって分けられないときは 1 本で「未取得分 & 新レス」。色は新レスと区別するため橙 */
+.new-posts-mark-band.backfill,
+.new-posts-mark-band.backfill-mixed {
+    border-top-color: #fb8c00;
+    color: #e65100;
+    background: rgba(251, 140, 0, 0.07);
+}
+.new-posts-mark-band.backfill::before       { content: '— 以降 未取得だった分 —'; }
+.new-posts-mark-band.backfill-mixed::before { content: '— 以降 未取得分 & 新レス —'; }
 
 /* ---- 「最後尾」ラベル ---- */
 /* スレッド末尾 (= 最終レスの後) に常時表示される水平帯。 */

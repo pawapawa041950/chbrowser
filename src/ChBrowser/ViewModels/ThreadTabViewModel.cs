@@ -387,6 +387,12 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private long? _markPostNumber;
 
+    /// <summary>差分のうち「前回の取得で取り切れなかった中間」(reddit) の最後のレス番号。null なら中間なし。
+    /// 中間は <see cref="MarkPostNumber"/> からこの番号まで、それより後ろが新着。JS はラベルを
+    /// 「以降 未取得だった分」と「以降新レス」の 2 本にする。<see cref="MarkPostNumber"/> と一緒に、それより先に書く。</summary>
+    [ObservableProperty]
+    private long? _backfillEndPostNumber;
+
     /// <summary>「直前の差分取得で来た新着レスのいずれかが、自分のレス (<see cref="OwnPostNumbers"/>) を参照していた」
     /// と検出された状態。立っているとスレ一覧の状態マークが赤 (<see cref="LogMarkState.RepliedToOwn"/>) になる。
     ///
