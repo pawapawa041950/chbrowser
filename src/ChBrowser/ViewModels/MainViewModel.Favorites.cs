@@ -478,6 +478,13 @@ public sealed partial class MainViewModel
             DatFetchResult? result = null;
             Exception? error = null;
             await sem.WaitAsync().ConfigureAwait(false);
+            // 開いているタブがあれば、取得のあいだ取得中にする (タブの状態アイコンが読み込みアイコンになる)。
+            // 更新ボタン等で既に取得中のタブには触らない (= その取得の終わりで外れる)
+            ThreadTabViewModel? busyTab = null;
+            await dispatcher.InvokeAsync(() =>
+            {
+                if (FindThreadTab(board, info.Key) is { IsBusy: false } t) { t.IsBusy = true; busyTab = t; }
+            });
             try
             {
                 var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
@@ -498,6 +505,7 @@ public sealed partial class MainViewModel
             // ※ ユーザが進行中に板一覧から開くタブは activate:true で来るので普通に選択される。
             await dispatcher.InvokeAsync(async () =>
             {
+                if (busyTab is not null) busyTab.IsBusy = false;
                 await openLock.WaitAsync().ConfigureAwait(true);
                 try
                 {
