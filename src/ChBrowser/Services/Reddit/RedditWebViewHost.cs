@@ -140,6 +140,8 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 ("me.json",                            $"{O}/api/me.json?raw_json=1"),
                 ("板のスレ一覧 hot.json",               $"{O}/r/redditdev/hot.json?limit=5&raw_json=1"),
                 ("板情報 about.json",                   $"{O}/r/redditdev/about.json?raw_json=1"),
+                // www の JSON が弾かれたときに通信経路 (WebViewTransport) が切り替える先
+                ("板のスレ一覧 old.reddit hot.json",     $"https://old.reddit.com/r/redditdev/hot.json?limit=5&raw_json=1"),
                 ("ホットな板 subreddits/popular",        $"{O}/subreddits/popular.json?limit=5&raw_json=1"),
                 ("購読一覧 subreddits/mine",             $"{O}/subreddits/mine/subscriber.json?limit=5&raw_json=1"),
                 ("板検索 subreddits/search",             $"{O}/subreddits/search.json?q=python&limit=5&raw_json=1"),

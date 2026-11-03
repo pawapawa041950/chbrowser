@@ -51,9 +51,33 @@ public sealed class WebViewTransport : IProviderTransport
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var result = await SendOnceAsync(fetchReq, ct).ConfigureAwait(false);
+            // www の JSON (GET) は、ログイン中でも「network security」で弾かれることがある (板検索 2026-10-30、スレ一覧 2026-11-04、
+            // ユーザ環境で確認) が、old.reddit.com の同じ JSON は通る。弾かれたら old.reddit で送り直し、通ったら以後は old.reddit を先に使う
+            var oldReq = OldRedditAlternative(fetchReq);
+            BrowserFetchResult result;
+            if (oldReq is not null && _preferOldReddit)
+            {
+                result = await SendOnceAsync(oldReq, ct).ConfigureAwait(false);
+                if (IsJsonOk(result)) { ObserveRateLimit(result); return ToHttpResponse(request, result); }
+                LogRejected(oldReq, result, Classify(result));
+                _preferOldReddit = false;
+                ChBrowser.Services.Logging.LogService.Instance.Write("[reddit] old.reddit.com で取れなかったので www.reddit.com に戻します");
+            }
+            result = await SendOnceAsync(fetchReq, ct).ConfigureAwait(false);
             var first  = Classify(result);
             if (first is Kind.Blocked or Kind.Expired) LogRejected(fetchReq, result, first);
+            if (first == Kind.Blocked && oldReq is not null)
+            {
+                var alt = await SendOnceAsync(oldReq, ct).ConfigureAwait(false);
+                if (IsJsonOk(alt))
+                {
+                    _preferOldReddit = true;
+                    ChBrowser.Services.Logging.LogService.Instance.Write("[reddit] www.reddit.com の JSON が弾かれたので old.reddit.com で取得しました (以後 old.reddit.com を先に使います)");
+                    ObserveRateLimit(alt);
+                    return ToHttpResponse(request, alt);
+                }
+                LogRejected(oldReq, alt, Classify(alt));
+            }
 
             // 補助の要求 (続きの展開等) は、弾かれても窓を出さず・ログイン状態も変えずに失敗を返す
             if (first is Kind.Blocked or Kind.Expired && ProviderRequestContext.IsOptional)
@@ -99,6 +123,21 @@ public sealed class WebViewTransport : IProviderTransport
             _gate.Release();
         }
     }
+
+    /// <summary>www の JSON が弾かれた後、old.reddit.com を先に使っているか。</summary>
+    private bool _preferOldReddit;
+
+    /// <summary>www.reddit.com の JSON の GET なら、同じパス・クエリの old.reddit.com の要求。それ以外は null。</summary>
+    private static BrowserFetchRequest? OldRedditAlternative(BrowserFetchRequest req)
+    {
+        if (!string.Equals(req.Method, "GET", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var u) || !u.Host.Equals("www.reddit.com", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!u.AbsolutePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return null;
+        return req with { Url = new UriBuilder(u) { Host = "old.reddit.com" }.Uri.AbsoluteUri };
+    }
+
+    /// <summary>弾かれておらず、本文が JSON (old.reddit は匿名扱いだと HTML のページを 200 で返すことがある)。</summary>
+    private static bool IsJsonOk(BrowserFetchResult r) => Classify(r) == Kind.Ok && r.Status is >= 200 and < 300 && RedditResponse.LooksLikeJson(r);
 
     private async Task<BrowserFetchResult> ReloginAndRetryAsync(
         BrowserFetchRequest req, RedditLoginReason reason, BrowserFetchResult failed, CancellationToken ct)
