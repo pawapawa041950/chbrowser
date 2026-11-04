@@ -410,7 +410,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RedditLogoutCommand = new AsyncRelayCommand(() => RunRedditAsync(r => r.Logout()), () => _reddit is not null);
         RedditProbeCommand  = new AsyncRelayCommand(async () =>
         {
-            RedditProbeResult = "テスト中… (1 分ほどかかります。未ログインならログイン窓が開きます)";
+            RedditProbeResult = "テスト中… (数十秒ほどかかります)";
             await RunRedditAsync(async r => RedditProbeResult = await r.RunProbe());
         }, () => _reddit is not null);
         _storage                 = storage;

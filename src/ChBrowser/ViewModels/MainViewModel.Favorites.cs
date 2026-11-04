@@ -581,44 +581,17 @@ public sealed partial class MainViewModel
                 return (list, missing);
             });
 
-            // 一覧に載っていないスレ (reddit で上位から外れたスレ): スレ本体を取らずに今のレス数をまとめて問い合わせる (reddit は 100 件で 1 回)。
-            // 問い合わせられなければ (要求が弾かれた等) 1 件ずつスレを取りに行く
-            if (unlisted.Count > 0)
+            // 一覧に載っていないスレ (reddit で上位から外れたスレ): 掲示板が望めば 1 件ずつスレを取りに行く (新着の有無はレス数が分からないので取って確かめる)
+            if (unlisted.Count > 0 && provider.ChecksUnlistedFavoritesOneByOne)
             {
-                IReadOnlyList<ChBrowser.Services.Bbs.ThreadStatus>? statuses = null;
-                var failed = false;
-                await sem.WaitAsync().ConfigureAwait(false);
-                try
+                var more = await dispatcher.InvokeAsync(() =>
                 {
-                    statuses = await provider.FetchThreadStatusesAsync(_subjectClient.Http, board, unlisted.Select(f => f.ThreadKey).ToList(), default).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    ChBrowser.Services.Logging.LogService.Instance.Write($"[Favorites] スレの状態の問い合わせに失敗 {key}: {ex.Message} (1 件ずつ取得します)");
-                    failed = true;
-                }
-                finally
-                {
-                    sem.Release();
-                }
-                if (statuses is not null || failed)
-                {
-                    var more = await dispatcher.InvokeAsync(() =>
-                    {
-                        var list = new List<ThreadInfo>();
-                        foreach (var ft in unlisted)
-                        {
-                            if (failed) { list.Add(new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)); continue; }
-                            if (statuses!.FirstOrDefault(s => s.Info.Key == ft.ThreadKey) is not { } st) continue;   // 返らなかった (削除済み等)
-                            if (st.Closed) toDropped.Add((board, st.Info));   // もう書き込めない (reddit のアーカイブ済み) = dat 落ち
-                            else if (HasNew(ft, st.Info)) list.Add(st.Info);
-                        }
-                        found += list.Count;
-                        Report();
-                        return list;
-                    });
-                    opens.AddRange(more);
-                }
+                    var list = unlisted.Select(ft => new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)).ToList();
+                    found += list.Count;
+                    Report();
+                    return list;
+                });
+                opens.AddRange(more);
             }
             await Task.WhenAll(opens.Select(info => FetchAndOpenAsync(board, info))).ConfigureAwait(false);
         }

@@ -440,7 +440,6 @@ public partial class App : Application
     private ChBrowser.ViewModels.RedditSettingsHooks? CreateRedditSettingsHooks()
     {
         if (_redditAuth is not { } auth || _monazilla is null || _paths is null) return null;
-        var http = _monazilla.Http;
         var reportPath = _paths.RedditProbeReportPath;
         return new ChBrowser.ViewModels.RedditSettingsHooks(
             GetStatus: () => ChBrowser.Services.Bbs.ProviderAuthDisplay.SettingsText(auth),
@@ -453,7 +452,7 @@ public partial class App : Application
                 await auth.LogoutAsync(default);
             },
             Refresh:   () => auth.RefreshStateAsync(default),
-            RunProbe:  () => ChBrowser.Services.Reddit.RedditProbe.RunAsync(http, reportPath, default, _redditHost));
+            RunProbe:  () => ChBrowser.Services.Reddit.RedditProbe.RunAsync(reportPath, default, _redditHost));
     }
 
     /// <summary>MainViewModel と (もし開いていれば) SettingsViewModel の DonguriLoginStatus を同時更新する。

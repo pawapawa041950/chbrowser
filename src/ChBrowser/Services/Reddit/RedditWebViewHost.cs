@@ -230,66 +230,25 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
                 }
             }
 
-            // アプリが使う読み取りの要求 (書き込み・評価は試さない)。送り元はアプリと同じ (ホーム)。
-            // reddit の要求回数の上限 (10 分 100 回) を接続テストで使い切らないよう、アプリが実際に使う要求を 1 回ずつだけ送る
-            // (スレ一覧 r/popular とスレ本体はアプリの通信経路を通す側 (RedditProbe) で、続きはスレを取る MoreChildren で試す)
+            // アプリが使う読み取りの JSON (書き込み・評価は試さない)。送り元はアプリと同じ (ホーム)。
+            // reddit の要求回数の上限 (10 分 100 回) を接続テストで使い切らないよう、アプリが実際に使う要求だけを 1 回ずつ送る。
+            // アプリが使わなくなった (弾かれる) JSON は送らない: 一覧の hot.json・www の板検索・by_id・morechildren (2026-11-04)
             const string O = "https://www.reddit.com";
             var endpoints = new (string Label, string Url)[]
             {
                 ("me.json",                            $"{O}/api/me.json?raw_json=1"),
-                ("板のスレ一覧 hot.json",               $"{O}/r/redditdev/hot.json?limit=5&raw_json=1"),
                 ("板情報 about.json",                   $"{O}/r/redditdev/about.json?raw_json=1"),
-                // www の JSON が弾かれたときに通信経路 (WebViewTransport) が切り替える先
-                ("板のスレ一覧 old.reddit hot.json",     $"https://old.reddit.com/r/redditdev/hot.json?limit=5&raw_json=1"),
+                ("スレ comments.json",                  $"{O}/r/redditdev/comments/1wubcvf.json?sort=old&limit=20&raw_json=1"),
                 ("ホットな板 subreddits/popular",        $"{O}/subreddits/popular.json?limit=5&raw_json=1"),
-                ("購読一覧 subreddits/mine",             $"{O}/subreddits/mine/subscriber.json?limit=5&raw_json=1"),
-                ("板検索 subreddits/search",             $"{O}/subreddits/search.json?q=python&limit=5&raw_json=1"),
+                // 板検索はアプリと同じ順 (old.reddit → 入力補完用の API) で、アプリと同じ件数 (50)
+                ("板検索 old.reddit subreddits/search",  $"https://old.reddit.com/subreddits/search.json?q=python&limit=50&raw_json=1"),
                 ("板検索 autocomplete_v2",               $"{O}/api/subreddit_autocomplete_v2.json?query=python&include_over_18=true&include_profiles=false&limit=10&raw_json=1"),
                 ("投稿者情報 user_data_by_account_ids",  $"{O}/api/user_data_by_account_ids.json?ids=t2_4amlb"),
-                // スレの状態 (お気に入りの巡回で、一覧に無いスレのコメント数を問い合わせる)。アプリが最初に使う old.reddit の by_id
-                // (www の by_id / api/info は 2026-11 時点でログイン中でも弾かれる)
-                ("スレの状態 old.reddit by_id",          $"https://old.reddit.com/by_id/t3_1wubcvf,t3_1xiix9r.json?raw_json=1"),
-                // 板検索はアプリが最初に使う old.reddit (www は 2026-10-30 からログイン中でも弾かれる)
-                ("板検索 old.reddit subreddits/search",  $"https://old.reddit.com/subreddits/search.json?q=python&limit=5&raw_json=1"),
-                // アプリと同じ件数 (50) でも試す (2026-11-03 にアプリからだけ HTML / 404 が返った件の切り分け用)
-                ("板検索 old.reddit subreddits/search (limit=50)", $"https://old.reddit.com/subreddits/search.json?q=game&limit=50&raw_json=1"),
             };
             async Task Probes(string prefix)
             {
                 foreach (var (label, url) in endpoints)
                     await Try($"{prefix} {label}", url, true).ConfigureAwait(true);
-            }
-
-            // コメントの続き (morechildren): アプリが使う 2 つの経路 (www の末尾スラッシュ付き → old.reddit.com) を試す (読み取りのみ)。
-            // 素の www (GET / POST) と api.reddit.com は 2026-10 から弾かれると分かっているので試さない
-            async Task MoreChildren(string prefix)
-            {
-                try
-                {
-                    await Task.Delay(300, ct).ConfigureAwait(true);
-                    var json = new[] { new KeyValuePair<string, string>("Accept", "application/json") };
-                    var thread = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET",
-                        $"{O}/r/redditdev/comments/1wubcvf.json?sort=old&limit=20&raw_json=1", json), ct).ConfigureAwait(true);
-                    lines.Add($"{prefix} スレ comments.json: {thread.Status} {thread.Header("content-type")} {thread.Body.Length}B → " +
-                              (RedditResponse.LooksLikeJson(thread) ? "JSON" : RedditResponse.IsNetworkSecurityBlock(thread) ? "network security" : "その他"));
-                    if (!RedditResponse.LooksLikeJson(thread)) return;
-                    var ids = new List<string>();
-                    using (var doc = JsonDocument.Parse(thread.Body))
-                        foreach (var c in doc.RootElement[1].GetProperty("data").GetProperty("children").EnumerateArray())
-                            if (c.GetProperty("kind").GetString() == "more")
-                                foreach (var id in c.GetProperty("data").GetProperty("children").EnumerateArray())
-                                    if (ids.Count < 20 && id.GetString() is { Length: > 0 } s) ids.Add(s);
-                    if (ids.Count == 0) { lines.Add($"{prefix} 続き (morechildren): 続きの無いスレだったので未測定"); return; }
-
-                    var query = $"api_type=json&link_id=t3_1wubcvf&children={string.Join(",", ids)}&sort=old&raw_json=1";
-                    await Try($"{prefix} 続き morechildren (GET, www 末尾スラッシュ, {ids.Count} 件)", $"{O}/api/morechildren/.json?{query}", true).ConfigureAwait(true);
-                    await Try($"{prefix} 続き morechildren (GET, old.reddit.com)", $"https://old.reddit.com/api/morechildren.json?{query}", true).ConfigureAwait(true);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
-                                              or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException)
-                {
-                    lines.Add($"{prefix} 続き (morechildren): 失敗 {ex.Message}");
-                }
             }
 
             // あなたへのおすすめ: ホームの HTML と、そこに書かれている続きのページ (/svc/shreddit/feeds/home-feed?…)
@@ -316,7 +275,6 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             await Page("隠しページ").ConfigureAwait(true);
             await Cookies().ConfigureAwait(true);
             await Probes("[robots.txt 上]").ConfigureAwait(true);
-            await MoreChildren("[robots.txt 上]").ConfigureAwait(true);
             await HomeFeed("[robots.txt 上]").ConfigureAwait(true);
 
             // 板のスレ一覧を HTML (板のページの <shreddit-post>) から読めるか (2026-11-04 から JSON の一覧がログイン中でも弾かれるため)

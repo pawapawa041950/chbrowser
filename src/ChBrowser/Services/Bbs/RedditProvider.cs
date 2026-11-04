@@ -20,8 +20,9 @@ namespace ChBrowser.Services.Bbs;
 /// <item><description>板 = subreddit (<c>dir</c> は小文字の名前)、スレ = 投稿 (<c>key</c> は base36 の id)、ホストは常に <c>www.reddit.com</c>、保存ルート <c>data/reddit.com/</c>。</description></item>
 /// <item><description>要求は <c>www.reddit.com/…​.json</c> へ送り、App が登録した WebView2 セッション経路 (<see cref="WebViewTransport"/>) を通る (決定 D22)。</description></item>
 /// <item><description>スレはスナップショット方式: 投稿 + コメント木を取り、<c>more</c> は新しい順・評価の高い順のスレと
-///   <c>/api/morechildren/.json</c> (弾かれたら親コメント起点のスレ) で埋める (回数上限あり、
-///   レート制限の残りが少なければ打ち切り。D38)。採番と保存は <see cref="SnapshotThreadFetcher"/>。</description></item>
+///   親コメント起点のスレで埋める (回数上限あり、レート制限の残りが少なければ打ち切り。D38)。採番と保存は <see cref="SnapshotThreadFetcher"/>。
+///   <c>/api/morechildren</c> は 2026-10 から弾かれるので使わない。</description></item>
+/// <item><description>スレ一覧 (板・ホットなスレッド・おすすめ) は HTML から読む (JSON の一覧は 2026-11-04 から弾かれる)。</description></item>
 /// <item><description>レス番号は画面に出さない (<see cref="ShowsPostNumbers"/> = false)。返信先は <see cref="PostExtra.ParentNumber"/>。</description></item>
 /// <item><description>書き込み (5-B) は <c>/api/comment</c> / <c>/api/submit</c>、レスの評価は <c>/api/vote</c> (<see cref="Voting"/>)。</description></item>
 /// </list></summary>
@@ -37,11 +38,11 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     public const int ReserveRequests = 10;
     /// <summary>「continue this thread」(中身の件数が分からない続き) の取得の優先度 (まだ持っていないコメントの件数に相当)。</summary>
     private const int ContinueScore = 20;
-    /// <summary>morechildren 1 回で送る id の数 (実測で 100 程度が上限)。</summary>
-    public const int MoreChildrenBatch = 100;
     /// <summary>中身の無かった「continue this thread」を「取れない分」(<see cref="ThreadSnapshot.Unreachable"/>) に記録するときのキー。</summary>
     private static string ContinueKey(string parentId) => "continue:t1_" + parentId;
+    /// <summary>以前 morechildren で頼んでも返らなかったコメント (削除済み等)。今は記録しないが、保存済みの記録は「取れない分」として読む。</summary>
     private static string GoneKey(string id)     => "gone:t1_" + id;
+    /// <summary>親コメント起点の取り方で取れないコメント (大きな枝の真ん中)。</summary>
     private static string NoBranchKey(string id) => "nobranch:t1_" + id;
 
     private static readonly Regex BoardPathRegex = new(
@@ -72,6 +73,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     public bool ShowsPostNumbers => false;
     public bool UsesWatchoi => false;
     public bool ThreadListIsComplete => false;
+    /// <summary>お気に入りチェックで、一覧に載っていないお気に入りのスレを 1 件ずつ取って確かめる (一覧の 1 ページ目は数件しかないため)。</summary>
+    public bool ChecksUnlistedFavoritesOneByOne => true;
     public ThreadFetchStrategy FetchStrategy => ThreadFetchStrategy.Snapshot;
     public IReadOnlyList<string> RoutedHosts { get; } = new[] { CanonicalHost };
     public bool UsesNativeDat => false;
@@ -188,94 +191,9 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
     public IReadOnlyList<ThreadInfo> ParseThreadList(byte[] bytes) => ParseThreadListPage(bytes).Items;
 
-    /// <summary>Listing (t3) → スレ一覧 1 ページ。数 = コメント数 + 1 (投稿本体の分。取得後の件数と比べるため)。</summary>
+    /// <summary>板のスレ一覧のページ (表示して読み取った HTML) または続きの部分読み込みの HTML → スレ一覧 1 ページ。
+    /// 数 = コメント数 + 1 (投稿本体の分。取得後の件数と比べるため)。</summary>
     public ThreadListPage ParseThreadListPage(byte[] bytes)
-    {
-        if (LooksLikeHtml(bytes)) return ParseThreadListHtml(bytes);
-        var items = new List<ThreadInfo>();
-        string? after = null;
-        if (!TryParse(bytes, out var doc)) return new ThreadListPage(items, null);
-        using (doc)
-        {
-            if (!doc.RootElement.TryGetProperty("data", out var data)) return new ThreadListPage(items, null);
-            after = Str(data, "after");
-            if (data.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var c in children.EnumerateArray())
-                {
-                    if (Str(c, "kind") != "t3" || !c.TryGetProperty("data", out var d)) continue;
-                    var id = Str(d, "id");
-                    if (string.IsNullOrEmpty(id)) continue;
-                    var title = (Str(d, "title") ?? "").Replace('\n', ' ').Trim();
-                    if (Bool(d, "stickied")) title = "📌 " + title;
-                    if (Bool(d, "over_18")) title = "[NSFW] " + title;
-                    items.Add(new ThreadInfo(
-                        Key:          id,
-                        Title:        title,
-                        PostCount:    Int(d, "num_comments") + 1,
-                        Order:        items.Count + 1,
-                        CreatedEpoch: Epoch(d, "created_utc"),
-                        Score:        Long(d, "score")));
-                }
-            }
-        }
-        return new ThreadListPage(items, after);
-    }
-
-    /// <summary>スレの状態を問い合わせる URL の候補 (<c>{0}</c> = <c>t3_a,t3_b,…</c>。どれも同じ Listing を返す)。
-    /// www の by_id / api/info は 2026-11-02 時点でログイン中でも「network security」で弾かれ、old.reddit は両方通る (接続テストで確認)。
-    /// 上から順に試し、通ったものを使い続ける。</summary>
-    private static readonly string[] ThreadStatusUrls =
-    {
-        "https://old.reddit.com/by_id/{0}.json?raw_json=1",
-        "https://old.reddit.com/api/info.json?id={0}&raw_json=1",
-    };
-    private static int s_threadStatusUrl;
-
-    /// <summary>スレの id 指定 (1 回 100 件まで) で、一覧に載っていないスレのコメント数とアーカイブ済みかを取る。
-    /// 板は問わない (id だけで引ける)。候補の URL が全部弾かれたら最後の例外を投げる。</summary>
-    public async Task<IReadOnlyList<ThreadStatus>?> FetchThreadStatusesAsync(
-        HttpClient http, Board board, IReadOnlyList<string> threadKeys, CancellationToken ct)
-    {
-        var result = new List<ThreadStatus>();
-        var keys = threadKeys.Where(k => !string.IsNullOrEmpty(k)).Distinct(StringComparer.Ordinal).ToList();
-        for (var b = 0; b < keys.Count; b += 100)
-        {
-            var ids = string.Join(",", keys.Skip(b).Take(100).Select(k => "t3_" + k));
-            for (var i = s_threadStatusUrl; ; i++)
-            {
-                var url = string.Format(CultureInfo.InvariantCulture, ThreadStatusUrls[i], ids);
-                try
-                {
-                    byte[] bytes;
-                    using (ProviderRequestContext.Optional())
-                        (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
-                    result.AddRange(ParseThreadStatuses(bytes));
-                    s_threadStatusUrl = i;
-                    break;
-                }
-                catch (HttpRequestException ex) when (i + 1 < ThreadStatusUrls.Length)
-                {
-                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] スレの状態 {url.Split('?')[0]} が失敗: {ex.Message} (次の候補を試します)");
-                }
-            }
-        }
-        ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] スレの状態 {keys.Count} 件 → {result.Count} 件 ({ThreadStatusUrls[s_threadStatusUrl].Split('?')[0]})");
-        return result;
-    }
-
-    private static bool LooksLikeHtml(byte[] bytes)
-    {
-        foreach (var b in bytes)
-        {
-            if (b is (byte)' ' or (byte)'\n' or (byte)'\r' or (byte)'\t' or 0xEF or 0xBB or 0xBF) continue;   // 空白・BOM
-            return b == (byte)'<';
-        }
-        return false;
-    }
-
-    /// <summary>板のスレ一覧のページ (表示して読み取った HTML) または続きの部分読み込みの HTML → スレ一覧 1 ページ。</summary>
-    private ThreadListPage ParseThreadListHtml(byte[] bytes)
     {
         var page = ParsePostsHtml("スレ一覧", "threadlist_page.html", bytes);
         return new ThreadListPage(page.Posts.Select(t => t.Info).ToList(), page.Next);
@@ -318,19 +236,6 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                .Select(m => System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value))
                .LastOrDefault(s => ContinuationRegex.IsMatch(s));
 
-    /// <summary>by_id の応答 (Listing t3) → スレの状態。レス数は <see cref="ParseThreadListPage"/> と同じ (コメント数 + 1)。</summary>
-    public IReadOnlyList<ThreadStatus> ParseThreadStatuses(byte[] bytes)
-    {
-        var archived = new HashSet<string>(StringComparer.Ordinal);
-        if (TryParse(bytes, out var doc))
-            using (doc)
-                if (doc.RootElement.TryGetProperty("data", out var data) && data.TryGetProperty("children", out var children)
-                    && children.ValueKind == JsonValueKind.Array)
-                    foreach (var c in children.EnumerateArray())
-                        if (c.TryGetProperty("data", out var d) && Bool(d, "archived") && Str(d, "id") is { Length: > 0 } id) archived.Add(id);
-        return ParseThreadListPage(bytes).Items.Select(i => new ThreadStatus(i, archived.Contains(i.Key))).ToList();
-    }
-
     /// <summary>about.json → 板情報。板名 (<c>BBS_TITLE</c>) は <c>r/名前</c> (reddit では名前で呼ぶのが普通なので title より優先)。</summary>
     public IReadOnlyDictionary<string, string> ParseBoardInfo(byte[] bytes)
     {
@@ -351,20 +256,19 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
     public IReadOnlyList<BoardCategory> ParseBoardList(byte[] bytes) => Array.Empty<BoardCategory>();
 
-    /// <summary>subreddit の検索 (<c>/subreddits/search.json</c>、ログインセッション経由)。数 = 購読者数、説明 = title。</summary>
+    /// <summary>subreddit の検索 (ログインセッション経由)。数 = 購読者数、説明 = title。</summary>
     public bool SupportsBoardSearch => true;
 
     public async Task<IReadOnlyList<BoardSearchHit>> SearchBoardsAsync(HttpClient http, string keyword, CancellationToken ct)
     {
         var q   = Uri.EscapeDataString(keyword);
         var url = $"https://old.reddit.com/subreddits/search.json?q={q}&limit=50&raw_json=1";
-        // www の検索は 2026-10-30 からログイン中でも「network security」で弾かれる (old.reddit.com の同じ検索は通る。接続テストで確認)。
-        // old.reddit → www → 入力補完用の API (最大 10 件) の順に、窓を出さずに試す。
+        // old.reddit の検索 → 入力補完用の API (最大 10 件) の順に、窓を出さずに試す。
+        // www の検索 (/subreddits/search.json) は 2026-10-30 からログイン中でも「network security」で弾かれるので送らない。
         // 弾かれずに 0 件 (JSON 以外のページ等) が返ることもある (2026-11-03 の old.reddit。GetAsync の Accept 参照) ので、0 件なら次の候補も試す
         var candidates = new[]
         {
             url,
-            $"{Origin}/subreddits/search.json?q={q}&limit=50&raw_json=1",
             $"{Origin}/api/subreddit_autocomplete_v2.json?query={q}&include_over_18=true&include_profiles=false&limit=10&raw_json=1",
         };
         var answered = false;
@@ -665,26 +569,24 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         // 続き (more) の展開。取り方 (要求 1 回ずつ、上から優先):
         //   1. 新しい順 (sort=new) のスレ: トップレベルに未取得があるとき。新着が入る
         //   2. 評価の高い順 (sort=top) のスレ: 初回の取得だけ。スレの真ん中のうち評価の高いコメントが入る
-        //   3. morechildren: 未取得の ID を指定して 100 件ずつ (続きの大きい塊から = スレの真ん中を古い方から埋めていく)
-        //   4. (morechildren が弾かれたときだけ) 親コメントを起点にしたスレ (/comments/{id}/_/{親}.json)
-        // 取りに行っても取れなかった分 (削除済み等・4 で取れない大きな枝の真ん中) は Unreachable として返し、次回からは数えない。
-        // 取れない分の記録は 2 種類: "gone:t1_x" (morechildren で頼んでも返らない = 削除済み等。常に数えない) と
-        // "nobranch:t1_x" (morechildren が使えないときの取り方で取れない。morechildren が使えれば取れるので、使えないときだけ数えない)
+        //   3. 親コメントを起点にしたスレ (/comments/{id}/_/{親}.json): 未取得の多い枝から
+        // (未取得の ID を指定して取る /api/morechildren は 2026-10 から www・old.reddit とも弾かれるので使わない。2026-11-04)
+        // 取りに行っても取れなかった分 (3 で取れない大きな枝の真ん中・中身の無い「continue this thread」) は Unreachable として返し、次回からは数えない。
+        // 取れない分の記録: "nobranch:t1_x" (この取り方で取れない)、"continue:t1_x" (中身の無かった continue this thread)。
+        // "gone:t1_x" (以前 morechildren で頼んでも返らなかった = 削除済み等) は保存済みの記録として読むだけ
         var unreachable = options.UnreachableIds ?? new HashSet<string>(StringComparer.Ordinal);
-        var moreChildrenBlocked = DateTime.UtcNow < s_moreChildrenBlockedUntil;
         bool Unknown(string id) => !have.Contains("t1_" + id) && !options.KnownExternalIds.Contains("t1_" + id)
-                                   && !unreachable.Contains(GoneKey(id)) && !(moreChildrenBlocked && unreachable.Contains(NoBranchKey(id)));
+                                   && !unreachable.Contains(GoneKey(id)) && !unreachable.Contains(NoBranchKey(id));
         // 「continue this thread」は、その親が既に返信を持っていれば (= 前回取り直し済み) / 前回取って中身が無ければ省く
         bool NeedContinue(string parent) => options.KnownParentIds?.Contains("t1_" + parent) != true && !unreachable.Contains(ContinueKey(parent));
         var allMores      = new List<MoreRef>();
         var topMores      = new List<MoreRef>();
         var moresByParent = new Dictionary<string, List<MoreRef>>(StringComparer.Ordinal);   // 親コメント id (接頭辞なし) → その下の続き (今回見たもの全部)
         var continueIds   = new HashSet<string>(StringComparer.Ordinal);
-        var requested     = new HashSet<string>(StringComparer.Ordinal);   // morechildren で頼んだ id
-        // 4 で取りに行く枝: 親コメント id → 優先度の計算に使う続き。「continue this thread」は続きの中身が分からないので空のまま
+        // 3 で取りに行く枝: 親コメント id → 優先度の計算に使う続き。「continue this thread」は続きの中身が分からないので空のまま
         var parents = new Dictionary<string, List<MoreRef>>(StringComparer.Ordinal);
-        var tried   = new Dictionary<string, (bool Old, bool New, int Stored)>(StringComparer.Ordinal);   // 4 で取った枝と並び・増えた件数
-        // 4 の枝の取り方: まだ返信を保存していない枝は古い順。既に保存している枝と、今回古い順で取ってもまだ残る枝は新しい順。両方取った枝はもう取らない
+        var tried   = new Dictionary<string, (bool Old, bool New, int Stored)>(StringComparer.Ordinal);   // 3 で取った枝と並び・増えた件数
+        // 3 の枝の取り方: まだ返信を保存していない枝は古い順。既に保存している枝と、今回古い順で取ってもまだ残る枝は新しい順。両方取った枝はもう取らない
         string? NextSort(string id)
         {
             var t = tried.TryGetValue(id, out var x) ? x : default;
@@ -718,24 +620,12 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 if (NeedContinue(c) && !tried.ContainsKey(c) && !parents.ContainsKey(c)) parents[c] = new List<MoreRef>();
             }
         }
-        // 4 の枝の優先度 = その下でまだ持っていない (かつ取れないと分かっていない) コメントの数。
+        // 3 の枝の優先度 = その下でまだ持っていない (かつ取れないと分かっていない) コメントの数。
         // 「continue this thread」は中身が分からないので中くらいの値とする。0 の枝は取らない
         int Score(List<MoreRef> refs) => refs.Count == 0 ? ContinueScore : refs.Sum(r => r.Children.Count(Unknown));
         void Prune()
         {
             foreach (var k in parents.Where(kv => Score(kv.Value) == 0 || NextSort(kv.Key) is null).Select(kv => kv.Key).ToList()) parents.Remove(k);
-        }
-        // morechildren で次に頼む id (続きの大きい塊から、まだ頼んでいない未取得の id を最大 100 件)
-        List<string> NextBatch()
-        {
-            var batch = new List<string>();
-            foreach (var m in allMores.OrderByDescending(m => m.Count))
-                foreach (var id in m.Children)
-                {
-                    if (batch.Count >= MoreChildrenBatch) return batch;
-                    if (Unknown(id) && requested.Add(id)) batch.Add(id);
-                }
-            return batch;
         }
         Collect(tree.Mores, tree.Continues);
         Prune();
@@ -752,8 +642,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 truncatedReason = $"reddit の要求回数の上限が近いため続きの取得を中断しました。約 {minutes} 分後に更新すると続きを取得します";
                 break;
             }
-            string? mUrl = null, what = null, parent = null, sort = null;
-            List<string>? batch = null;
+            string mUrl, what;
+            string? parent = null, sort = null;
             if (needNewest && !newestDone)
             {
                 newestDone = true;
@@ -766,15 +656,9 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 mUrl = $"{Origin}/r/{board.DirectoryName}/comments/{threadKey}.json?sort=top&limit={CommentLimit}&raw_json=1";
                 what = "評価の高い順";
             }
-            else if (!moreChildrenBlocked && (batch = NextBatch()).Count > 0)
+            else if (parents.Count > 0)
             {
-                what = $"morechildren {batch.Count} 件";
-            }
-            // 親コメント起点: morechildren が使えないときは全部の枝、使えるときは「continue this thread」(ID の無い続き) だけ
-            else if (parents.Keys.Where(k => moreChildrenBlocked || continueIds.Contains(k)).ToList() is { Count: > 0 } candidates)
-            {
-                batch  = null;
-                parent = candidates.OrderByDescending(k => Score(parents[k])).First();
+                parent = parents.Keys.OrderByDescending(k => Score(parents[k])).First();
                 parents.Remove(parent);
                 sort = NextSort(parent)!;
                 mUrl = $"{Origin}/r/{board.DirectoryName}/comments/{threadKey}/_/{parent}.json?sort={sort}&limit={CommentLimit}&raw_json=1";
@@ -783,43 +667,22 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             else break;
             calls++;
 
-            List<SnapshotPost> comments;
-            List<MoreRef> mores;
-            List<string> conts;
-            if (batch is not null)
+            try
             {
-                var got = await FetchMoreChildrenAsync(http, threadKey, batch, ct).ConfigureAwait(false);
-                if (got is null)
-                {
-                    // 弾かれた: この回 (と以降の取得) は親コメント起点の取り方に切り替える。頼んだ id は頼み直せるよう戻す
-                    moreChildrenBlocked = true;
-                    s_moreChildrenBlockedUntil = DateTime.UtcNow + MoreChildrenRetryAfter;
-                    foreach (var id in batch) requested.Remove(id);
-                    continue;
-                }
-                (bytes, remaining) = got.Value;
-                (comments, mores, conts) = ParseMoreChildrenResponse(bytes);
+                using (ProviderRequestContext.Optional())
+                    (bytes, remaining) = await GetAsync(http, mUrl, ct).ConfigureAwait(false);
             }
-            else
+            catch (HttpRequestException ex)
             {
-                try
-                {
-                    using (ProviderRequestContext.Optional())
-                        (bytes, remaining) = await GetAsync(http, mUrl!, ct).ConfigureAwait(false);
-                }
-                catch (HttpRequestException ex)
-                {
-                    if (parent is not null) parents[parent] = new List<MoreRef>();   // 取れなかった枝は「続きあり」として残す
-                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] more 展開を打ち切り ({what} の取得に失敗: {ex.Message})");
-                    break;
-                }
-                var sub = ParseCommentsResponse(bytes);
-                (comments, mores, conts) = (sub.Comments, sub.Mores, sub.Continues);
+                if (parent is not null) parents[parent] = new List<MoreRef>();   // 取れなかった枝は「続きあり」として残す
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] more 展開を打ち切り ({what} の取得に失敗: {ex.Message})");
+                break;
             }
+            var sub = ParseCommentsResponse(bytes);
 
             var before = posts.Count;
             var stored = 0;
-            foreach (var c in comments)
+            foreach (var c in sub.Comments)
                 if (have.Add(c.ExternalId))
                 {
                     posts.Add(c);
@@ -831,26 +694,23 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 tried[parent] = sort == "old" ? (true, t.New, t.Stored + stored) : (t.Old, true, t.Stored + stored);
             }
             ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続き ({what}): {posts.Count - before} 件 (うち未保存 {stored} 件)");
-            Collect(mores, conts);
+            Collect(sub.Mores, sub.Continues);
             Prune();
             await ReportPartialAsync().ConfigureAwait(false);
         }
 
         // 取りに行っても取れなかった分を記録する:
-        //   morechildren: 頼んだのに返ってこなかった id (削除済み等)
-        //   (morechildren が使えないとき) トップレベル: 新しい順まで取って残った分 (スレの真ん中)
-        //   (同) 枝: 新しい順まで取って残った分、または古い順で 1 件も増えなかった枝の分 (古い順で増えた枝は、次回新しい順で取る)
+        //   トップレベル: 新しい順まで取って残った分 (スレの真ん中)
+        //   枝: 新しい順まで取って残った分、または古い順で 1 件も増えなかった枝の分 (古い順で増えた枝は、次回新しい順で取る)
         //   「continue this thread」: 取って 1 件も増えなかったもの (削除済み等)
         var newlyUnreachable = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var id in requested)
-            if (Unknown(id)) newlyUnreachable.Add(GoneKey(id));
         void MarkRest(IEnumerable<MoreRef> mores)
         {
             foreach (var m in mores)
                 foreach (var id in m.Children)
                     if (Unknown(id)) newlyUnreachable.Add(NoBranchKey(id));
         }
-        if (moreChildrenBlocked && newestDone) MarkRest(topMores);
+        if (newestDone) MarkRest(topMores);
         foreach (var (id, t) in tried)
         {
             if (t.New || t.Stored == 0)
@@ -859,47 +719,11 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         }
 
         var truncated = parents.Count > 0 || (needNewest && !newestDone)
-                        || allMores.Any(m => m.Children.Any(id => Unknown(id) && !newlyUnreachable.Contains(GoneKey(id)) && !newlyUnreachable.Contains(NoBranchKey(id))));
+                        || allMores.Any(m => m.Children.Any(id => Unknown(id) && !newlyUnreachable.Contains(NoBranchKey(id))));
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[reddit] snapshot r/{board.DirectoryName}/{threadKey}: posts={posts.Count}, more calls={calls}, truncated={truncated}, " +
-            $"morechildren={(moreChildrenBlocked ? "使えない" : "使用")}, 取れない分 前回まで={unreachable.Count} 今回={newlyUnreachable.Count}");
+            $"取れない分 前回まで={unreachable.Count} 今回={newlyUnreachable.Count}");
         return new ThreadSnapshot(posts, truncated, Unreachable: newlyUnreachable, TruncatedReason: truncated ? truncatedReason : null);
-    }
-
-    /// <summary>morechildren が弾かれたら、しばらく (<see cref="MoreChildrenRetryAfter"/>) は送らずに親コメント起点の取り方を使う
-    /// (毎回弾かれる要求を送らない)。</summary>
-    private static DateTime s_moreChildrenBlockedUntil;
-    private static readonly TimeSpan MoreChildrenRetryAfter = TimeSpan.FromMinutes(30);
-    /// <summary>morechildren を送る先。<c>www.reddit.com/api/morechildren.json</c> は 2026-10 から弾かれるが、末尾にスラッシュを付けた
-    /// <c>/api/morechildren/.json</c> と <c>old.reddit.com</c> はログイン中なら通る (接続テストで確認、2026-10-29)。前者から順に試し、通った方を使い続ける。</summary>
-    private static readonly string[] MoreChildrenEndpoints =
-    {
-        $"{Origin}/api/morechildren/.json",
-        "https://old.reddit.com/api/morechildren.json",
-    };
-    private static int s_moreChildrenEndpoint;
-
-    /// <summary>「続き」(morechildren) を取る。補助の要求として送り (弾かれても窓を出さない)、送り先を順に試す。どれも駄目なら null。</summary>
-    private async Task<(byte[] Bytes, double? Remaining)?> FetchMoreChildrenAsync(HttpClient http, string threadKey, List<string> batch, CancellationToken ct)
-    {
-        var query = $"api_type=json&link_id=t3_{threadKey}&children={string.Join(",", batch)}&sort=old&raw_json=1";
-        using var optional = ProviderRequestContext.Optional();
-        for (var i = s_moreChildrenEndpoint; i < MoreChildrenEndpoints.Length; i++)
-        {
-            try
-            {
-                var got = await GetAsync(http, $"{MoreChildrenEndpoints[i]}?{query}", ct).ConfigureAwait(false);
-                if (i != s_moreChildrenEndpoint)
-                    ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続きの取得 (morechildren) の送り先を {MoreChildrenEndpoints[i]} に切り替えました");
-                s_moreChildrenEndpoint = i;
-                return got;
-            }
-            catch (HttpRequestException ex)
-            {
-                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 続きの取得 (morechildren, {MoreChildrenEndpoints[i]}) に失敗: {ex.Message}");
-            }
-        }
-        return null;
     }
 
     /// <summary>直近の応答の「レート制限が回復するまでの秒数」(x-ratelimit-reset) と受け取った時刻。</summary>
@@ -954,37 +778,19 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return new CommentTree(submission, comments, mores, conts);
     }
 
-    /// <summary>morechildren の応答 (平坦な things) → コメント + 続き。</summary>
-    private static (List<SnapshotPost> Comments, List<MoreRef> Mores, List<string> Continues) ParseMoreChildrenResponse(byte[] bytes)
-    {
-        var comments = new List<SnapshotPost>();
-        var mores    = new List<MoreRef>();
-        var conts    = new List<string>();
-        if (!TryParse(bytes, out var doc)) return (comments, mores, conts);
-        using (doc)
-        {
-            if (doc.RootElement.TryGetProperty("json", out var j) && j.TryGetProperty("data", out var d)
-                && d.TryGetProperty("things", out var things) && things.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var t in things.EnumerateArray()) AddThing(t, comments, mores, conts, recurse: true);
-            }
-        }
-        return (comments, mores, conts);
-    }
-
     private static void WalkListing(JsonElement listing, List<SnapshotPost> comments, List<MoreRef> mores, List<string> conts)
     {
-        foreach (var c in Children(listing)) AddThing(c, comments, mores, conts, recurse: true);
+        foreach (var c in Children(listing)) AddThing(c, comments, mores, conts);
     }
 
-    private static void AddThing(JsonElement thing, List<SnapshotPost> comments, List<MoreRef> mores, List<string> conts, bool recurse)
+    private static void AddThing(JsonElement thing, List<SnapshotPost> comments, List<MoreRef> mores, List<string> conts)
     {
         if (!thing.TryGetProperty("data", out var d)) return;
         switch (Str(thing, "kind"))
         {
             case "t1":
                 comments.Add(ToComment(d));
-                if (recurse && d.TryGetProperty("replies", out var rep) && rep.ValueKind == JsonValueKind.Object)
+                if (d.TryGetProperty("replies", out var rep) && rep.ValueKind == JsonValueKind.Object)
                     WalkListing(rep, comments, mores, conts);
                 break;
             case "more":
