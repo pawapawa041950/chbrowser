@@ -72,7 +72,17 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     public string TitleRest => Board is { } b ? (b.BoardName ?? b.DirectoryName) : "";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsBusy))]
     private bool _isBusy;
+
+    /// <summary>1 ページ目を表示した後、続きのページを自動で読み足している間 (reddit)。読み足しの合間は <see cref="IsBusy"/> が
+    /// 一瞬 false になるので、タブの読み込みアイコンは <see cref="ShowsBusy"/> で出す。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsBusy))]
+    private bool _isAutoLoading;
+
+    /// <summary>タブの読み込みアイコンを出すか (取得中、または続きを読み足し中)。</summary>
+    public bool ShowsBusy => IsBusy || IsAutoLoading;
 
     [ObservableProperty]
     private string _html = "";

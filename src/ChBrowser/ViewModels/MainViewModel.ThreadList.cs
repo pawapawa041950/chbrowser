@@ -124,12 +124,21 @@ public sealed partial class MainViewModel
 
         // 1 ページが小さい掲示板 (reddit) は、表示した後に続きを読み足す (届いたページから一覧に足す)
         var until = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).AutoLoadThreadListUntil;
-        for (var i = 0; i < 8 && loaded && until > 0 && !string.IsNullOrEmpty(tab.NextCursor); i++)
+        if (!loaded || until <= 0) return;
+        try
         {
-            var before = tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread);
-            if (before >= until) break;
-            await LoadMoreThreadsAsync(tab).ConfigureAwait(true);
-            if (tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread) <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
+            tab.IsAutoLoading = true;
+            for (var i = 0; i < 8 && !string.IsNullOrEmpty(tab.NextCursor); i++)
+            {
+                var before = tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread);
+                if (before >= until) break;
+                await LoadMoreThreadsAsync(tab).ConfigureAwait(true);
+                if (tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread) <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
+            }
+        }
+        finally
+        {
+            tab.IsAutoLoading = false;
         }
     }
 
