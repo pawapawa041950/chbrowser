@@ -234,8 +234,9 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
         ItemsPush = new ThreadListItemsMessage(_sentRows = BuildRows(Items, DateTimeOffset.UtcNow), hasMore: HasMore, moreBusy: IsAutoLoading);
     }
 
-    /// <summary>一覧の最下部に「続きを取得する」を出すか (続きのページがある = <see cref="NextCursor"/> がある。reddit だけ)。</summary>
-    private bool HasMore => Board is not null && !string.IsNullOrEmpty(NextCursor);
+    /// <summary>一覧の最下部に「続きを取得する」を出すか (続きのページがある = <see cref="NextCursor"/> がある。
+    /// reddit の板のスレ一覧と、掲示板の一覧のタブ (ホットなスレッド / ホットな板 / おすすめ))。</summary>
+    private bool HasMore => !string.IsNullOrEmpty(NextCursor);
 
     /// <summary>最後に送った行 (<see cref="SendChangedTitles"/> が差分を取るため)。</summary>
     private IReadOnlyList<ThreadListRow>? _sentRows;

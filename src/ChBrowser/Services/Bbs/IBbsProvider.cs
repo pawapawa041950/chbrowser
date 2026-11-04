@@ -268,9 +268,11 @@ public interface IBbsProvider
     IReadOnlyList<ProviderListing> Listings => Array.Empty<ProviderListing>();
 
     /// <summary>一覧 (<see cref="Listings"/> の <see cref="ProviderListing.Id"/>) の中身を取る。
-    /// 何回にも分けて取る一覧 (reddit のおすすめ) は、取れた分までを <paramref name="progress"/> で知らせる (届いた分から表示するため)。</summary>
+    /// 何回にも分けて取る一覧は、取れた分までを <paramref name="progress"/> で知らせる (届いた分から表示するため)。
+    /// ページに分かれた一覧 (reddit) は 1 ページだけ返し、続きは結果の <see cref="ProviderListingResult.NextCursor"/> を
+    /// <paramref name="cursor"/> に渡して取る (一覧の最下部の「続きを取得する」)。</summary>
     Task<ProviderListingResult> FetchListingAsync(HttpClient http, string listingId, CancellationToken ct,
-                                                  IProgress<ProviderListingResult>? progress = null)
+                                                  IProgress<ProviderListingResult>? progress = null, string? cursor = null)
         => throw new NotSupportedException($"{DisplayName} には一覧「{listingId}」がありません。");
 
     /// <summary>レスへの評価 (いいね / 賛否) の仕様。null (既定) なら評価できない (評価値 <see cref="PostExtra.Score"/> があれば表示だけ)。
@@ -362,6 +364,9 @@ public sealed record ListedThread(Board Board, ThreadInfo Info);
 /// <summary>一覧の中身: 板の行 (<see cref="Boards"/>) か、スレの行 (<see cref="Threads"/>)。</summary>
 public sealed record ProviderListingResult(IReadOnlyList<BoardSearchHit> Boards, IReadOnlyList<ListedThread> Threads)
 {
+    /// <summary>続きのページを取るためのカーソル (<see cref="IBbsProvider.FetchListingAsync"/> に渡す)。null なら続きは無い。</summary>
+    public string? NextCursor { get; init; }
+
     public static ProviderListingResult OfBoards(IReadOnlyList<BoardSearchHit> boards)   => new(boards, Array.Empty<ListedThread>());
     public static ProviderListingResult OfThreads(IReadOnlyList<ListedThread> threads) => new(Array.Empty<BoardSearchHit>(), threads);
 }

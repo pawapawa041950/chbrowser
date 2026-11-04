@@ -151,7 +151,7 @@ public sealed class FiveChProvider : IBbsProvider
 
     public async System.Threading.Tasks.Task<ProviderListingResult> FetchListingAsync(
         System.Net.Http.HttpClient http, string listingId, System.Threading.CancellationToken ct,
-        IProgress<ProviderListingResult>? progress = null)
+        IProgress<ProviderListingResult>? progress = null, string? cursor = null)
     {
         if (listingId != "hot") throw new NotSupportedException($"5ch には一覧「{listingId}」がありません。");
         var bytes = await http.GetByteArrayAsync(ThreadListUrl(HotBoard), ct).ConfigureAwait(false);

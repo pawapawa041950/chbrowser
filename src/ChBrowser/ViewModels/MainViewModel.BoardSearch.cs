@@ -58,6 +58,7 @@ public sealed partial class MainViewModel
     {
         var id = DeterministicTabId($"listing:{provider.Id}:{listing.Id}");
         var header = $"{listing.Name} ({provider.DisplayName})";
+        _listingTabs[id] = (provider, listing);
         return OpenBoardRowsTabAsync(id, header, async tab =>
         {
             // 何回にも分けて取る一覧 (reddit のおすすめ) は、届いた分からタブに並べる (Progress は UI スレッドで呼ばれる)
@@ -71,8 +72,44 @@ public sealed partial class MainViewModel
             });
             var result = await provider.FetchListingAsync(_subjectClient.Http, listing.Id, default, progress).ConfigureAwait(true);
             var items  = ListingItems(provider, result);
+            tab.NextCursor = result.NextCursor;   // 行と一緒に最下部の「続きを取得する」の有無を送るので、行を出す前に
             return (items, $"{provider.DisplayName}「{listing.Name}」: {items.Count} 件");
         });
+    }
+
+    /// <summary>掲示板の一覧のタブ (タブ ID) → 提供者と一覧。「続きを取得する」で次のページを取るのに使う。</summary>
+    private readonly Dictionary<Guid, (IBbsProvider Provider, ProviderListing Listing)> _listingTabs = new();
+
+    /// <summary>掲示板の一覧のタブの「続きを取得する」: 次のページを取って末尾に足す (同じ板 / スレは足さない)。</summary>
+    private async Task LoadMoreListingAsync(ThreadListTabViewModel tab)
+    {
+        if (tab.FavoritesFolderId is not Guid id || !_listingTabs.TryGetValue(id, out var src)
+            || string.IsNullOrEmpty(tab.NextCursor) || tab.IsBusy) return;
+        var (provider, listing) = src;
+        var header = $"{listing.Name} ({provider.DisplayName})";
+        try
+        {
+            tab.IsBusy        = true;
+            tab.StatusMessage = $"{header}: 続きを取得中...";
+            var result = await provider.FetchListingAsync(_subjectClient.Http, listing.Id, default, cursor: tab.NextCursor).ConfigureAwait(true);
+            var known  = new HashSet<(ThreadListItemKind, string, string, string)>(
+                tab.Items.Select(i => (i.Kind, i.Host, i.DirectoryName, i.Info.Key)));
+            var added  = ListingItems(provider, result).Where(i => known.Add((i.Kind, i.Host, i.DirectoryName, i.Info.Key))).ToList();
+            var all    = tab.Items.Concat(added).Select((it, i) => it with { Info = it.Info with { Order = i + 1 } }).ToList();
+            tab.NextCursor    = result.NextCursor;   // 行より先に (最下部の「続きを取得する」の有無を一緒に送る)
+            tab.SetItems(all, DateTimeOffset.UtcNow);
+            tab.Header        = $"{header} ({all.Count})";
+            tab.StatusMessage = $"{header}: {added.Count} 件を追加 (合計 {all.Count})" + (result.NextCursor is null ? " — これ以上はありません" : "");
+        }
+        catch (Exception ex)
+        {
+            tab.StatusMessage = $"{header}: 続きの取得に失敗 — {ex.Message}";
+            tab.ResendItems();   // 最下部を「取得中…」から戻す
+        }
+        finally
+        {
+            tab.IsBusy = false;
+        }
     }
 
     /// <summary>一覧の中身 → スレ一覧の行 (板の行、またはいろいろな板のスレの行。ログがあるスレは状態マーク付き)。</summary>
@@ -203,6 +240,13 @@ public sealed partial class MainViewModel
     private async Task RefreshBoardRowsTabAsync(ThreadListTabViewModel tab, string header)
     {
         if (tab.IsBusy || tab.FavoritesFolderId is not Guid id || !_boardRowTabSources.TryGetValue(id, out var source)) return;
+
+        // ページに分かれた掲示板の一覧 (reddit) は、1 ページ目を出した後に続きを読み足す (板のスレ一覧と同じ。LoadThreadListAsync 参照)。
+        // 読み足し終わるまで最下部を「取得中…」にしておくため、1 ページ目を出すときから「読み足し中」にする
+        var autoPages = _listingTabs.TryGetValue(id, out var listing) ? listing.Provider.AutoLoadThreadListPages : 0;
+        tab.IsAutoLoading = autoPages > 0;
+        tab.NextCursor    = null;
+        var loaded = false;
         try
         {
             tab.IsBusy        = true;
@@ -212,6 +256,7 @@ public sealed partial class MainViewModel
             tab.SetItems(items, DateTimeOffset.UtcNow);
             tab.Header        = $"{header} ({items.Count})";
             tab.StatusMessage = status;
+            loaded = true;
         }
         catch (Exception ex)
         {
@@ -221,6 +266,23 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsBusy = false;
+        }
+
+        if (!tab.IsAutoLoading) return;
+        try
+        {
+            // 1 ページ目で既に 1 ページ分 (20 件以上) 取れている一覧 (ホットな板の JSON は 25 件) は読み足さない (要求の数を増やさない)
+            for (var i = 0; loaded && i < autoPages && !string.IsNullOrEmpty(tab.NextCursor) && tab.Items.Count < 20; i++)
+            {
+                var before = tab.Items.Count;
+                await LoadMoreListingAsync(tab).ConfigureAwait(true);
+                if (tab.Items.Count <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
+            }
+        }
+        finally
+        {
+            tab.IsAutoLoading = false;
+            tab.ResendItems();   // 最下部を「取得中…」から「続きを取得する」(続きがあれば) に戻す
         }
     }
 

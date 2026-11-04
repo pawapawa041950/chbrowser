@@ -47,8 +47,8 @@ public sealed class WebViewTransport : IProviderTransport
 
     public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        if (request.Options.TryGetValue(RedditProvider.RenderListingOption, out var render) && render)
-            return await RenderListingAsync(request, ct).ConfigureAwait(false);
+        if (request.Options.TryGetValue(RedditProvider.RenderListingOption, out var render) && render is { Length: > 0 })
+            return await RenderListingAsync(request, render, ct).ConfigureAwait(false);
         var fetchReq = await ToFetchRequestAsync(request, ct).ConfigureAwait(false);
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -127,8 +127,9 @@ public sealed class WebViewTransport : IProviderTransport
     }
 
     /// <summary>一覧のページを隠しページで表示して投稿を読み取る (<see cref="RedditProvider.RenderListingOption"/> 付きの要求)。
-    /// 他の要求と同じく直列・最小間隔を守る。投稿が 1 件も読めなければ失敗 (未ログイン / 確認ページ / ページの作りの変化)。</summary>
-    private async Task<HttpResponseMessage> RenderListingAsync(HttpRequestMessage request, CancellationToken ct)
+    /// 他の要求と同じく直列・最小間隔を守る。投稿を読む指定 (<see cref="RedditProvider.RenderPosts"/>) で 1 件も読めなければ失敗
+    /// (未ログイン / 確認ページ / ページの作りの変化)。</summary>
+    private async Task<HttpResponseMessage> RenderListingAsync(HttpRequestMessage request, string mode, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -139,13 +140,13 @@ public sealed class WebViewTransport : IProviderTransport
             string html;
             try
             {
-                html = await _fetcher.RenderListingAsync(request.RequestUri!.AbsoluteUri, ct).ConfigureAwait(false);
+                html = await _fetcher.RenderListingAsync(request.RequestUri!.AbsoluteUri, mode == RedditProvider.RenderDocument, ct).ConfigureAwait(false);
             }
             finally
             {
                 _nextAllowed = DateTimeOffset.UtcNow + MinInterval;
             }
-            if (!html.Contains("<shreddit-post", StringComparison.Ordinal))
+            if (mode == RedditProvider.RenderPosts && !html.Contains("<shreddit-post", StringComparison.Ordinal))
                 throw new HttpRequestException("reddit: 一覧のページを表示しましたが投稿が読み取れませんでした (ログイン切れ・確認ページ・ページの作りの変化の可能性)");
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

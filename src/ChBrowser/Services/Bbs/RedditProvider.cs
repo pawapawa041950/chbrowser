@@ -141,8 +141,15 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return sb.ToString();
     }
 
-    /// <summary>この要求は隠しページで表示して投稿を読み取る。通信経路 (WebViewTransport) が見る。</summary>
-    public static readonly HttpRequestOptionsKey<bool> RenderListingOption = new("chb.reddit.renderListing");
+    /// <summary>この要求は隠しページで表示して読み取る。値は読み取り方 (<see cref="RenderPosts"/> / <see cref="RenderDocument"/>)。
+    /// 通信経路 (WebViewTransport) が見る。</summary>
+    public static readonly HttpRequestOptionsKey<string> RenderListingOption = new("chb.reddit.renderListing");
+
+    /// <summary>投稿の要素 (<c>&lt;shreddit-post&gt;</c>) と続きの部分読み込みだけを並べた HTML を返させる (スレの一覧)。</summary>
+    public const string RenderPosts = "posts";
+
+    /// <summary>表示後のページ全体 (DOM) を返させる (板の一覧など、投稿以外の一覧)。</summary>
+    public const string RenderDocument = "document";
 
     private static readonly System.Text.RegularExpressions.Regex ListingPagePathRegex =
         new(@"^/r/[A-Za-z0-9_]+/(?:(?:hot|new|rising|top|best|controversial)/)?$", System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -154,7 +161,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     public void PrepareRequest(HttpRequestMessage request)
     {
         if (request.RequestUri is { } u && u.Host.Equals(CanonicalHost, StringComparison.OrdinalIgnoreCase) && ListingPagePathRegex.IsMatch(u.AbsolutePath))
-            request.Options.Set(RenderListingOption, true);
+            request.Options.Set(RenderListingOption, RenderPosts);
     }
 
     public string ThreadFetchUrl(Board board, string threadKey)
@@ -386,107 +393,149 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         new ProviderListing("forYou",    "✨ あなたへのおすすめ"),
     };
 
+    /// <summary>一覧は 1 回に 1 ページ (25 件前後) だけ取り、続きは <see cref="ProviderListingResult.NextCursor"/> を渡して 1 ページずつ取る
+    /// (一覧の最下部の「続きを取得する」。読み込みを速くし、reddit への要求の数を減らして規制を受けにくくするため。2026-11-04 ユーザ要望)。
+    /// <list type="bullet">
+    /// <item><description>hot: r/popular のページを表示して読み取る (JSON の /r/popular/hot.json は 2026-11-04 から弾かれる)。続きはページ内の部分読み込み。</description></item>
+    /// <item><description>forYou: ホームの HTML (JSON の best は購読している板の投稿だけで、購読が無いと空。2026-10-22 確認)。
+    ///   続き (<c>/svc/shreddit/feeds/interest-home-feed?…</c>) は普通に取ると JS の確認ページになるので、表示して読み取る。</description></item>
+    /// <item><description>hotBoards: JSON (subreddits/popular、after で続き)。弾かれたら HTML (/best/communities/N/) を表示して読む。</description></item>
+    /// </list></summary>
     public async Task<ProviderListingResult> FetchListingAsync(HttpClient http, string listingId, CancellationToken ct,
-                                                               IProgress<ProviderListingResult>? progress = null)
+                                                               IProgress<ProviderListingResult>? progress = null, string? cursor = null)
     {
-        // おすすめは HTML から読む: JSON の best / トップページは「購読している subreddit の投稿」で、購読が無いと空
-        // (2026-10-22 ユーザ環境で確認)。ブラウザのホームに出る「おすすめ」は HTML (<shreddit-post>) にしか無い
-        if (listingId == "forYou") return ProviderListingResult.OfThreads(await FetchHomeFeedHtmlAsync(http, ct, progress).ConfigureAwait(false));
-
-        // ホットなスレッドも HTML (r/popular のページ) から読む: JSON (/r/popular/hot.json) は 2026-11-04 から弾かれる (ThreadListUrl 参照)
-        if (listingId == "hot")
+        switch (listingId)
         {
-            byte[] page;
-            using (var req = new HttpRequestMessage(HttpMethod.Get, $"{Origin}/r/popular/"))
+            case "hot":
             {
-                PrepareRequest(req);   // 板のページと同じく、表示して読み取る
-                using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
-                resp.EnsureSuccessStatusCode();
-                page = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                var url  = cursor is { Length: > 0 } ? Origin + cursor : $"{Origin}/r/popular/";
+                var page = await GetListingPageAsync(http, url, cursor is null ? RenderPosts : null, ct).ConfigureAwait(false);
+                return PostsPage(listingId, url, page);
             }
-            var posts = new List<ListedThread>();
-            var tags  = ParseShredditPosts(Encoding.UTF8.GetString(page), posts, new HashSet<string>(StringComparer.Ordinal));
-            ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit listing] hot (HTML): {page.Length} bytes, shreddit-post={tags}, 一覧に出した件数={posts.Count}");
-            return ProviderListingResult.OfThreads(posts);
+            case "forYou":
+            {
+                // 1 ページ目 (ホーム) は普通に取れる。続きは表示して読み取る
+                var url  = cursor is { Length: > 0 } ? Origin + cursor : $"{Origin}/";
+                var page = await GetListingPageAsync(http, url, cursor is null ? null : RenderPosts, ct).ConfigureAwait(false);
+                return PostsPage(listingId, url, page);
+            }
+            case "hotBoards":
+                return await FetchHotBoardsAsync(http, cursor, ct).ConfigureAwait(false);
+            default:
+                throw new NotSupportedException($"reddit には一覧「{listingId}」がありません。");
         }
-        var url = listingId switch
-        {
-            "hotBoards" => $"{Origin}/subreddits/popular.json?limit=100&raw_json=1",
-            _           => throw new NotSupportedException($"reddit には一覧「{listingId}」がありません。"),
-        };
-        var (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
-        if (listingId == "hotBoards")
-        {
-            var boards = ParseSubredditListing(bytes);
-            LogListing(listingId, url, bytes, boards.Count);
-            return ProviderListingResult.OfBoards(boards);
-        }
-        var threads = ParseCrossBoardListing(bytes);
-        LogListing(listingId, url, bytes, threads.Count);
-        return ProviderListingResult.OfThreads(threads);
     }
 
-    /// <summary>ホームの「おすすめ」を HTML から読む: トップページ (/) の <c>&lt;shreddit-post&gt;</c> と、スクロールで読み込まれる続き
-    /// (<c>/svc/shreddit/feeds/interest-home-feed?…</c>、2026-10 に home-feed から改名。ページ内の <c>src</c> に書かれている) を数ページたどる。
-    /// 1 ページは約 1MB・要求の間隔は 1 秒以上なので全部で 10 秒ほどかかる。ページを読むたびに取れた分を <paramref name="progress"/> で知らせる。</summary>
-    private async Task<IReadOnlyList<ListedThread>> FetchHomeFeedHtmlAsync(HttpClient http, CancellationToken ct,
-                                                                           IProgress<ProviderListingResult>? progress)
+    /// <summary>一覧のページを取る。<paramref name="render"/> が null 以外なら隠しページで表示して読み取る (<see cref="RenderListingOption"/>)。</summary>
+    private static async Task<byte[]> GetListingPageAsync(HttpClient http, string url, string? render, CancellationToken ct)
     {
-        const int MaxPages = 5, Want = 100;
-        var list = new List<ListedThread>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? next = $"{Origin}/";
-        for (var page = 0; page < MaxPages && next is not null && list.Count < Want; page++)
-        {
-            byte[] bytes;
-            if (page == 0)
-                (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
-            else
-            {
-                // 2 ページ目以降は取れなくても困らない: 弾かれても窓を出さず、それまでに取れた分を返す
-                try
-                {
-                    using (ProviderRequestContext.Optional())
-                        (bytes, _) = await GetAsync(http, next, ct).ConfigureAwait(false);
-                }
-                catch (HttpRequestException ex)
-                {
-                    ChBrowser.Services.Logging.LogService.Instance.Write(
-                        $"[reddit listing] forYou: 続きのページの取得に失敗したので {list.Count} 件で打ち切ります ({ex.Message}): {next}");
-                    break;
-                }
-            }
-            var html  = System.Text.Encoding.UTF8.GetString(bytes);
-            var before = list.Count;
-            var tags  = ParseShredditPosts(html, list, seen);
-            var m = HomeFeedNextRegex.Match(html);
-            var nextUrl = m.Success ? Origin + System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
+        if (render is null) return (await GetAsync(http, url, ct).ConfigureAwait(false)).Bytes;
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Options.Set(RenderListingOption, render);
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>投稿の要素が並んだ HTML → いろいろな板のスレの一覧 1 ページ。続きは部分読み込みの URL (<see cref="FeedNextRegex"/>)。</summary>
+    private ProviderListingResult PostsPage(string listingId, string url, byte[] page)
+    {
+        var html  = Encoding.UTF8.GetString(page);
+        var posts = new List<ListedThread>();
+        var tags  = ParseShredditPosts(html, posts, new HashSet<string>(StringComparer.Ordinal));
+        var m     = FeedNextRegex.Matches(html).LastOrDefault();
+        var after = m is not null ? System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
+        if (after is null)
             ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[reddit listing] forYou (HTML): {next} → {bytes.Length} bytes, shreddit-post={tags}, 一覧に足した件数={list.Count - before}, 続き={(nextUrl is null ? "なし" : nextUrl)}");
-            if (nextUrl is null)
+                $"[reddit listing] {listingId}: 続きが見つかりません。ページ内の /svc/shreddit/ の候補: " +
+                string.Join(" | ", System.Text.RegularExpressions.Regex.Matches(html, @"/svc/shreddit/[^""'\s<>]{0,160}")
+                    .Select(x => System.Net.WebUtility.HtmlDecode(x.Value)).Distinct().Take(12)));
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[reddit listing] {listingId} (HTML): {url.Split('?')[0]} → {page.Length} bytes, shreddit-post={tags}, 一覧に出した件数={posts.Count}, 続き={(after is null ? "なし" : "あり")}");
+        if (posts.Count == 0) SaveListingSample($"{listingId}_page.html", page);
+        return ProviderListingResult.OfThreads(posts) with { NextCursor = after };
+    }
+
+    /// <summary>1 回に取る板の数 (JSON の limit)。</summary>
+    private const int HotBoardsPageSize = 25;
+
+    /// <summary>ホットな板。JSON (after で続き) を使い、弾かれたら HTML のページ (<c>/best/communities/N/</c>、カーソルは <c>page:N</c>) に切り替える。</summary>
+    private async Task<ProviderListingResult> FetchHotBoardsAsync(HttpClient http, string? cursor, CancellationToken ct)
+    {
+        if (cursor is null || !cursor.StartsWith("page:", StringComparison.Ordinal))
+        {
+            var url = $"{Origin}/subreddits/popular.json?limit={HotBoardsPageSize}&raw_json=1"
+                    + (cursor is { Length: > 0 } ? "&after=" + Uri.EscapeDataString(cursor) : "");
+            try
             {
-                // 続きの場所が見つからない (ページの作りが変わった等) ときの調査用: ページ内の部分読み込みの URL 候補を出す
-                var candidates = System.Text.RegularExpressions.Regex.Matches(html, @"(?<u>/svc/shreddit/[^""'\s<>]{0,200})")
-                    .Select(x => x.Groups["u"].Value).Distinct()
-                    .OrderByDescending(u => u.Contains("feed", StringComparison.OrdinalIgnoreCase)).Take(12).ToList();
-                // ページそのものも保存する (作りの変化を調べるため。毎回上書き)
-                try
-                {
-                    var dir = System.IO.Path.Combine(new ChBrowser.Services.Storage.DataPaths().Root, "reddit.com");
-                    System.IO.Directory.CreateDirectory(dir);
-                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, $"foryou_page{page + 1}.html"), bytes);
-                }
-                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
-                ChBrowser.Services.Logging.LogService.Instance.Write(
-                    $"[reddit listing] forYou: 続きの URL が見つかりません。ページ内の /svc/shreddit/ の候補 {candidates.Count} 件: " +
-                    (candidates.Count == 0 ? $"(無し) 先頭: {System.Text.RegularExpressions.Regex.Replace(html.Length > 300 ? html[..300] : html, @"\s+", " ")}"
-                                           : string.Join(" | ", candidates.Select(System.Net.WebUtility.HtmlDecode))));
+                byte[] bytes;
+                using (ProviderRequestContext.Optional())   // 弾かれたら窓を出さずに HTML へ
+                    (bytes, _) = await GetAsync(http, url, ct).ConfigureAwait(false);
+                var boards = ParseSubredditListing(bytes);
+                LogListing("hotBoards", url, bytes, boards.Count);
+                string? after = null;
+                if (TryParse(bytes, out var doc))
+                    using (doc)
+                        if (doc.RootElement.TryGetProperty("data", out var data)) after = Str(data, "after");
+                return ProviderListingResult.OfBoards(boards) with { NextCursor = after };
             }
-            next = nextUrl is not null && nextUrl != next ? nextUrl : null;
-            if (next is not null && list.Count < Want && list.Count > before)
-                progress?.Report(ProviderListingResult.OfThreads(list.ToArray()));   // 続きがあるときだけ (最後は戻り値で渡す)
+            catch (HttpRequestException ex)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit listing] hotBoards: JSON が失敗したので HTML のページを使います ({ex.Message})");
+                cursor = null;   // JSON の続きは HTML では使えないので 1 ページ目から
+            }
         }
-        return list;
+        var n       = cursor is { Length: > 5 } && int.TryParse(cursor[5..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var p) ? p : 1;
+        var pageUrl = $"{Origin}/best/communities/{n}/";
+        var html    = Encoding.UTF8.GetString(await GetListingPageAsync(http, pageUrl, RenderDocument, ct).ConfigureAwait(false));
+        var hits    = ParseCommunitiesHtml(html);
+        ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit listing] hotBoards (HTML): {pageUrl} → 板 {hits.Count} 件");
+        if (hits.Count == 0) SaveListingSample("hotboards_page.html", Encoding.UTF8.GetBytes(html));
+        return ProviderListingResult.OfBoards(hits) with { NextCursor = hits.Count > 0 ? $"page:{n + 1}" : null };
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex CommunityAnchorRegex =
+        new(@"href=""(?:https://www\.reddit\.com)?/r/(?<name>[A-Za-z0-9_]{2,21})/""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex CommunityAttrsRegex =
+        new(@"<[^>]*\bdata-prefixed-name=""r/(?<name>[A-Za-z0-9_]+)""[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>/best/communities/N/ のページ → 板。ページの作りは未確認 (2026-11-04 時点で JSON が通るので実物を見ていない) なので、
+    /// 板の属性 (<c>data-prefixed-name</c> / <c>data-subscribers-count</c> / <c>data-public-description-text</c>) があればそれを使い、
+    /// 無ければ板へのリンクを並び順のまま拾う。1 件も取れなければ呼び出し側がページを保存する (作りを調べて直すため)。</summary>
+    private List<BoardSearchHit> ParseCommunitiesHtml(string html)
+    {
+        var hits = new List<BoardSearchHit>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string name, string desc, long? members)
+        {
+            if (name.StartsWith("u_", StringComparison.Ordinal) || !seen.Add(name)) return;
+            var dir = name.ToLowerInvariant();
+            hits.Add(new BoardSearchHit(new Board(dir, "r/" + name, BoardUrl(CanonicalHost, dir), "", 0), desc, members));
+        }
+        foreach (System.Text.RegularExpressions.Match tag in CommunityAttrsRegex.Matches(html))
+        {
+            var attrs = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match a in HtmlAttrRegex.Matches(tag.Value))
+                attrs[a.Groups["name"].Value] = System.Net.WebUtility.HtmlDecode(a.Groups["val"].Value);
+            long? members = long.TryParse(attrs.GetValueOrDefault("data-subscribers-count"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var mc) ? mc : null;
+            Add(tag.Groups["name"].Value, (attrs.GetValueOrDefault("data-public-description-text") ?? "").Replace('\n', ' ').Trim(), members);
+        }
+        if (hits.Count > 0) return hits;
+        foreach (System.Text.RegularExpressions.Match a in CommunityAnchorRegex.Matches(html))
+            if (a.Groups["name"].Value is not ("popular" or "all")) Add(a.Groups["name"].Value, "", null);
+        return hits;
+    }
+
+    /// <summary>読めなかった一覧のページを保存する (作りの変化を調べるため。毎回上書き)。</summary>
+    private static void SaveListingSample(string fileName, byte[] bytes)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(new ChBrowser.Services.Storage.DataPaths().Root, "reddit.com");
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, fileName), bytes);
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
     }
 
     private static readonly System.Text.RegularExpressions.Regex ShredditPostRegex =
@@ -497,8 +546,10 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         new(@"\snsfw(?=[\s>=/])", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PinnedAttrRegex =
         new(@"\s(?:stickied|pinned)(?=[\s>/]|="""")", System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex HomeFeedNextRegex =
-        new(@"src=""(?<src>/svc/shreddit/feeds/(?:interest-)?home-feed\?[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    /// <summary>一覧 (ホットなスレッド / おすすめ) の続きの部分読み込み。名前は一覧ごとに違う (板・r/popular: …more-posts…、
+    /// ホーム: …/feeds/interest-home-feed?…) ので、more-posts か feed を含む /svc/shreddit/ の src を拾う (ページ内の最後のもの)。</summary>
+    private static readonly System.Text.RegularExpressions.Regex FeedNextRegex =
+        new(@"src=""(?<src>/svc/shreddit/[^""]*(?:more-posts|feed)[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PermalinkRegex =
         new(@"^/r/(?<sub>[A-Za-z0-9_]+)/comments/(?<id>[a-z0-9]+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
 

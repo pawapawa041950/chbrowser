@@ -181,6 +181,7 @@ public sealed partial class MainViewModel
     /// <summary>「続きを読み込む」: 次のページを取得して一覧の末尾に足す (取得分はセッション限り。決定 D29)。</summary>
     public async Task LoadMoreThreadsAsync(ThreadListTabViewModel tab)
     {
+        if (tab.Board is null) { await LoadMoreListingAsync(tab).ConfigureAwait(true); return; }   // 掲示板の一覧のタブ (ホットなスレッド等)
         if (tab.Board is not { } board || string.IsNullOrEmpty(tab.NextCursor) || tab.IsBusy) return;
         var header = tab.Header;
         try

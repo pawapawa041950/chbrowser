@@ -115,7 +115,7 @@ public sealed class ShitarabaProvider : IBbsProvider
 
     public async System.Threading.Tasks.Task<ProviderListingResult> FetchListingAsync(
         System.Net.Http.HttpClient http, string listingId, System.Threading.CancellationToken ct,
-        IProgress<ProviderListingResult>? progress = null)
+        IProgress<ProviderListingResult>? progress = null, string? cursor = null)
     {
         if (listingId is not ("hot" or "hotBoards")) throw new NotSupportedException($"したらばには一覧「{listingId}」がありません。");
         using var resp = await http.GetAsync(PortalUrl, ct).ConfigureAwait(false);

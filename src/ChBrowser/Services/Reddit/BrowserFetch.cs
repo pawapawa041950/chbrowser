@@ -46,8 +46,9 @@ public interface IBrowserFetcher
 
     /// <summary>一覧のページ (<paramref name="url"/>) を隠しページで実際に表示し、スクリプトが読み込んだ投稿の要素
     /// (<c>&lt;shreddit-post …&gt;</c> の開始タグ) と、続きの部分読み込み (<c>&lt;faceplate-partial src="…more-posts…"&gt;</c>) を並べた HTML を返す。
-    /// 板のページは HTML を取っても投稿が入っていない (表示してから読み込む) ため (2026-11-04)。</summary>
-    Task<string> RenderListingAsync(string url, CancellationToken ct);
+    /// 板のページは HTML を取っても投稿が入っていない (表示してから読み込む) ため (2026-11-04)。
+    /// <paramref name="wholeDocument"/> なら投稿に限らず、表示後のページ全体 (DOM) を返す (板の一覧など)。</summary>
+    Task<string> RenderListingAsync(string url, bool wholeDocument, CancellationToken ct);
 }
 
 /// <summary>ログイン窓を出す理由。</summary>
