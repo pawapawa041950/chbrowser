@@ -15,8 +15,9 @@ public sealed class ThreadStateMark : Grid
 {
     /// <summary>状態の丸の直径 (thread-list.css の .log-mark と同じ)。</summary>
     public const double DotSize  = 14;
-    /// <summary>★ の文字サイズ (丸より少し小さく、周りに丸の色が見える) (thread-list.css の .log-mark::after と同じ)。</summary>
-    public const double StarSize = 13;
+    /// <summary>★ の文字サイズ (丸の中に収まり、周りに丸の色が見える大きさ)。WPF の既定フォントの ★ は WebView より大きく出るので、
+    /// thread-list.css の .log-mark::after (12px) より小さい値で見た目を揃えている。</summary>
+    public const double StarSize = 10.5;
     /// <summary>★ と状態の丸の色 (thread-list.css と同じ)。</summary>
     private static readonly Brush StarBrush         = Solid(0xE6, 0xB8, 0x00);
     private static readonly Brush CachedBrush       = Solid(0x1E, 0x88, 0xE5);   // 青: ログあり / 件数一致

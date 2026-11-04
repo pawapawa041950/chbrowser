@@ -140,7 +140,7 @@ tr.is-favorited .log-mark::after {
     top: 50%;
     transform: translate(-50%, -50%);
     color: #e6b800;
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1;
     text-shadow: 0 0 1px #fff, 0 0 1px #fff;
     pointer-events: none;
