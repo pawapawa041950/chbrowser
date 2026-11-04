@@ -100,32 +100,36 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             for (var i = 0; i < 60 && (count = await Count().ConfigureAwait(true)) == 0; i++)
                 await Task.Delay(250, ct).ConfigureAwait(true);
 
-            var json = await wv.ExecuteScriptAsync(CollectPostsScript).ConfigureAwait(true);
-            var sb   = new StringBuilder(JsonSerializer.Deserialize<string>(json) ?? "");
-
-            // 続きは、ページ内にある「続きの投稿」の部分読み込み (板・r/popular: …/community-more-posts/…、ホーム: …/feeds/interest-home-feed?…)
-            // (下へのスクロールで読ませるのは、隠し窓だと読み込まれたりされなかったりで不安定だった)
-            // r/popular 等は名前が違う (…feed…) ので、/svc/shreddit/ の部分読み込みで more-posts か feed を含むものを拾う。
-            // 投稿が出た直後はまだ置かれていないことがあるので、最大 3 秒待つ
-            const string NextScript =
-                "(() => { const p = Array.from(document.querySelectorAll('faceplate-partial[src*=\"/svc/shreddit/\"]'))" +
-                ".filter(e => /more-posts|feed/.test(e.getAttribute('src'))).pop(); return p ? p.getAttribute('src') : null; })()";
-            var srcJson = "null";
-            for (var i = 0; i < 12 && (srcJson = await wv.ExecuteScriptAsync(NextScript).ConfigureAwait(true)) == "null"; i++)
-                await Task.Delay(250, ct).ConfigureAwait(true);
-            if (srcJson == "null")
+            // 続きの部分読み込み (次のページの位置を持つもの。見分け方は RedditProvider.ContinuationPattern に 1 か所で決めてある)。
+            // 続きの取得は呼び出し側が普通の要求として 1 ページずつ行う (届いた分から一覧に足せるように。下へのスクロールで読ませるのは、
+            // 隠し窓だと読み込まれたりされなかったりで不安定だった)。投稿が出た直後はまだ置かれていないことがあるので最大 5 秒待つ
+            var continuationScript =
+                "Array.from(document.querySelectorAll('faceplate-partial[src^=\"/svc/shreddit/\"]')).map(e => e.getAttribute('src'))" +
+                $".filter(s => new RegExp({JsonSerializer.Serialize(ChBrowser.Services.Bbs.RedditProvider.ContinuationPattern)}).test(s))";
+            var continuations = Array.Empty<string>();
+            for (var i = 0; i < 20; i++)
             {
-                // 続きが見つからない: ページの作りを調べられるよう、部分読み込みの候補をログに出す
-                var cands = await wv.ExecuteScriptAsync(
-                    "Array.from(document.querySelectorAll('faceplate-partial[src]')).map(e => e.getAttribute('src')).slice(0, 15).join(' | ')").ConfigureAwait(true);
-                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 一覧の続きが見つかりません: {url} 部分読み込みの候補: {JsonSerializer.Deserialize<string>(cands)}");
+                continuations = JsonSerializer.Deserialize<string[]>(await wv.ExecuteScriptAsync(continuationScript).ConfigureAwait(true)) ?? continuations;
+                if (continuations.Length > 0) break;
+                await Task.Delay(250, ct).ConfigureAwait(true);
             }
-            // 続きの場所は呼び出し側に返し、続きの取得は普通の要求として 1 ページずつ行わせる (届いた分から一覧に足せるように)
-            if (JsonSerializer.Deserialize<string?>(srcJson) is { Length: > 0 } next)
-                sb.Append("\n<faceplate-partial src=\"").Append(System.Net.WebUtility.HtmlEncode(next)).Append("\"></faceplate-partial>");
 
+            // 投稿の要素と続きを並べた HTML を返す (読み取り方は続きの部分読み込みの HTML と同じ: RedditProvider.ParsePostsHtml)
+            var sb = new StringBuilder(JsonSerializer.Deserialize<string>(await wv.ExecuteScriptAsync(CollectPostsScript).ConfigureAwait(true)) ?? "");
+            foreach (var src in continuations)
+                sb.Append("\n<faceplate-partial src=\"").Append(System.Net.WebUtility.HtmlEncode(src)).Append("\"></faceplate-partial>");
+
+            if (continuations.Length == 0)
+            {
+                // 続きが見つからない: ページの作りを調べられるよう、部分読み込みの一覧をログに出し、表示中のページ全体を保存する
+                var all = await wv.ExecuteScriptAsync(
+                    "Array.from(document.querySelectorAll('faceplate-partial[src]')).map(e => e.getAttribute('src').split('&')[0]).join(' | ')").ConfigureAwait(true);
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] 一覧の続きが見つかりません: {url} 部分読み込み: {JsonSerializer.Deserialize<string>(all)}");
+                ChBrowser.Services.Bbs.RedditProvider.SaveListingSample("render_no_continuation.html", Encoding.UTF8.GetBytes(
+                    JsonSerializer.Deserialize<string>(await wv.ExecuteScriptAsync("document.documentElement.outerHTML").ConfigureAwait(true)) ?? ""));
+            }
             ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[reddit] 一覧のページを表示して読み取り: {url} → 投稿 {count} 件, 続き {(srcJson == "null" ? "なし" : "あり")} ({perf.ElapsedMilliseconds}ms)");
+                $"[reddit] 一覧のページを表示して読み取り: {url} → 投稿 {count} 件, 続き {(continuations.Length == 0 ? "なし" : continuations[^1].Split('?')[0])} ({perf.ElapsedMilliseconds}ms)");
             return "<html><body>\n" + sb + "\n</body></html>";
         }
         finally

@@ -268,22 +268,8 @@ public sealed partial class MainViewModel
             tab.IsBusy = false;
         }
 
-        if (!tab.IsAutoLoading) return;
-        try
-        {
-            // 1 ページ目で既に 1 ページ分 (20 件以上) 取れている一覧 (ホットな板の JSON は 25 件) は読み足さない (要求の数を増やさない)
-            for (var i = 0; loaded && i < autoPages && !string.IsNullOrEmpty(tab.NextCursor) && tab.Items.Count < 20; i++)
-            {
-                var before = tab.Items.Count;
-                await LoadMoreListingAsync(tab).ConfigureAwait(true);
-                if (tab.Items.Count <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
-            }
-        }
-        finally
-        {
-            tab.IsAutoLoading = false;
-            tab.ResendItems();   // 最下部を「取得中…」から「続きを取得する」(続きがあれば) に戻す
-        }
+        // 1 ページ目で既に 1 ページ分 (20 件以上) 取れている一覧 (ホットな板の JSON は 25 件) は読み足さない (要求の数を増やさない)
+        await AutoLoadMoreAsync(tab, loaded, autoPages, enough: 20).ConfigureAwait(true);
     }
 
     private static Guid DeterministicTabId(string key)

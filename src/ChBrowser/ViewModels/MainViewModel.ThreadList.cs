@@ -109,7 +109,7 @@ public sealed partial class MainViewModel
             tab.StatusMessage = droppedList.Count > 0
                 ? $"{board.BoardName}: {subjectThreads.Count} スレ (+ dat 落ち {droppedList.Count})"
                 : $"{board.BoardName}: {subjectThreads.Count} スレを表示"
-                  + (tab.NextCursor is not null && !tab.IsAutoLoading ? " (右クリック → 続きを読み込む で次の 100 件)" : "");
+                  + (tab.NextCursor is not null && !tab.IsAutoLoading ? " (一覧の最下部の「続きを取得する」で続きを読み込めます)" : "");
 
             // 板一覧を持たない掲示板 (したらば / reddit) の板名は、ローカルの板情報 (_SETTING.TXT の BBS_TITLE) が唯一の出どころ
             // (「表示済み板」はそこから名前を読む)。アドレスバー以外 (検索結果など) から開いた板は未取得なので、ここで 1 回だけ取っておく。
@@ -126,20 +126,29 @@ public sealed partial class MainViewModel
             tab.IsBusy = false;
         }
 
+        await AutoLoadMoreAsync(tab, loaded, autoPages).ConfigureAwait(true);
+    }
+
+    /// <summary>1 ページ目を出した後の、続きの自動の読み足し (reddit。板のスレ一覧と一覧のタブで共通)。
+    /// 呼び出し側は 1 ページ目を出す前に <see cref="ThreadListTabViewModel.IsAutoLoading"/> を立てておく (最下部を「取得中…」にしておくため)。
+    /// 読み足しが終わったら (失敗・打ち切りも) 下ろし、最下部を「続きを取得する」(続きがあれば) に戻す。
+    /// <paramref name="enough"/> 件以上あれば読み足さない (1 ページ目で既に十分取れている一覧で要求を増やさない)。</summary>
+    private async Task AutoLoadMoreAsync(ThreadListTabViewModel tab, bool loaded, int pages, int enough = int.MaxValue)
+    {
         if (!tab.IsAutoLoading) return;
         try
         {
-            for (var i = 0; loaded && i < autoPages && !string.IsNullOrEmpty(tab.NextCursor); i++)
+            for (var i = 0; loaded && i < pages && !string.IsNullOrEmpty(tab.NextCursor) && tab.Items.Count < enough; i++)
             {
-                var before = tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread);
+                var before = tab.Items.Count;
                 await LoadMoreThreadsAsync(tab).ConfigureAwait(true);
-                if (tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread) <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
+                if (tab.Items.Count <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
             }
         }
         finally
         {
             tab.IsAutoLoading = false;
-            tab.ResendItems();   // 最下部を「取得中…」から「続きを取得する」(続きがあれば) に戻す
+            tab.ResendItems();
         }
     }
 

@@ -274,35 +274,49 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return false;
     }
 
-    /// <summary>表示して読み取った投稿の要素を並べた HTML (<see cref="RenderListingOption"/>)、または続きの部分読み込みの HTML → スレ一覧 1 ページ。
-    /// 続きは部分読み込みの URL (同じ投稿の要素が 1 ページ内に何度も出てくるので、スレは id で重複を除く)。
-    /// スレが 1 件も無いときは、作りの変化を調べられるよう中身を保存する。</summary>
+    /// <summary>板のスレ一覧のページ (表示して読み取った HTML) または続きの部分読み込みの HTML → スレ一覧 1 ページ。</summary>
     private ThreadListPage ParseThreadListHtml(byte[] bytes)
     {
-        var html  = Encoding.UTF8.GetString(bytes);
-        var list  = new List<ListedThread>();
-        var tags  = ParseShredditPosts(html, list, new HashSet<string>(StringComparer.Ordinal));
-        var items = list.Select((t, i) => t.Info with { Order = i + 1 }).ToList();
-        var m     = MorePostsSrcRegex.Match(html);
-        var next  = m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
-        ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[reddit] スレ一覧 (HTML): {bytes.Length} bytes, shreddit-post={tags}, 一覧に出した件数={items.Count}, 続き={(next is null ? "なし" : "あり")}");
-        if (items.Count == 0)
-        {
-            try
-            {
-                var dir = System.IO.Path.Combine(new ChBrowser.Services.Storage.DataPaths().Root, "reddit.com");
-                System.IO.Directory.CreateDirectory(dir);
-                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "threadlist_page.html"), bytes);
-            }
-            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
-        }
-        return new ThreadListPage(items, next);
+        var page = ParsePostsHtml("スレ一覧", "threadlist_page.html", bytes);
+        return new ThreadListPage(page.Posts.Select(t => t.Info).ToList(), page.Next);
     }
 
-    /// <summary>スレ一覧の続きの部分読み込み (例 <c>/svc/shreddit/community-more-posts/hot/?after=…&amp;name=…</c>)。続きの HTML の中にも次の分が書かれている。</summary>
-    private static readonly System.Text.RegularExpressions.Regex MorePostsSrcRegex =
-        new(@"src=""(?<src>/svc/shreddit/[^""]*more-posts[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    // ---- 投稿の並んだ HTML (板のページ / r/popular / ホーム / その続き) ----
+
+    /// <summary>投稿の並んだ HTML の読み取り結果。<see cref="Next"/> は続きの部分読み込みの URL (無ければ null)。</summary>
+    private sealed record PostsHtmlPage(List<ListedThread> Posts, string? Next);
+
+    /// <summary>投稿の並んだ HTML → 投稿 (板付き、id で重複を除く。同じ投稿の要素が 1 ページ内に何度も出てくる) と続き。
+    /// 板のスレ一覧と一覧のタブ (ホットなスレッド / おすすめ) で共通。投稿が 1 件も無いときは、作りの変化を調べられるよう中身を保存する。</summary>
+    private PostsHtmlPage ParsePostsHtml(string label, string sampleFile, byte[] bytes)
+    {
+        var html  = Encoding.UTF8.GetString(bytes);
+        var posts = new List<ListedThread>();
+        var tags  = ParseShredditPosts(html, posts, new HashSet<string>(StringComparer.Ordinal));
+        var next  = FindContinuation(html);
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[reddit] {label} (HTML): {bytes.Length} bytes, shreddit-post={tags}, 一覧に出した件数={posts.Count}, 続き={next?.Split('?')[0] ?? "なし"}");
+        if (posts.Count == 0) SaveListingSample(sampleFile, bytes);
+        return new PostsHtmlPage(posts, next);
+    }
+
+    /// <summary>続きの部分読み込みの見分け方 (JS の正規表現としても使う。<see cref="RedditWebViewHost"/> が表示中のページで待つのに使う)。
+    /// 続きは名前が一覧ごとに違う (板: …/community-more-posts/…、ホーム: …/feeds/interest-home-feed?after=…) ので、
+    /// 次のページの位置 (<c>after=</c>) を持つものを続きとみなす (板の more-posts は実績があるので名前でも受け付ける)。
+    /// 「…feed… を含む」で探していたときは、続きとは無関係な部分読み込み (カスタムフィードの作成画面。スレのページには
+    /// …/feeds/subreddit-right-rail?name=… もある) を拾ってしまい、2 ページ目が 0 件になっていた (2026-11-04)。</summary>
+    public const string ContinuationPattern = @"[?&]after=|/community-more-posts/";
+
+    private static readonly System.Text.RegularExpressions.Regex ContinuationRegex =
+        new(ContinuationPattern, System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex PartialSrcRegex =
+        new(@"<faceplate-partial\b[^>]*?\bsrc=""(?<src>/svc/shreddit/[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>HTML 内の続きの部分読み込みの URL (<see cref="ContinuationPattern"/> に合う最後のもの)。無ければ null。</summary>
+    private static string? FindContinuation(string html)
+        => PartialSrcRegex.Matches(html)
+               .Select(m => System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value))
+               .LastOrDefault(s => ContinuationRegex.IsMatch(s));
 
     /// <summary>by_id の応答 (Listing t3) → スレの状態。レス数は <see cref="ParseThreadListPage"/> と同じ (コメント数 + 1)。</summary>
     public IReadOnlyList<ThreadStatus> ParseThreadStatuses(byte[] bytes)
@@ -408,16 +422,17 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         {
             case "hot":
             {
+                // 1 ページ目は表示して読み取る (HTML を取っても投稿は数件)。続きは普通に取れる (板のスレ一覧と同じ)
                 var url  = cursor is { Length: > 0 } ? Origin + cursor : $"{Origin}/r/popular/";
                 var page = await GetListingPageAsync(http, url, cursor is null ? RenderPosts : null, ct).ConfigureAwait(false);
-                return PostsPage(listingId, url, page);
+                return PostsListing(listingId, page);
             }
             case "forYou":
             {
-                // 1 ページ目 (ホーム) は普通に取れる。続きは表示して読み取る
+                // 1 ページ目 (ホーム) は普通に取れる。続きは普通に取ると JS の確認ページになるので表示して読み取る
                 var url  = cursor is { Length: > 0 } ? Origin + cursor : $"{Origin}/";
                 var page = await GetListingPageAsync(http, url, cursor is null ? null : RenderPosts, ct).ConfigureAwait(false);
-                return PostsPage(listingId, url, page);
+                return PostsListing(listingId, page);
             }
             case "hotBoards":
                 return await FetchHotBoardsAsync(http, cursor, ct).ConfigureAwait(false);
@@ -437,23 +452,11 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>投稿の要素が並んだ HTML → いろいろな板のスレの一覧 1 ページ。続きは部分読み込みの URL (<see cref="FeedNextRegex"/>)。</summary>
-    private ProviderListingResult PostsPage(string listingId, string url, byte[] page)
+    /// <summary>投稿の並んだ HTML → いろいろな板のスレの一覧 1 ページ (一覧のタブ)。</summary>
+    private ProviderListingResult PostsListing(string listingId, byte[] bytes)
     {
-        var html  = Encoding.UTF8.GetString(page);
-        var posts = new List<ListedThread>();
-        var tags  = ParseShredditPosts(html, posts, new HashSet<string>(StringComparer.Ordinal));
-        var m     = FeedNextRegex.Matches(html).LastOrDefault();
-        var after = m is not null ? System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
-        if (after is null)
-            ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[reddit listing] {listingId}: 続きが見つかりません。ページ内の /svc/shreddit/ の候補: " +
-                string.Join(" | ", System.Text.RegularExpressions.Regex.Matches(html, @"/svc/shreddit/[^""'\s<>]{0,160}")
-                    .Select(x => System.Net.WebUtility.HtmlDecode(x.Value)).Distinct().Take(12)));
-        ChBrowser.Services.Logging.LogService.Instance.Write(
-            $"[reddit listing] {listingId} (HTML): {url.Split('?')[0]} → {page.Length} bytes, shreddit-post={tags}, 一覧に出した件数={posts.Count}, 続き={(after is null ? "なし" : "あり")}");
-        if (posts.Count == 0) SaveListingSample($"{listingId}_page.html", page);
-        return ProviderListingResult.OfThreads(posts) with { NextCursor = after };
+        var page = ParsePostsHtml($"一覧 {listingId}", $"{listingId}_page.html", bytes);
+        return ProviderListingResult.OfThreads(page.Posts) with { NextCursor = page.Next };
     }
 
     /// <summary>1 回に取る板の数 (JSON の limit)。</summary>
@@ -526,8 +529,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         return hits;
     }
 
-    /// <summary>読めなかった一覧のページを保存する (作りの変化を調べるため。毎回上書き)。</summary>
-    private static void SaveListingSample(string fileName, byte[] bytes)
+    /// <summary>読めなかった一覧のページを data/reddit.com に保存する (作りの変化を調べるため。毎回上書き)。</summary>
+    internal static void SaveListingSample(string fileName, byte[] bytes)
     {
         try
         {
@@ -546,10 +549,6 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         new(@"\snsfw(?=[\s>=/])", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PinnedAttrRegex =
         new(@"\s(?:stickied|pinned)(?=[\s>/]|="""")", System.Text.RegularExpressions.RegexOptions.Compiled);
-    /// <summary>一覧 (ホットなスレッド / おすすめ) の続きの部分読み込み。名前は一覧ごとに違う (板・r/popular: …more-posts…、
-    /// ホーム: …/feeds/interest-home-feed?…) ので、more-posts か feed を含む /svc/shreddit/ の src を拾う (ページ内の最後のもの)。</summary>
-    private static readonly System.Text.RegularExpressions.Regex FeedNextRegex =
-        new(@"src=""(?<src>/svc/shreddit/[^""]*(?:more-posts|feed)[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PermalinkRegex =
         new(@"^/r/(?<sub>[A-Za-z0-9_]+)/comments/(?<id>[a-z0-9]+)/", System.Text.RegularExpressions.RegexOptions.Compiled);
 
@@ -606,27 +605,6 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             $"[reddit listing] {listingId}: {url} → {bytes.Length} bytes, {info}, 一覧に出した件数={parsed} | 先頭: {head}");
     }
 
-    /// <summary>いろいろな subreddit の投稿が混ざった Listing (t3) → 板付きのスレ。スレの中身は <see cref="ParseThreadListPage"/> と同じ。</summary>
-    public IReadOnlyList<ListedThread> ParseCrossBoardListing(byte[] bytes)
-    {
-        var page = ParseThreadListPage(bytes);
-        var subById = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (TryParse(bytes, out var doc))
-            using (doc)
-                if (doc.RootElement.TryGetProperty("data", out var data)
-                    && data.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
-                    foreach (var c in children.EnumerateArray())
-                        if (c.TryGetProperty("data", out var d) && Str(d, "id") is { Length: > 0 } id && Str(d, "subreddit") is { Length: > 0 } sub)
-                            subById[id] = sub;
-        var list = new List<ListedThread>(page.Items.Count);
-        foreach (var t in page.Items)
-        {
-            if (!subById.TryGetValue(t.Key, out var sub) || sub.StartsWith("u_", StringComparison.Ordinal)) continue;   // ユーザーページの投稿は除く
-            var dir = sub.ToLowerInvariant();
-            list.Add(new ListedThread(new Board(dir, "r/" + sub, BoardUrl(CanonicalHost, dir), "", 0), t with { Order = list.Count + 1 }));
-        }
-        return list;
-    }
 
     /// <summary>t5 (subreddit) の Listing → 検索結果。</summary>
     public IReadOnlyList<BoardSearchHit> ParseSubredditListing(byte[] bytes)
