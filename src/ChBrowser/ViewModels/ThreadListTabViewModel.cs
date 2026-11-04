@@ -112,6 +112,47 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     [ObservableProperty]
     private bool _isBoardFavorited;
 
+    /// <summary>タブ見出しの丸 (<see cref="ChBrowser.Controls.ThreadStateMark"/>)。
+    /// <list type="bullet">
+    /// <item><description>青 (<see cref="LogMarkState.Cached"/>): 一覧を取得できた (初回)、取り直して前回に無かったスレ (板) がある、
+    ///   または「続きを取得する」で続きを取得できた。</description></item>
+    /// <item><description>丸なし (<see cref="LogMarkState.None"/>): 取り直した一覧のスレ (板) が、前回タブに並んでいたものにすべて含まれる。
+    ///   レス数は比べない (すぐ変わるので)。</description></item>
+    /// </list></summary>
+    [ObservableProperty]
+    private LogMarkState _fetchMark;
+
+    /// <summary>直近の一覧の取得に失敗した (タブ見出しの丸を灰色にする)。</summary>
+    [ObservableProperty]
+    private bool _fetchFailed;
+
+    /// <summary>前回タブに並んでいたスレ (板) の識別 (「続きを取得する」で足した分も含む)。<see cref="MarkFetched"/> で比べる。</summary>
+    private HashSet<string>? _shownKeys;
+
+    private HashSet<string> CurrentKeys()
+        => new(Items.Select(i => $"{i.Kind}/{i.Host}/{i.DirectoryName}/{i.Info.Key}"), StringComparer.Ordinal);
+
+    /// <summary>一覧を取り直した (自動の読み足しも終わった後に呼ぶ): いま並んでいるものが前回並んでいたものにすべて含まれていれば丸なし、
+    /// そうでなければ (初回も) 青。</summary>
+    public void MarkFetched()
+    {
+        var current = CurrentKeys();
+        FetchMark   = _shownKeys is not null && current.IsSubsetOf(_shownKeys) ? LogMarkState.None : LogMarkState.Cached;
+        FetchFailed = false;
+        _shownKeys  = current;
+    }
+
+    /// <summary>「続きを取得する」で続きを取得できた: 比べずに青 (足した分も次の比較の「前回」に入れる)。</summary>
+    public void MarkLoadedMore()
+    {
+        FetchMark   = LogMarkState.Cached;
+        FetchFailed = false;
+        _shownKeys  = CurrentKeys();
+    }
+
+    /// <summary>一覧の取得に失敗した: 灰色の丸 (前回並んでいたものは覚えたまま、次に取れたらそれと比べる)。</summary>
+    public void MarkFetchFailed() => FetchFailed = true;
+
     /// <summary>絞り込みのテキストボックス (= スレ一覧ペイン ヘッダ) にバインドされる文字列。
     /// 検索対象はスレッドタイトルのみ。タブごとに独立 (= タブ切替で値が切り替わる)。
     /// <see cref="ChBrowser.Controls.WebView2Helper"/> の ThreadListSearchPush 添付プロパティ経由で

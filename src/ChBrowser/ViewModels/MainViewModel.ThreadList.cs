@@ -119,6 +119,7 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             tab.Header        = $"{board.BoardName} (失敗)";
+            tab.MarkFetchFailed();
             tab.StatusMessage = $"スレ一覧の取得に失敗: {ex.Message}";
         }
         finally
@@ -127,6 +128,7 @@ public sealed partial class MainViewModel
         }
 
         await AutoLoadMoreAsync(tab, loaded, autoPages).ConfigureAwait(true);
+        if (loaded) tab.MarkFetched();   // タブ見出しの丸: 読み足しまで終わった一覧を前回と比べる
     }
 
     /// <summary>1 ページ目を出した後の、続きの自動の読み足し (reddit。板のスレ一覧と一覧のタブで共通)。
@@ -216,9 +218,11 @@ public sealed partial class MainViewModel
             tab.Header       = $"{board.BoardName}{SortSuffix(tab)} ({all.Count})";
             tab.StatusMessage = $"{board.BoardName}: {added.Count} スレを追加 (合計 {all.Count})"
                                 + (page.NextCursor is null ? " — これ以上はありません" : "");
+            if (!tab.IsAutoLoading) tab.MarkLoadedMore();   // 「続きを取得する」で取れた: 青 (自動の読み足しは取り直しの一部なので後でまとめて比べる)
         }
         catch (Exception ex)
         {
+            if (!tab.IsAutoLoading) tab.MarkFetchFailed();
             tab.Header        = header;
             tab.StatusMessage = $"続きの取得に失敗: {ex.Message}";
             tab.ResendItems();   // 一覧の最下部の「続きを取得する」を「取得中…」から戻す

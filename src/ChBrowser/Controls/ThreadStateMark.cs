@@ -8,7 +8,8 @@ using ChBrowser.ViewModels;
 namespace ChBrowser.Controls;
 
 /// <summary>スレの状態マーク: 状態の丸 (<see cref="LogMarkState"/> の色) の手前にお気に入りの ★ を重ね、
-/// 取得中は丸の代わりに読み込みアイコンを最も手前に出す。スレ表示ペインのタブで使う。
+/// 取得中は丸の代わりに読み込みアイコンを最も手前に出す。取得に失敗したら丸を灰色にする (<see cref="IsFailed"/>)。
+/// スレ表示ペインのタブとスレ一覧ペインのタブで使う。
 /// スレ一覧ペインの行 (thread-list.css の <c>.log-mark</c>) も同じ大きさ・重ね順で描くので、変えるときは両方揃える。</summary>
 public sealed class ThreadStateMark : Grid
 {
@@ -22,6 +23,7 @@ public sealed class ThreadStateMark : Grid
     private static readonly Brush UpdatedBrush      = Solid(0x2E, 0x7D, 0x32);   // 緑: 新着あり
     private static readonly Brush DroppedBrush      = Solid(0x8D, 0x6E, 0x63);   // 茶: dat 落ち
     private static readonly Brush RepliedToOwnBrush = Solid(0xE5, 0x39, 0x35);   // 赤: 自分の書き込みへの返信あり
+    private static readonly Brush FailedBrush       = Solid(0x9E, 0x9E, 0x9E);   // 灰: 取得失敗 (スレ一覧のタブ)
 
     private static Brush DotBrushOf(LogMarkState state) => state switch
     {
@@ -43,6 +45,13 @@ public sealed class ThreadStateMark : Grid
     public static readonly DependencyProperty IsBusyProperty = DependencyProperty.Register(
         nameof(IsBusy), typeof(bool), typeof(ThreadStateMark),
         new PropertyMetadata(false, (d, _) => ((ThreadStateMark)d).Update()));
+
+    /// <summary>取得に失敗した (丸を灰色にする。<see cref="State"/> より優先)。</summary>
+    public static readonly DependencyProperty IsFailedProperty = DependencyProperty.Register(
+        nameof(IsFailed), typeof(bool), typeof(ThreadStateMark),
+        new PropertyMetadata(false, (d, _) => ((ThreadStateMark)d).Update()));
+
+    public bool IsFailed { get => (bool)GetValue(IsFailedProperty); set => SetValue(IsFailedProperty, value); }
 
     public LogMarkState State  { get => (LogMarkState)GetValue(StateProperty); set => SetValue(StateProperty, value); }
     public bool IsFavorited    { get => (bool)GetValue(IsFavoritedProperty);   set => SetValue(IsFavoritedProperty, value); }
@@ -74,7 +83,7 @@ public sealed class ThreadStateMark : Grid
 
     private void Update()
     {
-        _dot.Fill           = DotBrushOf(State);
+        _dot.Fill           = IsFailed ? FailedBrush : DotBrushOf(State);
         _dot.Visibility     = IsBusy ? Visibility.Collapsed : Visibility.Visible;
         _spinner.Visibility = IsBusy ? Visibility.Visible : Visibility.Collapsed;
         _star.Visibility    = IsFavorited ? Visibility.Visible : Visibility.Collapsed;

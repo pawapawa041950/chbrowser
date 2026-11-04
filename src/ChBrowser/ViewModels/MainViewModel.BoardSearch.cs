@@ -100,9 +100,11 @@ public sealed partial class MainViewModel
             tab.SetItems(all, DateTimeOffset.UtcNow);
             tab.Header        = $"{header} ({all.Count})";
             tab.StatusMessage = $"{header}: {added.Count} 件を追加 (合計 {all.Count})" + (result.NextCursor is null ? " — これ以上はありません" : "");
+            if (!tab.IsAutoLoading) tab.MarkLoadedMore();   // 「続きを取得する」で取れた: 青 (自動の読み足しは取り直しの一部なので後でまとめて比べる)
         }
         catch (Exception ex)
         {
+            if (!tab.IsAutoLoading) tab.MarkFetchFailed();
             tab.StatusMessage = $"{header}: 続きの取得に失敗 — {ex.Message}";
             tab.ResendItems();   // 最下部を「取得中…」から戻す
         }
@@ -260,6 +262,7 @@ public sealed partial class MainViewModel
         }
         catch (Exception ex)
         {
+            tab.MarkFetchFailed();
             tab.Header        = $"{header} (失敗)";
             tab.StatusMessage = $"{header}: 取得に失敗しました — {ex.Message}";
         }
@@ -270,6 +273,7 @@ public sealed partial class MainViewModel
 
         // 1 ページ目で既に 1 ページ分 (20 件以上) 取れている一覧 (ホットな板の JSON は 25 件) は読み足さない (要求の数を増やさない)
         await AutoLoadMoreAsync(tab, loaded, autoPages, enough: 20).ConfigureAwait(true);
+        if (loaded) tab.MarkFetched();   // タブ見出しの丸: 読み足しまで終わった一覧を前回と比べる
     }
 
     private static Guid DeterministicTabId(string key)
