@@ -207,14 +207,18 @@ public sealed class FiveChProvider : IBbsProvider
     /// <summary>名前 / メール / スレ立てあり、どんぐり Cookie を使う。</summary>
     public PostFormSpec PostForm { get; } = new(SupportsName: true, SupportsMail: true, SupportsNewThread: true, UsesDonguriAuth: true);
 
-    /// <summary>bbs.cgi へのフォーム: <c>FROM, mail, MESSAGE, bbs, time, [key], [subject], submit</c> (この順)。Shift_JIS。Referer は板 URL。</summary>
+    /// <summary>bbs.cgi へのフォーム (<see cref="BuildBbsCgiSubmission"/>)。Referer は板 URL。</summary>
     public PostSubmission BuildPostSubmission(PostRequest req)
+        => BuildBbsCgiSubmission(req, PostEndpointUrl(req.Board)!, TextEncoding, req.Board.Url);
+
+    /// <summary>5ch 形式の <c>/test/bbs.cgi</c> へのフォーム: <c>FROM, mail, MESSAGE, bbs, time, [key], [subject], submit</c> (この順)、Shift_JIS。
+    /// 同じ形式の掲示板 (エッヂ / 嫌儲.org) からも使う。<paramref name="mail"/> を渡すとメール欄をそれにする (エッヂの認証トークン付き)。</summary>
+    internal static PostSubmission BuildBbsCgiSubmission(PostRequest req, string endpoint, Encoding encoding, string referer, string? mail = null)
     {
-        var endpoint = PostEndpointUrl(req.Board)!;
         var fields = new List<KeyValuePair<string, string>>
         {
             new("FROM",    req.Name),
-            new("mail",    req.Mail),
+            new("mail",    mail ?? req.Mail),
             new("MESSAGE", req.Message),
             new("bbs",     req.Board.DirectoryName),
             new("time",    PostResponseHtml.UnixNow()),
@@ -222,7 +226,7 @@ public sealed class FiveChProvider : IBbsProvider
         if (req.IsReply)     fields.Add(new("key",     req.ThreadKey!));
         if (req.IsNewThread) fields.Add(new("subject", req.Subject!));
         fields.Add(new("submit", req.IsNewThread ? "新規スレッド作成" : "書き込む"));
-        return new PostSubmission(new Uri(endpoint), fields, TextEncoding, "Shift_JIS", req.Board.Url);
+        return new PostSubmission(new Uri(endpoint), fields, encoding, "Shift_JIS", referer);
     }
 
     /// <summary>HTML 全文から PostOutcome を推定する。判定は 5ch サーバの定文言マッチで、誤判定の可能性ありなので

@@ -18,6 +18,7 @@ public static class BbsRegistry
         new ShitarabaProvider(),
         new MachiProvider(),
         new EddiProvider(),
+        new KenmoProvider(),
         new RedditProvider(),
         new FourChanProvider(),
         new FutabaProvider(),

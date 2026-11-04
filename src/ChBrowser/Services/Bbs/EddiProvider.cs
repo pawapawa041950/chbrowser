@@ -183,27 +183,11 @@ public sealed class EddiProvider : IBbsProvider
     /// <see cref="PostRequest.AuthToken"/> があればメール欄を <c>mail#トークン</c> にする (サーバは '#' 以降を認証トークンとして読み、表示には残さない)。</summary>
     public PostSubmission BuildPostSubmission(PostRequest req)
     {
-        var endpoint = PostEndpointUrl(req.Board)!;
-        var mail = req.Mail;
-        if (!string.IsNullOrWhiteSpace(req.AuthToken))
-            mail = $"{req.Mail}#{req.AuthToken.Trim()}";
-
-        var fields = new List<KeyValuePair<string, string>>
-        {
-            new("FROM",    req.Name),
-            new("mail",    mail),
-            new("MESSAGE", req.Message),
-            new("bbs",     req.Board.DirectoryName),
-            new("time",    PostResponseHtml.UnixNow()),
-        };
-        if (req.IsReply)     fields.Add(new("key",     req.ThreadKey!));
-        if (req.IsNewThread) fields.Add(new("subject", req.Subject!));
-        fields.Add(new("submit", req.IsNewThread ? "新規スレッド作成" : "書き込む"));
-
+        var mail = string.IsNullOrWhiteSpace(req.AuthToken) ? req.Mail : $"{req.Mail}#{req.AuthToken.Trim()}";
         var referer = req.IsReply
             ? ThreadUrl(req.Board.Host, req.Board.DirectoryName, req.ThreadKey!)
             : BoardUrl(req.Board.Host, req.Board.DirectoryName);
-        return new PostSubmission(new Uri(endpoint), fields, TextEncoding, "Shift_JIS", referer);
+        return FiveChProvider.BuildBbsCgiSubmission(req, PostEndpointUrl(req.Board)!, TextEncoding, referer, mail);
     }
 
     /// <summary>エラー種別が「規制・制限」に当たるもの (それ以外は未分類エラーとして文言をそのまま見せる)。</summary>

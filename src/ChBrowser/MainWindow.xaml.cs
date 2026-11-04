@@ -183,7 +183,7 @@ public partial class MainWindow : Window
         // 既存の掲示板のアクセスキー (以前の固定メニューと同じ)。無い掲示板はアクセスキー無し
         var keys = new Dictionary<string, (string Refresh, string Search)>(StringComparer.Ordinal)
         {
-            ["5ch"] = ("U", ""), ["machi"] = ("M", ""), ["eddi"] = ("E", ""), ["shitaraba"] = ("", "S"), ["reddit"] = ("", "R"),
+            ["5ch"] = ("U", ""), ["machi"] = ("M", ""), ["eddi"] = ("E", ""), ["kenmo"] = ("K", ""),["shitaraba"] = ("", "S"), ["reddit"] = ("", "R"),
         };
         string Label(string text, string key) => key.Length > 0 ? $"{text}(_{key})" : text;
 
