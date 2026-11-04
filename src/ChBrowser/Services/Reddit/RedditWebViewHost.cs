@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -44,6 +47,71 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
 
     public Task<BrowserFetchResult> FetchAsync(BrowserFetchRequest request, CancellationToken ct)
         => _dispatcher.InvokeAsync(() => FetchOnUiAsync(request, ct)).Task.Unwrap();
+
+    public Task<string> RenderListingAsync(string url, CancellationToken ct)
+        => _dispatcher.InvokeAsync(() => RenderListingOnUiAsync(url, ct)).Task.Unwrap();
+
+    /// <summary>投稿の要素の開始タグを集めるスクリプト。属性値は HTML として読めるよう &amp; " &lt; &gt; を実体参照にする。</summary>
+    private const string CollectPostsScript = """
+(() => {
+  const esc = v => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return Array.from(document.querySelectorAll('shreddit-post')).map(e =>
+    '<shreddit-post' + Array.from(e.attributes).map(a => ' ' + a.name + '="' + esc(a.value) + '"').join('') + '>').join('\n');
+})()
+""";
+
+    private async Task<string> RenderListingOnUiAsync(string url, CancellationToken ct)
+    {
+        await EnsureInitializedAsync().ConfigureAwait(true);
+        var wv = _webView!.CoreWebView2;
+        var perf = System.Diagnostics.Stopwatch.StartNew();
+        // 隠し窓は小さい (320x240) ので、表示中だけ普通の画面の大きさにする (狭いと一度に読み込まれる投稿が少ない)
+        var (w, h) = (_hostWindow!.Width, _hostWindow.Height);
+        _hostWindow.Width  = 1280;
+        _hostWindow.Height = 2000;
+        try
+        {
+            // 読み込みの完了 (画像等まで) は待たず、投稿が出たらすぐ読む
+            wv.Navigate(url);
+
+            async Task<int> Count()
+            {
+                var raw = await wv.ExecuteScriptAsync("document.querySelectorAll('shreddit-post').length").ConfigureAwait(true);
+                return int.TryParse(raw, out var n) ? n : 0;
+            }
+
+            // 最初の投稿が出るまで待つ (確認ページを挟むと遅れる)。最大 15 秒
+            var count = 0;
+            for (var i = 0; i < 60 && (count = await Count().ConfigureAwait(true)) == 0; i++)
+                await Task.Delay(250, ct).ConfigureAwait(true);
+
+            var json = await wv.ExecuteScriptAsync(CollectPostsScript).ConfigureAwait(true);
+            var sb   = new StringBuilder(JsonSerializer.Deserialize<string>(json) ?? "");
+
+            // 続きは、ページ内にある「続きの投稿」の部分読み込み (<faceplate-partial src="/svc/shreddit/community-more-posts/…">) を
+            // このページの上から直接取ってたどる (下へのスクロールで読ませるのは、隠し窓だと読み込まれたりされなかったりで不安定だった)
+            var srcJson = await wv.ExecuteScriptAsync(
+                "(() => { const p = Array.from(document.querySelectorAll('faceplate-partial[src*=\"more-posts\"]')).pop(); return p ? p.getAttribute('src') : null; })()")
+                .ConfigureAwait(true);
+            // 続きの場所は呼び出し側に返し、続きの取得は普通の要求として 1 ページずつ行わせる (届いた分から一覧に足せるように)
+            if (JsonSerializer.Deserialize<string?>(srcJson) is { Length: > 0 } next)
+                sb.Append("\n<faceplate-partial src=\"").Append(System.Net.WebUtility.HtmlEncode(next)).Append("\"></faceplate-partial>");
+
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[reddit] 一覧のページを表示して読み取り: {url} → 投稿 {count} 件, 続き {(srcJson == "null" ? "なし" : "あり")} ({perf.ElapsedMilliseconds}ms)");
+            return "<html><body>\n" + sb + "\n</body></html>";
+        }
+        finally
+        {
+            _hostWindow.Width  = w;
+            _hostWindow.Height = h;
+            // 表示したページのスクリプトを止め、fetch 用の robots.txt に戻す。表示中のページの読み込み完了の通知を
+            // robots.txt の完了と取り違えることがあるので、実際に robots.txt になるまで待つ (最大 3 秒)
+            await NavigateAsync(HomeUrl).ConfigureAwait(true);
+            for (var i = 0; i < 12 && await wv.ExecuteScriptAsync("location.pathname").ConfigureAwait(true) != "\"/robots.txt\""; i++)
+                await Task.Delay(250).ConfigureAwait(true);
+        }
+    }
 
     public Task ClearCookiesAsync()
         => _dispatcher.InvokeAsync(async () =>
@@ -219,6 +287,29 @@ public sealed class RedditWebViewHost : IBrowserFetcher, IDisposable
             await Probes("[robots.txt 上]").ConfigureAwait(true);
             await MoreChildren("[robots.txt 上]").ConfigureAwait(true);
             await HomeFeed("[robots.txt 上]").ConfigureAwait(true);
+
+            // 板のスレ一覧を HTML (板のページの <shreddit-post>) から読めるか (2026-11-04 から JSON の一覧がログイン中でも弾かれるため)
+            try
+            {
+                await Task.Delay(300, ct).ConfigureAwait(true);
+                var page = await FetchOnceOnUiAsync(new BrowserFetchRequest("GET", $"{O}/r/redditdev/", Array.Empty<KeyValuePair<string, string>>()), ct).ConfigureAwait(true);
+                var html = System.Text.Encoding.UTF8.GetString(page.Body);
+                var posts = System.Text.RegularExpressions.Regex.Matches(html, @"<shreddit-post\b").Count;
+                var more  = System.Text.RegularExpressions.Regex.Matches(html, @"/svc/shreddit/[^""'\s<>]{0,120}")
+                    .Select(x => System.Net.WebUtility.HtmlDecode(x.Value)).Where(u => u.Contains("more-posts", StringComparison.OrdinalIgnoreCase)
+                                                                                 || u.Contains("feed", StringComparison.OrdinalIgnoreCase))
+                    .Distinct().Take(3).ToList();
+                lines.Add($"[robots.txt 上] 板のスレ一覧 HTML /r/redditdev/: {page.Status} {page.Body.Length}B shreddit-post={posts} 続きの候補={(more.Count == 0 ? "なし" : string.Join(" | ", more))}");
+                if (sampleDir is not null && page.Status == 200)
+                {
+                    try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(sampleDir, "probe_board.html"), page.Body); }
+                    catch (System.IO.IOException) { }
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                lines.Add($"[robots.txt 上] 板のスレ一覧 HTML: 失敗 {ex.Message}");
+            }
 
             // 元の robots.txt に戻す (別ホストへの要求で隠しページが移っていることがある)
             await NavigateAsync(HomeUrl).ConfigureAwait(true);

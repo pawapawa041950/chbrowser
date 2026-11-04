@@ -51,6 +51,7 @@ public sealed partial class MainViewModel
 
         if (tab.IsBusy) return; // 二重 fetch ガード
 
+        var loaded = false;
         try
         {
             tab.IsBusy        = true;
@@ -109,6 +110,7 @@ public sealed partial class MainViewModel
             // 板一覧を持たない掲示板 (したらば / reddit) の板名は、ローカルの板情報 (_SETTING.TXT の BBS_TITLE) が唯一の出どころ
             // (「表示済み板」はそこから名前を読む)。アドレスバー以外 (検索結果など) から開いた板は未取得なので、ここで 1 回だけ取っておく。
             _ = EnsureBoardInfoCachedAsync(board);
+            loaded = true;
         }
         catch (Exception ex)
         {
@@ -118,6 +120,16 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsBusy = false;
+        }
+
+        // 1 ページが小さい掲示板 (reddit) は、表示した後に続きを読み足す (届いたページから一覧に足す)
+        var until = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).AutoLoadThreadListUntil;
+        for (var i = 0; i < 8 && loaded && until > 0 && !string.IsNullOrEmpty(tab.NextCursor); i++)
+        {
+            var before = tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread);
+            if (before >= until) break;
+            await LoadMoreThreadsAsync(tab).ConfigureAwait(true);
+            if (tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread) <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
         }
     }
 

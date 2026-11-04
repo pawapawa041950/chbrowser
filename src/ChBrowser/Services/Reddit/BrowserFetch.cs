@@ -43,6 +43,11 @@ public interface IBrowserFetcher
     /// 未ログインだと reddit は <c>me.json</c> も含めて「network security」で弾くので、「ログインが要る」のか
     /// 「ログイン中だが確認ページが出た」のかは応答からは見分けられない。Cookie の有無で見分ける。</summary>
     Task<bool?> HasLoginCookieAsync();
+
+    /// <summary>一覧のページ (<paramref name="url"/>) を隠しページで実際に表示し、スクリプトが読み込んだ投稿の要素
+    /// (<c>&lt;shreddit-post …&gt;</c> の開始タグ) と、続きの部分読み込み (<c>&lt;faceplate-partial src="…more-posts…"&gt;</c>) を並べた HTML を返す。
+    /// 板のページは HTML を取っても投稿が入っていない (表示してから読み込む) ため (2026-11-04)。</summary>
+    Task<string> RenderListingAsync(string url, CancellationToken ct);
 }
 
 /// <summary>ログイン窓を出す理由。</summary>

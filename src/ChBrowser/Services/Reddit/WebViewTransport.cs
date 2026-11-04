@@ -47,6 +47,8 @@ public sealed class WebViewTransport : IProviderTransport
 
     public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
+        if (request.Options.TryGetValue(RedditProvider.RenderListingOption, out var render) && render)
+            return await RenderListingAsync(request, ct).ConfigureAwait(false);
         var fetchReq = await ToFetchRequestAsync(request, ct).ConfigureAwait(false);
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -117,6 +119,39 @@ public sealed class WebViewTransport : IProviderTransport
                 : TimeSpan.FromSeconds(Math.Min(60, Math.Max(1, _failureBackoff.TotalSeconds * 2)));
             if (kind is Kind.Expired or Kind.Blocked) return LoginRequiredResponse(request, result);
             return ToHttpResponse(request, result);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>一覧のページを隠しページで表示して投稿を読み取る (<see cref="RedditProvider.RenderListingOption"/> 付きの要求)。
+    /// 他の要求と同じく直列・最小間隔を守る。投稿が 1 件も読めなければ失敗 (未ログイン / 確認ページ / ページの作りの変化)。</summary>
+    private async Task<HttpResponseMessage> RenderListingAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_auth.State.Kind == AuthStateKind.Unknown) await _auth.EnsureCheckedAsync(ct).ConfigureAwait(false);
+            var wait = _nextAllowed - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero) await WaitAsync(wait, ct).ConfigureAwait(false);
+            string html;
+            try
+            {
+                html = await _fetcher.RenderListingAsync(request.RequestUri!.AbsoluteUri, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                _nextAllowed = DateTimeOffset.UtcNow + MinInterval;
+            }
+            if (!html.Contains("<shreddit-post", StringComparison.Ordinal))
+                throw new HttpRequestException("reddit: 一覧のページを表示しましたが投稿が読み取れませんでした (ログイン切れ・確認ページ・ページの作りの変化の可能性)");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content        = new StringContent(html, System.Text.Encoding.UTF8, "text/html"),
+                RequestMessage = request,
+            };
         }
         finally
         {

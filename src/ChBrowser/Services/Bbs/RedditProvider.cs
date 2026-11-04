@@ -123,16 +123,38 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
 
     public string ThreadListUrl(Board board) => ThreadListUrl(board, ThreadListQuery.Default);
 
+    /// <summary>スレ一覧は板のページから読む: JSON の一覧 (<c>/r/板/hot.json</c> 等) は 2026-11-04 から www・old.reddit とも
+    /// ログイン中でも「network security」で弾かれる (普通のブラウザ・別回線でも同じ。ユーザ環境で確認)。
+    /// 板のページの HTML には投稿が入っていない (表示してからスクリプトが読み込む) ので、<see cref="PrepareRequest"/> で
+    /// <see cref="RenderListingOption"/> を付け、通信経路に隠しページで表示させて投稿を読み取らせる。
+    /// 続きのページは、ページ内の部分読み込み (<c>/svc/shreddit/community-more-posts/…</c>、<see cref="ThreadListPage.NextCursor"/> に入れて返す)
+    /// を普通の要求で取る (こちらは HTML に投稿が入っている)。</summary>
     public string ThreadListUrl(Board board, ThreadListQuery query)
     {
+        if (query.After is { Length: > 0 } after && after.StartsWith("/svc/", StringComparison.Ordinal)) return Origin + after;
         var sort = string.IsNullOrEmpty(query.Sort) ? ListingSortDefaults.For(this) ?? "hot" : query.Sort;
         var t = "";
         var colon = sort.IndexOf(':');
         if (colon > 0) { t = sort[(colon + 1)..]; sort = sort[..colon]; }
-        var sb = new StringBuilder($"{Origin}/r/{board.DirectoryName}/{sort}.json?limit=100&raw_json=1");
-        if (t.Length > 0) sb.Append("&t=").Append(Uri.EscapeDataString(t));
-        if (!string.IsNullOrEmpty(query.After)) sb.Append("&after=").Append(Uri.EscapeDataString(query.After));
+        var sb = new StringBuilder($"{Origin}/r/{board.DirectoryName}/{sort}/");
+        if (t.Length > 0) sb.Append("?t=").Append(Uri.EscapeDataString(t));
         return sb.ToString();
+    }
+
+    /// <summary>この要求は隠しページで表示して投稿を読み取る。通信経路 (WebViewTransport) が見る。</summary>
+    public static readonly HttpRequestOptionsKey<bool> RenderListingOption = new("chb.reddit.renderListing");
+
+    private static readonly System.Text.RegularExpressions.Regex ListingPagePathRegex =
+        new(@"^/r/[A-Za-z0-9_]+/(?:(?:hot|new|rising|top|best|controversial)/)?$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>板のページは 1 ページ 25 件前後なので、JSON の一覧の 1 ページ (100 件) 相当まで続きを読み足す。</summary>
+    public int AutoLoadThreadListUntil => 100;
+
+    /// <summary>板のスレ一覧のページ (<see cref="ThreadListUrl(Board, ThreadListQuery)"/>) なら、隠しページで表示して読み取る印を付ける。</summary>
+    public void PrepareRequest(HttpRequestMessage request)
+    {
+        if (request.RequestUri is { } u && u.Host.Equals(CanonicalHost, StringComparison.OrdinalIgnoreCase) && ListingPagePathRegex.IsMatch(u.AbsolutePath))
+            request.Options.Set(RenderListingOption, true);
     }
 
     public string ThreadFetchUrl(Board board, string threadKey)
@@ -162,6 +184,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     /// <summary>Listing (t3) → スレ一覧 1 ページ。数 = コメント数 + 1 (投稿本体の分。取得後の件数と比べるため)。</summary>
     public ThreadListPage ParseThreadListPage(byte[] bytes)
     {
+        if (LooksLikeHtml(bytes)) return ParseThreadListHtml(bytes);
         var items = new List<ThreadInfo>();
         string? after = null;
         if (!TryParse(bytes, out var doc)) return new ThreadListPage(items, null);
@@ -233,6 +256,46 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit] スレの状態 {keys.Count} 件 → {result.Count} 件 ({ThreadStatusUrls[s_threadStatusUrl].Split('?')[0]})");
         return result;
     }
+
+    private static bool LooksLikeHtml(byte[] bytes)
+    {
+        foreach (var b in bytes)
+        {
+            if (b is (byte)' ' or (byte)'\n' or (byte)'\r' or (byte)'\t' or 0xEF or 0xBB or 0xBF) continue;   // 空白・BOM
+            return b == (byte)'<';
+        }
+        return false;
+    }
+
+    /// <summary>表示して読み取った投稿の要素を並べた HTML (<see cref="RenderListingOption"/>)、または続きの部分読み込みの HTML → スレ一覧 1 ページ。
+    /// 続きは部分読み込みの URL (同じ投稿の要素が 1 ページ内に何度も出てくるので、スレは id で重複を除く)。
+    /// スレが 1 件も無いときは、作りの変化を調べられるよう中身を保存する。</summary>
+    private ThreadListPage ParseThreadListHtml(byte[] bytes)
+    {
+        var html  = Encoding.UTF8.GetString(bytes);
+        var list  = new List<ListedThread>();
+        var tags  = ParseShredditPosts(html, list, new HashSet<string>(StringComparer.Ordinal));
+        var items = list.Select((t, i) => t.Info with { Order = i + 1 }).ToList();
+        var m     = MorePostsSrcRegex.Match(html);
+        var next  = m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups["src"].Value) : null;
+        ChBrowser.Services.Logging.LogService.Instance.Write(
+            $"[reddit] スレ一覧 (HTML): {bytes.Length} bytes, shreddit-post={tags}, 一覧に出した件数={items.Count}, 続き={(next is null ? "なし" : "あり")}");
+        if (items.Count == 0)
+        {
+            try
+            {
+                var dir = System.IO.Path.Combine(new ChBrowser.Services.Storage.DataPaths().Root, "reddit.com");
+                System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "threadlist_page.html"), bytes);
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
+        }
+        return new ThreadListPage(items, next);
+    }
+
+    /// <summary>スレ一覧の続きの部分読み込み (例 <c>/svc/shreddit/community-more-posts/hot/?after=…&amp;name=…</c>)。続きの HTML の中にも次の分が書かれている。</summary>
+    private static readonly System.Text.RegularExpressions.Regex MorePostsSrcRegex =
+        new(@"src=""(?<src>/svc/shreddit/[^""]*more-posts[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>by_id の応答 (Listing t3) → スレの状態。レス数は <see cref="ParseThreadListPage"/> と同じ (コメント数 + 1)。</summary>
     public IReadOnlyList<ThreadStatus> ParseThreadStatuses(byte[] bytes)
@@ -330,9 +393,24 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         // (2026-10-22 ユーザ環境で確認)。ブラウザのホームに出る「おすすめ」は HTML (<shreddit-post>) にしか無い
         if (listingId == "forYou") return ProviderListingResult.OfThreads(await FetchHomeFeedHtmlAsync(http, ct, progress).ConfigureAwait(false));
 
+        // ホットなスレッドも HTML (r/popular のページ) から読む: JSON (/r/popular/hot.json) は 2026-11-04 から弾かれる (ThreadListUrl 参照)
+        if (listingId == "hot")
+        {
+            byte[] page;
+            using (var req = new HttpRequestMessage(HttpMethod.Get, $"{Origin}/r/popular/"))
+            {
+                PrepareRequest(req);   // 板のページと同じく、表示して読み取る
+                using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                page = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            }
+            var posts = new List<ListedThread>();
+            var tags  = ParseShredditPosts(Encoding.UTF8.GetString(page), posts, new HashSet<string>(StringComparer.Ordinal));
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[reddit listing] hot (HTML): {page.Length} bytes, shreddit-post={tags}, 一覧に出した件数={posts.Count}");
+            return ProviderListingResult.OfThreads(posts);
+        }
         var url = listingId switch
         {
-            "hot"       => $"{Origin}/r/popular/hot.json?limit=100&raw_json=1",
             "hotBoards" => $"{Origin}/subreddits/popular.json?limit=100&raw_json=1",
             _           => throw new NotSupportedException($"reddit には一覧「{listingId}」がありません。"),
         };
@@ -417,6 +495,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         new(@"(?<name>[\w-]+)=""(?<val>[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex NsfwAttrRegex =
         new(@"\snsfw(?=[\s>=/])", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex PinnedAttrRegex =
+        new(@"\s(?:stickied|pinned)(?=[\s>/]|="""")", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex HomeFeedNextRegex =
         new(@"src=""(?<src>/svc/shreddit/feeds/(?:interest-)?home-feed\?[^""]*)""", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex PermalinkRegex =
@@ -441,6 +521,7 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             var sub = pm.Groups["sub"].Value;
             var title = (attrs.GetValueOrDefault("post-title") ?? "").Replace('\n', ' ').Trim();
             if (attrs.ContainsKey("nsfw") || NsfwAttrRegex.IsMatch(tag.Value)) title = "[NSFW] " + title;   // 値の無い属性 (nsfw) もある
+            if (PinnedAttrRegex.IsMatch(tag.Value)) title = "📌 " + title;                                     // 板のページの固定投稿
             long? created = DateTimeOffset.TryParse(attrs.GetValueOrDefault("created-timestamp"), CultureInfo.InvariantCulture,
                                                     DateTimeStyles.AssumeUniversal, out var ts) ? ts.ToUnixTimeSeconds() : null;
             var comments = int.TryParse(attrs.GetValueOrDefault("comment-count"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var cc) ? cc : 0;
