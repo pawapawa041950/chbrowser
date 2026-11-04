@@ -51,6 +51,10 @@ public sealed partial class MainViewModel
 
         if (tab.IsBusy) return; // 二重 fetch ガード
 
+        // 1 ページ目が小さい掲示板 (reddit) は、表示した後に続きを読み足す。読み足し終わるまでは「読み足し中」にしておく
+        // (一覧を出し直すたびに最下部の「続きを取得する」が「取得中…」から戻らないように、1 ページ目を出すときから)
+        var autoPages = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).AutoLoadThreadListPages;
+        tab.IsAutoLoading = autoPages > 0;
         var loaded = false;
         try
         {
@@ -105,7 +109,7 @@ public sealed partial class MainViewModel
             tab.StatusMessage = droppedList.Count > 0
                 ? $"{board.BoardName}: {subjectThreads.Count} スレ (+ dat 落ち {droppedList.Count})"
                 : $"{board.BoardName}: {subjectThreads.Count} スレを表示"
-                  + (tab.NextCursor is not null ? " (右クリック → 続きを読み込む で次の 100 件)" : "");
+                  + (tab.NextCursor is not null && !tab.IsAutoLoading ? " (右クリック → 続きを読み込む で次の 100 件)" : "");
 
             // 板一覧を持たない掲示板 (したらば / reddit) の板名は、ローカルの板情報 (_SETTING.TXT の BBS_TITLE) が唯一の出どころ
             // (「表示済み板」はそこから名前を読む)。アドレスバー以外 (検索結果など) から開いた板は未取得なので、ここで 1 回だけ取っておく。
@@ -122,16 +126,12 @@ public sealed partial class MainViewModel
             tab.IsBusy = false;
         }
 
-        // 1 ページが小さい掲示板 (reddit) は、表示した後に続きを読み足す (届いたページから一覧に足す)
-        var until = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host).AutoLoadThreadListUntil;
-        if (!loaded || until <= 0) return;
+        if (!tab.IsAutoLoading) return;
         try
         {
-            tab.IsAutoLoading = true;
-            for (var i = 0; i < 8 && !string.IsNullOrEmpty(tab.NextCursor); i++)
+            for (var i = 0; loaded && i < autoPages && !string.IsNullOrEmpty(tab.NextCursor); i++)
             {
                 var before = tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread);
-                if (before >= until) break;
                 await LoadMoreThreadsAsync(tab).ConfigureAwait(true);
                 if (tab.Items.Count(it => it.Kind == ThreadListItemKind.Thread) <= before) break;   // 増えない (失敗 / 重複だけ) なら打ち切る
             }
@@ -139,6 +139,7 @@ public sealed partial class MainViewModel
         finally
         {
             tab.IsAutoLoading = false;
+            tab.ResendItems();   // 最下部を「取得中…」から「続きを取得する」(続きがあれば) に戻す
         }
     }
 
@@ -200,9 +201,9 @@ public sealed partial class MainViewModel
                 Favorites.CollectFavoriteThreadKeys()
                          .Where(k => k.Host == board.Host && k.Dir == board.DirectoryName)
                          .Select(k => k.Key));
+            tab.NextCursor    = page.NextCursor;   // 行と一緒に「続きを取得する」の有無を送るので先に
             tab.SetThreads(all, DateTimeOffset.UtcNow, states, favKeys);
-            tab.NextCursor    = page.NextCursor;
-            tab.Header        = $"{board.BoardName}{SortSuffix(tab)} ({all.Count})";
+            tab.Header       = $"{board.BoardName}{SortSuffix(tab)} ({all.Count})";
             tab.StatusMessage = $"{board.BoardName}: {added.Count} スレを追加 (合計 {all.Count})"
                                 + (page.NextCursor is null ? " — これ以上はありません" : "");
         }
@@ -210,6 +211,7 @@ public sealed partial class MainViewModel
         {
             tab.Header        = header;
             tab.StatusMessage = $"続きの取得に失敗: {ex.Message}";
+            tab.ResendItems();   // 一覧の最下部の「続きを取得する」を「取得中…」から戻す
         }
         finally
         {

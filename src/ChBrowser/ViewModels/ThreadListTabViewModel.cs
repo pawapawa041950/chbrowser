@@ -220,7 +220,7 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     {
         Items = items;
         if (string.IsNullOrEmpty(Html)) Html = ThreadListHtmlBuilder.BuildShell();
-        ItemsPush        = new ThreadListItemsMessage(_sentRows = BuildRows(items, now));
+        ItemsPush        = new ThreadListItemsMessage(_sentRows = BuildRows(items, now), hasMore: HasMore, moreBusy: IsAutoLoading);
         LogMarkUpdate    = null; // 新しい一覧を出したので保留中の差分はリセット
         FavoritedUpdate  = null;
         ItemsReplaced?.Invoke(this);
@@ -231,8 +231,11 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
     public void ResendItems()
     {
         if (Items.Count == 0 && ItemsPush is null) return;   // まだ一覧を出していない
-        ItemsPush = new ThreadListItemsMessage(_sentRows = BuildRows(Items, DateTimeOffset.UtcNow));
+        ItemsPush = new ThreadListItemsMessage(_sentRows = BuildRows(Items, DateTimeOffset.UtcNow), hasMore: HasMore, moreBusy: IsAutoLoading);
     }
+
+    /// <summary>一覧の最下部に「続きを取得する」を出すか (続きのページがある = <see cref="NextCursor"/> がある。reddit だけ)。</summary>
+    private bool HasMore => Board is not null && !string.IsNullOrEmpty(NextCursor);
 
     /// <summary>最後に送った行 (<see cref="SendChangedTitles"/> が差分を取るため)。</summary>
     private IReadOnlyList<ThreadListRow>? _sentRows;
@@ -326,14 +329,21 @@ public sealed partial class ThreadListTabViewModel : ObservableObject, IPaneTab
 }
 
 /// <summary>スレ一覧の行の送信。class (参照同一性) なので同じ内容でも毎回送られる。
-/// <see cref="Partial"/> = false なら全行 (<c>setItems</c>)、true なら一部の行の差し替え (<c>updateRows</c>)。</summary>
+/// <see cref="Partial"/> = false なら全行 (<c>setItems</c>)、true なら一部の行の差し替え (<c>updateRows</c>)。
+/// <see cref="HasMore"/> は全行のときだけ意味を持つ (一覧の最下部に「続きを取得する」を出すか)。</summary>
 public sealed class ThreadListItemsMessage
 {
     public IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> Rows { get; }
     public bool Partial { get; }
-    public ThreadListItemsMessage(IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> rows, bool partial = false)
+    public bool HasMore { get; }
+    /// <summary>続きを自動で読み足している最中 (最下部を「取得中…」にしておく)。</summary>
+    public bool MoreBusy { get; }
+    public ThreadListItemsMessage(IReadOnlyList<ChBrowser.Services.Render.ThreadListRow> rows, bool partial = false,
+                                  bool hasMore = false, bool moreBusy = false)
     {
-        Rows    = rows;
-        Partial = partial;
+        Rows     = rows;
+        Partial  = partial;
+        HasMore  = hasMore;
+        MoreBusy = moreBusy;
     }
 }

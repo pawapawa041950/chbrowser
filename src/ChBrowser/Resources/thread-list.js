@@ -10,7 +10,8 @@
 //   { type: 'threadListColumns', widths: { key: px }, hidden: [key], order: [key] } — 列幅のドラッグ / 見出しのドラッグでの並べ替え /
 //                                                                       見出しの右クリックで列を出し入れした (C# が保存して全スレ一覧へ setConfig)
 // C# → JS:
-//   { type: 'setItems', rows: [{ kind, key, host, dir, no, title, board, count, momentum, log, fav }, ...] } — 行の全体
+//   { type: 'setItems', rows: [{ kind, key, host, dir, no, title, board, count, momentum, log, fav }, ...], more: bool } — 行の全体
+//                                                                       (more = 最下部に「続きを取得する」を出す。押すと JS → C# の loadMoreThreads)
 //   { type: 'updateRows', rows: [...] }                                  — 一部の行の差し替え (スレタイ翻訳の途中経過。host + dir + key で行を特定)
 //   { type: 'updateLogMarks', value: { changes: [{key, state}, ...] } } — 増分マーク更新
 //   { type: 'setConfig', openOnSingleClick: bool, columns: { widths, hidden, order } } — クリック動作の設定、列幅・隠している列・並び順
@@ -486,6 +487,38 @@
         applyListSearch();
     }
 
+    /** 一覧の最下部の「続きを取得する」(続きのページがある掲示板 = reddit)。表の外に置くので並べ替え・絞り込みの対象にならない。
+     *  押すと「取得中…」にして C# へ loadMoreThreads を送る。次の setItems (取得できた / 失敗した) で出し直す。
+     *  busy = C# が続きを自動で読み足している最中 (読み足しの途中で一覧が出し直されても「取得中…」のままにする)。 */
+    var moreEl = null;
+    function setMore(more, busy) {
+        if (!more) { if (moreEl) { moreEl.remove(); moreEl = null; } return; }
+        if (!moreEl) {
+            // 既定の見た目。CSS はユーザーがディスク上で編集した版が優先される (古い版には無い) ので JS で足す。
+            // :where で詳細度 0 にしてあるので、thread-list.css に .load-more を書けばそちらが勝つ
+            if (!document.getElementById('load-more-style')) {
+                var st = document.createElement('style');
+                st.id = 'load-more-style';
+                st.textContent = ':where(.load-more){padding:8px;text-align:center;color:#0645ad;cursor:pointer;border-top:1px solid #e0e0e0;user-select:none}'
+                               + ':where(.load-more:hover){background:#f0f4ff;text-decoration:underline}'
+                               + ':where(.load-more.busy){color:#888;cursor:default;background:none;text-decoration:none}';
+                document.head.appendChild(st);
+            }
+            moreEl = document.createElement('div');
+            moreEl.className = 'load-more';
+            moreEl.addEventListener('click', function() {
+                if (moreEl.classList.contains('busy')) return;
+                moreEl.classList.add('busy');
+                moreEl.textContent = '取得中…';
+                window.chrome.webview.postMessage({ type: 'loadMoreThreads' });
+            });
+            var table = tbody.closest('table');
+            table.parentNode.insertBefore(moreEl, table.nextSibling);
+        }
+        moreEl.classList.toggle('busy', busy);
+        moreEl.textContent = busy ? '取得中…' : '続きを取得する';
+    }
+
     /** 一部の行だけ差し替える (行の組み立ては setItems と同じ rowHtml。選択中の印は引き継ぐ)。
      *  並べ替えはかけ直さない (スレタイの訳が入っただけで行が動くと読みにくい)。絞り込み中ならかけ直す。 */
     function updateRows(rows) {
@@ -540,6 +573,7 @@
                 });
             } else if (msg.type === 'setItems' && Array.isArray(msg.rows)) {
                 setItems(msg.rows);
+                setMore(!!msg.more, !!msg.moreBusy);
             } else if (msg.type === 'updateRows' && Array.isArray(msg.rows)) {
                 updateRows(msg.rows);
             } else if (msg.type === 'setConfig') {

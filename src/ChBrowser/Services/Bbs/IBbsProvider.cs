@@ -248,9 +248,9 @@ public interface IBbsProvider
     /// 既定は何もしない。ふたばはカタログの表示件数を Cookie で指定する。</summary>
     void PrepareRequest(HttpRequestMessage request) { }
 
-    /// <summary>スレ一覧を開いたとき、1 ページ目を表示した後に続きのページを自動で読み足す件数の目安 (0 = 読み足さない)。
-    /// 1 ページが小さい掲示板 (reddit の板のページは 25 件前後) 用。</summary>
-    int AutoLoadThreadListUntil => 0;
+    /// <summary>スレ一覧を開いたとき、1 ページ目を表示した後に続きのページを自動で読み足すページ数 (0 = 読み足さない)。
+    /// 1 ページ目が小さい掲示板 (reddit の板のページは表示直後の数件だけ) 用。それ以上は一覧の最下部の「続きを取得する」で読む。</summary>
+    int AutoLoadThreadListPages => 0;
 
     /// <summary>名前欄の「ワッチョイ」(<c>xxxx-yyyy</c>) を検出して一覧・装飾するか。5ch 系の慣習。
     /// reddit はユーザー名に <c>xxxx-xxxx</c> を含みうる (<c>Particular-Lemon-556</c>) ので false。</summary>

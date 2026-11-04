@@ -164,7 +164,7 @@ public static partial class WebView2Helper
     private static void OnThreadListItemsPushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not WebView2 wv || e.NewValue is not ChBrowser.ViewModels.ThreadListItemsMessage m) return;
-        var json = JsonSerializer.Serialize(new { type = m.Partial ? "updateRows" : "setItems", rows = m.Rows }, PostJsonOptions);
+        var json = JsonSerializer.Serialize(new { type = m.Partial ? "updateRows" : "setItems", rows = m.Rows, more = m.HasMore, moreBusy = m.MoreBusy }, PostJsonOptions);
         _ = PostJsonWhenReadyAsync(wv, json, NavScope.HtmlPane);
     }
 

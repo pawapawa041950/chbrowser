@@ -147,8 +147,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     private static readonly System.Text.RegularExpressions.Regex ListingPagePathRegex =
         new(@"^/r/[A-Za-z0-9_]+/(?:(?:hot|new|rising|top|best|controversial)/)?$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    /// <summary>板のページは 1 ページ 25 件前後なので、JSON の一覧の 1 ページ (100 件) 相当まで続きを読み足す。</summary>
-    public int AutoLoadThreadListUntil => 100;
+    /// <summary>板のページを表示した直後に読めるのは数件だけなので、続きを 1 ページ (25 件前後) だけ読み足す (2026-11-04 ユーザ要望)。</summary>
+    public int AutoLoadThreadListPages => 1;
 
     /// <summary>板のスレ一覧のページ (<see cref="ThreadListUrl(Board, ThreadListQuery)"/>) なら、隠しページで表示して読み取る印を付ける。</summary>
     public void PrepareRequest(HttpRequestMessage request)
