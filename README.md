@@ -1,6 +1,6 @@
 # ChBrowser
 
-Windows 用の掲示板ブラウザ (5ch.io / bbspink、したらば、まちBBS、エッヂ掲示板、ふたば、reddit、4chan に対応)。生成AIで作成した画像や動画の情報を表示できます。
+Windows 用の掲示板ブラウザ (5ch.io / bbspink、したらば、まちBBS、エッヂ掲示板、嫌儲.org、ふたば、reddit、4chan に対応)。生成AIで作成した画像や動画の情報を表示できます。
 
 本アプリ全編をClaude Code(コーディングAI)により作成しています。
 
@@ -28,7 +28,8 @@ Windows 用の掲示板ブラウザ (5ch.io / bbspink、したらば、まちBBS
   <a href="img/sample3.png"><img src="img/sample3.png" width="400"></a>
   </div>
 - **LLMを使った各種AI機能**
-  - **AI翻訳機能** LLMでスレや画像を翻訳することができる(redditなどで有用) 
+  - **AI翻訳機能** LLMでスレや画像を翻訳することができる(redditなどで有用)  
+    (下のサンプル画像はLLMをvLLMで動作させ、chbrowserからの同時接続数128で動作させています。llama.cppでは同時接続数をほとんど増やせず翻訳機能においては速度不足です。LLMは同時接続数を増やせるvLLMなどを使って動作させてください。モデルはgoogle/gemma-4-12B-it-qat-w4a16-ctがお勧めです)  
     <div align="center">
     <img src="img/translate-demo.webp" width="600">
     </div>
