@@ -387,6 +387,12 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [ObservableProperty]
     private long? _markPostNumber;
 
+    /// <summary>直近の取得でレスが来たか (新規取得、または差分取得で新着あり)。開いた / 差分取得したが新着が無ければ false。
+    /// タブ見出しの青丸を出すかどうか (<see cref="TabMarkState"/>) に使う。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TabMarkState))]
+    private bool _lastFetchHadPosts;
+
     /// <summary>差分のうち「前回の取得で取り切れなかった中間」(reddit) の最後のレス番号。null なら中間なし。
     /// 中間は <see cref="MarkPostNumber"/> からこの番号まで、それより後ろが新着。JS はラベルを
     /// 「以降 未取得だった分」と「以降新レス」の 2 本にする。<see cref="MarkPostNumber"/> と一緒に、それより先に書く。</summary>
@@ -424,7 +430,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     ///   Cached (青) = ログあり / 件数一致、Updated (緑) = 新着あり、Dropped (茶) = subject.txt から消えた。
     /// 初期は Cached (= dat 取得直後)。板の subject.txt 再取得時に MainViewModel が更新する。</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TabMarkState))]
     private LogMarkState _state = LogMarkState.Cached;
+
+    /// <summary>タブ見出しの丸に出す状態。<see cref="State"/> と同じだが、青 (Cached) は直近の取得でレスが来たとき
+    /// (新規取得 / 差分取得で新着あり、<see cref="LastFetchHadPosts"/>) だけ出し、開いた / 差分取得したが新着が無かったときは出さない。
+    /// スレ一覧の行の青 (ログあり) とは意味が違うので、行には使わない。</summary>
+    public LogMarkState TabMarkState
+        => State == LogMarkState.Cached && !LastFetchHadPosts ? LogMarkState.None : State;
 
     /// <summary>「自分の書き込み」としてマークされているレス番号集合。
     /// idx.json から復元 + post-no メニューの「自分の書き込み」トグルで増減する。

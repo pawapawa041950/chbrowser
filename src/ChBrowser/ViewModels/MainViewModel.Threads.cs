@@ -130,6 +130,7 @@ public sealed partial class MainViewModel
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[fetchDelta] {headerForStatus}: prevCount={prevCount}, result.Count={result.Posts.Count}");
 
+        tab.LastFetchHadPosts = result.Posts.Count > prevCount;   // タブの青丸 (新着が無ければ出さない)
         if (result.Posts.Count > prevCount)
         {
             var added = new List<Post>(result.Posts.Count - prevCount);
@@ -287,6 +288,7 @@ public sealed partial class MainViewModel
                     tab.StatusMessage = $"{info.Title}: {tab.Posts.Count} レス取得中...";
                 });
                 result = await _datClient.FetchStreamingAsync(board, info.Key, progress).ConfigureAwait(true);
+                tab.LastFetchHadPosts = result.Posts.Count > 0;   // 新規取得
                 tab.StatusMessage = $"{info.Title}: {result.Posts.Count} レス ({result.DatSize / 1024} KB)";
             }
             else

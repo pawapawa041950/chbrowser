@@ -674,6 +674,7 @@ public sealed partial class MainViewModel
             // 差分境界は dat 連番ベースの件数 (= FetchedPostCount) を使う。existing.Posts.Count は NG 透明化分を
             // 含まないので、これを境界にすると NG で消した件数ぶん既出レスが新着扱いで再 append される (= 二重表示)。
             var prevCount = existing.FetchedPostCount > 0 ? existing.FetchedPostCount : existing.Posts.Count;
+            existing.LastFetchHadPosts = result.Posts.Count > prevCount;   // タブの青丸 (新着が無ければ出さない)
             if (result.Posts.Count > prevCount)
             {
                 var added = new List<Post>(result.Posts.Count - prevCount);
@@ -721,6 +722,8 @@ public sealed partial class MainViewModel
             foreach (var (n, dir) in savedVotes) tab.MyVotes[n] = dir;
         }
         var prevFetchedCount = savedIndex?.LastFetchedPostCount ?? 0;
+        // タブの青丸: 新規取得 (前回分なし) か、前回より増えていればレスが来た
+        tab.LastFetchHadPosts = result.Posts.Count > prevFetchedCount;
 
         tab.IsFavorited = Favorites.IsThreadFavorited(board.Host, board.DirectoryName, info.Key);
         tab.State       = LogMarkState.Cached;

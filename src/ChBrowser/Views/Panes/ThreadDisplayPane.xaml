@@ -644,7 +644,7 @@
                                 ToolTip="閉じる" />
                         <!-- 状態の丸 + お気に入りの ★ (丸の手前) + 取得中の読み込みアイコン (最も手前)。スレ一覧の行と同じ見た目 -->
                         <ctrl:ThreadStateMark DockPanel.Dock="Left" Margin="1,0,3,0" VerticalAlignment="Center"
-                                              State="{Binding State}"
+                                              State="{Binding TabMarkState}"
                                               IsFavorited="{Binding IsFavorited}"
                                               IsBusy="{Binding IsBusy}" />
                         <!-- Header はタブ表示用に事前短縮されているので、ToolTip は元タイトルを保持する Title を使う。
