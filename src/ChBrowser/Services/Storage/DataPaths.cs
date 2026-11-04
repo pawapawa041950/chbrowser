@@ -136,6 +136,9 @@ public sealed class DataPaths
     /// <summary>同じ名前の板が別々のサーバにある、と見つけた記録 (<see cref="ChBrowser.Services.Bbs.BoardIdentity"/>)。</summary>
     public string BoardDuplicatesPath => Path.Combine(AppDir, "board_duplicates.json");
 
+    /// <summary>ユーザが追加した 5ch 互換の板 (<see cref="ChBrowser.Services.Bbs.UserBoardsProvider"/>)。</summary>
+    public string UserBoardsPath => Path.Combine(AppDir, "user_boards.json");
+
     public string SubjectTxtPath(string host, string directoryName)
         => Path.Combine(BoardDir(host, directoryName), "_subject.txt");
 
@@ -162,9 +165,11 @@ public sealed class DataPaths
     public string TranslationPath(string host, string directoryName, string threadKey)
         => Path.Combine(BoardDir(host, directoryName), threadKey + ".tr.json");
 
-    /// <summary>"hayabusa9.5ch.io" → "5ch.io"、"mercury.bbspink.com" → "bbspink.com"。</summary>
+    /// <summary>"hayabusa9.5ch.io" → "5ch.io"、"mercury.bbspink.com" → "bbspink.com"。
+    /// 掲示板が保存ルートを決めるホスト (<see cref="ChBrowser.Services.Bbs.IBbsProvider.StorageRootOf"/>、ユーザが追加した板) はそれに従う。</summary>
     public static string ExtractRootDomain(string host)
     {
+        if (ChBrowser.Services.Bbs.BbsRegistry.Resolve(host)?.StorageRootOf(host) is { Length: > 0 } root) return root;
         var parts = host.Split('.');
         return parts.Length >= 2 ? $"{parts[^2]}.{parts[^1]}" : host;
     }

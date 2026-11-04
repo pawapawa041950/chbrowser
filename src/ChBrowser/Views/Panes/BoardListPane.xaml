@@ -13,6 +13,8 @@
              BoardListWebView_WebMessageReceived が JS の contextMenu メッセージを受けて popup する。 -->
         <ContextMenu x:Key="BoardContextMenu" x:Shared="False">
             <MenuItem Header="お気に入りに追加" Click="AddBoardToFavorites_Click" />
+            <!-- ユーザが追加した 5ch 互換の板のときだけ出す (BoardListPane.ShowBoardContextMenu) -->
+            <MenuItem Tag="removeUserBoard" Header="追加した板から外す" Click="RemoveUserBoard_Click" />
         </ContextMenu>
     </UserControl.Resources>
 

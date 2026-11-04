@@ -85,6 +85,9 @@ public partial class BoardListPane : UserControl
     {
         if (TryFindResource("BoardContextMenu") is not ContextMenu menu) return;
         menu.Tag             = new BoardRef(host, directoryName, boardName);
+        var isUserBoard = ChBrowser.Services.Bbs.UserBoardsProvider.Instance.Contains(host, directoryName);
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            if (item.Tag as string == "removeUserBoard") item.Visibility = isUserBoard ? Visibility.Visible : Visibility.Collapsed;
         menu.PlacementTarget = BoardListWebView;
         menu.Placement       = PlacementMode.MousePoint;
         menu.IsOpen          = true;
@@ -98,5 +101,16 @@ public partial class BoardListPane : UserControl
                   ?? mi.Parent as ContextMenu;
         if (owner?.Tag is not BoardRef br) return;
         main.AddBoardToFavoritesByHostDir(br.Host, br.DirectoryName, br.BoardName);
+    }
+
+    /// <summary>「追加した板から外す」(ログは残す)。</summary>
+    private void RemoveUserBoard_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel main || sender is not MenuItem mi) return;
+        var owner = ItemsControl.ItemsControlFromItemContainer(mi) as ContextMenu ?? mi.Parent as ContextMenu;
+        if (owner?.Tag is not BoardRef br) return;
+        if (MessageBox.Show(Window.GetWindow(this)!, $"板「{br.BoardName}」を追加した板から外しますか？\n(取得済みのログは残ります。同じ URL をまた追加すれば元どおり読めます)",
+                "追加した板から外す", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        main.RemoveUserBoard(br.Host, br.DirectoryName, br.BoardName);
     }
 }

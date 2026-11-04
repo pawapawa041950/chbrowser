@@ -167,6 +167,14 @@ public interface IBbsProvider
     /// 主の板一覧 <paramref name="main"/> に無い板を足した板一覧を返す。既定はそのまま。</summary>
     IReadOnlyList<BoardCategory> MergeExtraBoardList(IReadOnlyList<BoardCategory> main, int index, byte[] bytes) => main;
 
+    /// <summary>板一覧をネットワークからではなく手元の一覧から出す掲示板 (ユーザが追加した板) の板一覧。既定は null (= <see cref="BoardListUrl"/> から取る)。
+    /// null 以外なら板一覧の「取得」も「保存分の読み込み」もこれを返す (メニューの「板一覧更新」も出さない)。</summary>
+    IReadOnlyList<BoardCategory>? LocalBoardList => null;
+
+    /// <summary>ホストのログを置く保存ルート (<c>data/&lt;root&gt;/</c>)。既定は null (= ホストの末尾 2 つ: <c>hayabusa9.5ch.io</c> → <c>5ch.io</c>)。
+    /// 末尾 2 つでは別のサイトが同じ場所になりうる掲示板 (ユーザが追加した任意のホスト。<c>bbs.example.co.jp</c> → <c>co.jp</c>) はホストそのものを返す。</summary>
+    string? StorageRootOf(string host) => null;
+
     /// <summary>前もって分かっている「同じ名前の板が別々のサーバにある」板名 → 主のサーバ (<c>may</c> 等)。
     /// 板一覧を読む前 (アドレスバーから開いた等) でも板を取り違えないための初期値。既定は無し (板一覧から自動で見つける。<see cref="BoardIdentity"/>)。</summary>
     IReadOnlyDictionary<string, string> KnownDuplicateBoards => EmptyDuplicates;

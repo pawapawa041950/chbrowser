@@ -22,6 +22,7 @@ public static class BbsRegistry
         new RedditProvider(),
         new FourChanProvider(),
         new FutabaProvider(),
+        UserBoardsProvider.Instance,   // ユーザが追加した 5ch 互換の板。既存の掲示板のホストは既存の掲示板が持つよう最後に置く
     };
 
     /// <summary>5ch / bbspink の提供者。ホストが解決できない場面の既定 (= 現行動作の維持) に使う。</summary>

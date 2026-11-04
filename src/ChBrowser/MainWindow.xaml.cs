@@ -189,7 +189,8 @@ public partial class MainWindow : Window
 
         BoardMenu.Items.Clear();
         var providers = ChBrowser.Services.Bbs.BbsRegistry.All;
-        foreach (var p in providers.Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0))
+        // 手元の一覧から出す掲示板 (追加した板) には「板一覧更新」が無い
+        foreach (var p in providers.Where(p => (p.Capabilities & ChBrowser.Services.Bbs.BbsCapabilities.BoardList) != 0 && p.LocalBoardList is null))
         {
             var item = new MenuItem { Header = Label($"{p.DisplayName}板一覧更新", keys.TryGetValue(p.Id, out var k) ? k.Refresh : ""), CommandParameter = p.Id };
             item.SetBinding(MenuItem.CommandProperty, new System.Windows.Data.Binding(nameof(MainViewModel.RefreshBoardListOfCommand)));
@@ -203,6 +204,18 @@ public partial class MainWindow : Window
             item.Click += MenuBoardSearch_Click;
             BoardMenu.Items.Add(item);
         }
+
+        // 5ch 互換の板をユーザが追加する (どの掲示板のものでもないホストの板)
+        BoardMenu.Items.Add(new Separator());
+        var addBoard = new MenuItem { Header = "板を追加(_A)..." };
+        addBoard.Click += MenuAddUserBoard_Click;
+        BoardMenu.Items.Add(addBoard);
+    }
+
+    /// <summary>メニュー「板一覧 → 板を追加…」。</summary>
+    private async void MenuAddUserBoard_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm) await vm.PromptAddUserBoardAsync(this);
     }
 
     /// <summary>メニュー「板一覧 → ○○板の検索」。Tag の提供者 Id で、板一覧ペインの「🔍 検索」と同じ処理を呼ぶ。</summary>

@@ -509,7 +509,15 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                 await OpenThreadByUrlAsync(target.Host, target.Directory, target.ThreadKey, target.PostNumber, target.PostId).ConfigureAwait(true);
                 break;
             default:
+                // どの掲示板のものでもないホストの 5ch 形式の URL: 板を追加するか聞き、追加したら開き直す
+                var added = await OfferAddUserBoardAsync(input).ConfigureAwait(true);
+                if (added == true)
+                {
+                    await NavigateAddressBarAsync(input).ConfigureAwait(true);
+                    break;
+                }
                 AddressBarHasError = true;
+                if (added == false) break;   // 追加を試みて失敗した (理由はステータスに出ている)
                 StatusMessage = "認識できない URL です (対応掲示板: "
                               + string.Join(" / ", ChBrowser.Services.Bbs.BbsRegistry.All.Select(pv => pv.DisplayName))
                               + " の板 / スレ URL を入力してください)";

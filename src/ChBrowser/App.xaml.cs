@@ -141,6 +141,8 @@ public partial class App : Application
         _paths           = paths;
         // 同じ名前の板が別々のサーバにある、と見つけた記録 (板の保存場所・同じ板かの判定に使う)
         ChBrowser.Services.Bbs.BoardIdentity.Initialize(paths.BoardDuplicatesPath);
+        // ユーザが追加した 5ch 互換の板 (ホストの解決・保存場所に使うので、板やスレを扱う前に読む)
+        ChBrowser.Services.Bbs.UserBoardsProvider.Instance.Initialize(paths.UserBoardsPath);
         _configStorage   = new ConfigStorage(paths);
         _currentConfig   = _configStorage.Load();
 

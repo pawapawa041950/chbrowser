@@ -40,6 +40,7 @@ public sealed class BbsmenuClient
     /// 板一覧を持たない提供者は空配列。</summary>
     public async Task<IReadOnlyList<BoardCategory>> FetchAndSaveAsync(ChBrowser.Services.Bbs.IBbsProvider provider, CancellationToken ct = default)
     {
+        if (provider.LocalBoardList is { } local) return local;   // 手元の一覧から出す掲示板 (ユーザが追加した板)
         var url = provider.BoardListUrl;
         if (string.IsNullOrEmpty(url)) return Array.Empty<BoardCategory>();
 
@@ -72,6 +73,7 @@ public sealed class BbsmenuClient
     /// <summary>提供者の板一覧をローカル保存分からパースする。未取得なら空配列。</summary>
     public async Task<IReadOnlyList<BoardCategory>> LoadFromDiskAsync(ChBrowser.Services.Bbs.IBbsProvider provider, CancellationToken ct = default)
     {
+        if (provider.LocalBoardList is { } local) return local;
         if (string.IsNullOrEmpty(provider.BoardListUrl)) return Array.Empty<BoardCategory>();
         var path = CachePath(provider);
         if (!File.Exists(path)) return Array.Empty<BoardCategory>();
