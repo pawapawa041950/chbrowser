@@ -402,7 +402,16 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    var LOG_CLASS = { 1: 'has-log', 2: 'has-update', 3: 'has-dropped', 4: 'has-replied-to-own' };
+    /** 状態マーク (LogMarkState) → 行のクラス。添字が状態の番号 (setItems の r.log / 並べ替え用の data-log)。 */
+    var LOG_CLASSES = [null, 'has-log', 'has-update', 'has-dropped', 'has-replied-to-own'];
+    /** 増分更新 (updateLogMarks) の状態名 (enum の camelCase) → 番号。 */
+    var LOG_STATE_NO = { none: 0, cached: 1, updated: 2, dropped: 3, repliedToOwn: 4 };
+    function logClassOf(no) { return LOG_CLASSES[no] || ''; }
+    function applyLogState(tr, no) {
+        LOG_CLASSES.forEach(function(c) { if (c) tr.classList.remove(c); });
+        if (LOG_CLASSES[no]) tr.classList.add(LOG_CLASSES[no]);
+        tr.dataset.log = String(no);
+    }
 
     function pad2(n) { return n < 10 ? '0' + n : '' + n; }
     /** スレ建て日時 (Unix 秒) → ローカル時刻の「yyyy/MM/dd HH:mm」。不明 (0) なら空。 */
@@ -436,7 +445,7 @@
                        momentum: '<td class="col-momentum"></td>',
                    }) + '</tr>';
         }
-        var cls = (LOG_CLASS[r.log] ? LOG_CLASS[r.log] + ' ' : '') + (r.fav ? 'is-favorited ' : '');
+        var cls = (logClassOf(r.log) + (r.fav ? ' is-favorited' : '')).trim();
         var m = esc(r.momentum || '0');
         // AI 翻訳で表示しているスレタイ: セルは訳、マウスを乗せると原文。絞り込みは訳・原文の両方に当てる (data-orig)
         var orig = r.orig ? esc(r.orig) : '';
@@ -537,39 +546,28 @@
     }
 
     // C# からの増分通知 (LogMarkUpdate / setConfig) を受信
+    /** 増分更新の対象行。集約タブ (全ログ / お気に入り板として開く) では同じ key が異なる板に存在しうるので、
+     *  host + dir + key の 3 つで一意な行を特定する。 */
+    function findThreadRow(change) {
+        return tbody.querySelector('tr[data-host="' + CSS.escape(change.host || '') + '"]'
+                                 + '[data-dir="'  + CSS.escape(change.directoryName || '') + '"]'
+                                 + '[data-key="'  + CSS.escape(change.key || '') + '"]');
+    }
+
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.addEventListener('message', function(e) {
             var msg = e.data;
             if (!msg || !msg.type) return;
             if (msg.type === 'updateLogMarks' && msg.value) {
-                var changes = msg.value.changes || [];
-                changes.forEach(function(change) {
-                    // 集約タブ (全ログ / お気に入り板として開く) では同じ key が異なる板に存在しうるので、
-                    // host + dir + key の 3 つで一意な行を特定する。
-                    var sel = 'tr[data-host="' + change.host + '"]'
-                            + '[data-dir="'  + change.directoryName + '"]'
-                            + '[data-key="'  + change.key + '"]';
-                    var tr = tbody.querySelector(sel);
-                    if (!tr) return;
-                    tr.classList.remove('has-log', 'has-update', 'has-dropped', 'has-replied-to-own');
-                    var sortVal = 0;
-                    if      (change.state === 'cached')        { tr.classList.add('has-log');             sortVal = 1; }
-                    else if (change.state === 'updated')       { tr.classList.add('has-update');          sortVal = 2; }
-                    else if (change.state === 'dropped')       { tr.classList.add('has-dropped');         sortVal = 3; }
-                    else if (change.state === 'repliedToOwn')  { tr.classList.add('has-replied-to-own');  sortVal = 4; }
-                    tr.dataset.log = String(sortVal);
+                (msg.value.changes || []).forEach(function(change) {
+                    var tr = findThreadRow(change);
+                    if (tr) applyLogState(tr, LOG_STATE_NO[change.state] || 0);
                 });
             } else if (msg.type === 'updateFavorited' && msg.value) {
-                // お気に入り増分更新: 行の is-favorited クラスを toggle (★ 背景表示)。
-                var fchanges = msg.value.changes || [];
-                fchanges.forEach(function(change) {
-                    var sel = 'tr[data-host="' + change.host + '"]'
-                            + '[data-dir="'  + change.directoryName + '"]'
-                            + '[data-key="'  + change.key + '"]';
-                    var tr = tbody.querySelector(sel);
-                    if (!tr) return;
-                    if (change.isFavorited) tr.classList.add('is-favorited');
-                    else                    tr.classList.remove('is-favorited');
+                // お気に入り増分更新: 行の is-favorited クラスを toggle (状態の丸の手前に ☆)。
+                (msg.value.changes || []).forEach(function(change) {
+                    var tr = findThreadRow(change);
+                    if (tr) tr.classList.toggle('is-favorited', !!change.isFavorited);
                 });
             } else if (msg.type === 'setItems' && Array.isArray(msg.rows)) {
                 setItems(msg.rows);

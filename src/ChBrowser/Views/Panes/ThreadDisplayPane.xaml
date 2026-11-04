@@ -5,7 +5,6 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="clr-namespace:ChBrowser.ViewModels"
              xmlns:ctrl="clr-namespace:ChBrowser.Controls"
-             xmlns:conv="clr-namespace:ChBrowser.Converters"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:ThreadPaneGroupViewModel}"
@@ -13,7 +12,6 @@
              PreviewMouseLeftButtonDown="Pane_PreviewMouseLeftButtonDown">
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
-        <conv:LogMarkStateToBrushConverter x:Key="LogMarkBrush" />
 
         <!-- スレ表示タブ右クリックメニュー (Phase 21)。 -->
         <ContextMenu x:Key="ThreadTabContextMenu" x:Shared="False"
@@ -644,29 +642,11 @@
                                 BorderThickness="0"
                                 Cursor="Hand"
                                 ToolTip="閉じる" />
-                        <Grid DockPanel.Dock="Left" Width="14" Height="14" Margin="2,0,4,0" VerticalAlignment="Center">
-                            <TextBlock Text="★" FontSize="14" Foreground="#B3E6B800"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Visibility="{Binding IsFavorited, Converter={StaticResource BoolToVis}}" />
-                            <!-- 状態の丸。取得中 (IsBusy) は下の読み込みアイコンに置き換える -->
-                            <Ellipse Width="8" Height="8"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                                     Fill="{Binding State, Converter={StaticResource LogMarkBrush}}">
-                                <Ellipse.Style>
-                                    <Style TargetType="Ellipse">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Ellipse.Style>
-                            </Ellipse>
-                            <!-- 読み込みアイコン (取得中だけ表示され、見えている間回る) -->
-                            <ctrl:BusySpinner HorizontalAlignment="Center" VerticalAlignment="Center"
-                                              ToolTip="取得中"
-                                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
-                        </Grid>
+                        <!-- 状態の丸 + お気に入りの ★ (丸の手前) + 取得中の読み込みアイコン (最も手前)。スレ一覧の行と同じ見た目 -->
+                        <ctrl:ThreadStateMark DockPanel.Dock="Left" Margin="1,0,3,0" VerticalAlignment="Center"
+                                              State="{Binding State}"
+                                              IsFavorited="{Binding IsFavorited}"
+                                              IsBusy="{Binding IsBusy}" />
                         <!-- Header はタブ表示用に事前短縮されているので、ToolTip は元タイトルを保持する Title を使う。
                              絵文字をカラー表示するため DirectWrite/Direct2D 描画の ColorEmojiTextBlock を使用
                              (絵文字フォントは設定 Noto/Segoe に追従)。 -->

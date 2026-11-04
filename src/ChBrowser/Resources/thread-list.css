@@ -17,7 +17,7 @@ thead th {
     border-bottom: 1px solid #ccc;
     position: sticky;
     top: 0;
-    /* tbody 側の .log-mark / お気に入り ★ も z-index を持つので、それより明確に上に積む。
+    /* tbody 側の .log-mark (と手前の ★) も z-index を持つので、それより明確に上に積む。
      * 同値だと document 順で tbody が後にあって貫通する。 */
     z-index: 10;
     font-weight: 600;
@@ -77,10 +77,6 @@ td.col-title mark.search-highlight {
 }
 
 .col-log      { text-align: center; width: 26px; padding: 2px 0; }
-/* ★ 印 (.is-favorited 行) の absolute 配置用に td 側だけ relative にする。
-   thead th.col-log まで relative にすると thead の sticky が殺されて
-   ヘッダ行の col-log だけ縦スクロール時に追従しなくなる。 */
-tbody td.col-log { position: relative; }
 .col-no       { text-align: right;  width: 40px; }
 .col-board    { width: 140px; color: #555; }
 .col-count    { text-align: right;  width: 50px; }
@@ -119,10 +115,12 @@ thead th.col-dragging { opacity: 0.45; }
 .col-menu-item.disabled { color: #999; }
 .col-menu-item.disabled:hover { background: transparent; }
 
+/* 状態マーク: 状態の丸の手前にお気に入りの ★ を重ねる。
+   スレ表示ペインのタブ (Controls/ThreadStateMark.cs) と大きさ・色・重ね順を揃えている。 */
 .log-mark {
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: transparent;
     vertical-align: middle;
@@ -134,17 +132,17 @@ tr.has-update  .log-mark { background: #2e7d32; }   /* 緑: ログあり / 新�
 tr.has-dropped .log-mark { background: #8d6e63; }   /* 茶: お気に入り表示で subject.txt から消えたスレ */
 tr.has-replied-to-own .log-mark { background: #e53935; } /* 赤: 自分の書き込みへの返信あり (= 上記より優先) */
 
-/* お気に入り済みスレ: 状態マーク背景に薄い ★ を重ねる */
-tr.is-favorited .col-log::before {
+/* お気に入り済みスレ: 丸の手前に ★ (丸より少し小さくし、周りに丸の色が見えるようにする)。白い縁取りで丸の色と分ける */
+tr.is-favorited .log-mark::after {
     content: '\2605';   /* ★ */
     position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(230, 184, 0, 0.7);
-    font-size: 16px;
-    z-index: 0;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    color: #e6b800;
+    font-size: 13px;
+    line-height: 1;
+    text-shadow: 0 0 1px #fff, 0 0 1px #fff;
     pointer-events: none;
 }
 
