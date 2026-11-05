@@ -466,14 +466,17 @@ public sealed partial class MainViewModel
         var threadsByBoard = threads.GroupBy(ft => (ft.Host, ft.DirectoryName)).ToDictionary(g => g.Key, g => g.ToList());
         var toDropped   = new List<(Board board, ThreadInfo info)>();   // UI スレッドでだけ触る
         var totalBoards = resolved.Count;
-        int subjDone = 0, found = 0, datDone = 0, opened = 0;
+        // found = 新着のあったスレ (完了時の「更新 N 件」)、targets = 取得するスレ (新着の分と、一覧に無いので取って確かめる分)
+        int subjDone = 0, found = 0, targets = 0, datDone = 0, opened = 0;
         using var openLock = new SemaphoreSlim(1, 1);
-        void Report() => StatusMessage = found == 0
+        void Report() => StatusMessage = targets == 0
             ? $"お気に入りチェック: 一覧 {subjDone}/{totalBoards}"
-            : $"お気に入りチェック: 一覧 {subjDone}/{totalBoards}、更新スレ 取得 {datDone}/{found} (表示 {opened})";
+            : $"お気に入りチェック: 一覧 {subjDone}/{totalBoards}、スレ 取得 {datDone}/{targets} (更新 {found}、表示 {opened})";
         Report();
 
-        async Task FetchAndOpenAsync(Board board, ThreadInfo info)
+        // onlyIfNew: レス数が分からないまま取ったスレ (一覧に無い reddit のスレ)。前回取得したレス数より増えたときだけ開いて「更新」に数える。
+        // 増えていなければ、開いているタブは状態だけ更新し、開いていなければタブを出さない
+        async Task FetchAndOpenAsync(Board board, ThreadInfo info, bool onlyIfNew = false)
         {
             DatFetchResult? result = null;
             Exception? error = null;
@@ -514,6 +517,21 @@ public sealed partial class MainViewModel
                         // 取得で「スレが無い」(404) と分かった: dat 落ちとして出す
                         if (error is not null && DatFetchResult.IsDroppedError(error)) toDropped.Add((board, info));
                         return;
+                    }
+                    if (onlyIfNew && !result.Dropped)
+                    {
+                        var prev = _threadIndex.Load(board.Host, board.DirectoryName, info.Key)?.LastFetchedPostCount ?? 0;
+                        if (result.Posts.Count <= prev)
+                        {
+                            if (FindThreadTab(board, info.Key) is not null)
+                            {
+                                try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
+                                catch (Exception ex) { Debug.WriteLine($"[Favorites] update tab failed: {ex.Message}"); }
+                            }
+                            else SaveFetchedPostCount(board, info.Key, result.Posts.Count);
+                            return;
+                        }
+                        found++;
                     }
                     try { await OpenThreadFromPrefetchedAsync(board, info, result, activate: false).ConfigureAwait(true); }
                     catch (Exception ex) { Debug.WriteLine($"[Favorites] open prefetched failed: {ex.Message}"); }
@@ -576,24 +594,19 @@ public sealed partial class MainViewModel
                     }
                     if (HasNew(ft, info)) list.Add(info);
                 }
-                found += list.Count;
+                found   += list.Count;
+                targets += list.Count;
+                // 一覧に載っていないスレ (reddit で上位から外れたスレ): 掲示板が望めば 1 件ずつ取りに行く (レス数が分からないので取って確かめる)
+                if (!provider.ChecksUnlistedFavoritesOneByOne) missing.Clear();
+                targets += missing.Count;
                 Report();
                 return (list, missing);
             });
 
-            // 一覧に載っていないスレ (reddit で上位から外れたスレ): 掲示板が望めば 1 件ずつスレを取りに行く (新着の有無はレス数が分からないので取って確かめる)
-            if (unlisted.Count > 0 && provider.ChecksUnlistedFavoritesOneByOne)
-            {
-                var more = await dispatcher.InvokeAsync(() =>
-                {
-                    var list = unlisted.Select(ft => new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0)).ToList();
-                    found += list.Count;
-                    Report();
-                    return list;
-                });
-                opens.AddRange(more);
-            }
-            await Task.WhenAll(opens.Select(info => FetchAndOpenAsync(board, info))).ConfigureAwait(false);
+            await Task.WhenAll(
+                opens.Select(info => FetchAndOpenAsync(board, info))
+                     .Concat(unlisted.Select(ft => FetchAndOpenAsync(board, new ThreadInfo(ft.ThreadKey, ft.Title, 0, 0), onlyIfNew: true))))
+                .ConfigureAwait(false);
         }
 
         await Task.WhenAll(resolved.Select(kv => CheckBoardAsync(kv.Key, kv.Value))).ConfigureAwait(true);
