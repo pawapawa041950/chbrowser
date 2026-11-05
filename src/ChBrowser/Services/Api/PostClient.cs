@@ -58,6 +58,16 @@ public sealed class PostClient
         _cookieJars = cookieJars;
     }
 
+    /// <summary>送る直前の本文の整え (掲示板ごとの設定 <see cref="BbsHostSettings"/> による。全掲示板共通)。
+    /// 書き込み記録 (kakikomi.txt) には入力したままの本文を残すので、送る分にだけ使う。</summary>
+    private static PostRequest ForSending(PostRequest request)
+    {
+        var settings = BbsHostSettings.For(request.Board.Host);
+        if (settings.MarkdownHardLineBreaks && !string.IsNullOrEmpty(request.Message))
+            request = request with { Message = MarkdownLineBreaks.ToHardBreaks(request.Message) };
+        return request;
+    }
+
     /// <summary>1 件の投稿を実行して結果を返す。どんぐりを使う提供者では CookieJar/state.json を終了時に必ず保存。</summary>
     public async Task<PostResult> PostAsync(PostRequest request, CancellationToken ct = default)
     {
@@ -69,7 +79,7 @@ public sealed class PostClient
         if (provider is IBrowserPostProvider browserProvider)
         {
             if (BrowserPoster is null) throw new InvalidOperationException("ブラウザの投稿窓を使えません。");
-            var result = await BrowserPoster.PostAsync(browserProvider, request, ct).ConfigureAwait(false);
+            var result = await BrowserPoster.PostAsync(browserProvider, ForSending(request), ct).ConfigureAwait(false);
             if (result.Outcome == PostOutcome.Success) AppendKakikomi(request);
             return result;
         }
@@ -85,7 +95,7 @@ public sealed class PostClient
             request = request with { AuthToken = null };
         }
 
-        var sub         = provider.BuildPostSubmission(request);
+        var sub         = provider.BuildPostSubmission(ForSending(request));
         var uri         = sub.Endpoint;
         var useDonguri  = provider.PostForm.UsesDonguriAuth;
         var authMode    = useDonguri ? request.AuthMode : PostAuthMode.None;

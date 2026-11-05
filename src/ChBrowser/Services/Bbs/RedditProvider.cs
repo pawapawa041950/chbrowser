@@ -961,6 +961,10 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         SupportsName: false, SupportsMail: false, SupportsNewThread: true, UsesDonguriAuth: false,
         BodyFormat: PostBodyFormat.Markdown, RequiresLogin: true, SupportsReplyTarget: true);
 
+    /// <summary>書き込みの単発の改行を強制改行 (行末スペース 2 個) にする。reddit は本文を Markdown で表示し、
+    /// 単発の改行はスペースになるため (公式の書き込み欄の Shift+Enter と同じ形にそろえる)。</summary>
+    public BbsHostSettings DefaultHostSettings { get; } = new(MarkdownHardLineBreaks: true);
+
     /// <summary>レス: <c>/api/comment</c> (<c>thing_id</c> = 返信先。コメント id か、スレ本体なら <c>t3_&lt;key&gt;</c>)。
     /// スレ立て: <c>/api/submit</c> (テキスト投稿 <c>kind=self</c>)。本文は Markdown のまま送る。UTF-8 のフォーム。</summary>
     public PostSubmission BuildPostSubmission(PostRequest req)

@@ -209,6 +209,10 @@ public interface IBbsProvider
     /// <summary>投稿フォームで使える項目 (投稿ダイアログの UI 出し分け用)。</summary>
     PostFormSpec PostForm { get; }
 
+    /// <summary>この掲示板の、掲示板ごとに切り替えられる設定の既定値 (<see cref="BbsHostSettings"/>)。
+    /// 実際に使う値は <see cref="BbsHostSettings.For"/> で引く (将来は <c>data/&lt;host&gt;/setting.toml</c> の値をこの上に重ねる)。</summary>
+    BbsHostSettings DefaultHostSettings => BbsHostSettings.Default;
+
     /// <summary>1 段目 POST の内容を組み立てる (エンドポイント / フィールド / エンコーディング / Referer)。
     /// <see cref="BbsCapabilities.Posting"/> が無ければ <see cref="NotSupportedException"/>。</summary>
     PostSubmission BuildPostSubmission(PostRequest request);
