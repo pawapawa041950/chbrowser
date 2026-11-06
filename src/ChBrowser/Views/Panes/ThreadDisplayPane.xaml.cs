@@ -234,6 +234,7 @@ public partial class ThreadDisplayPane : UserControl
                 break;
             }
             case "videoCacheQuery":    HandleVideoCacheQuery(sender, payload); break;
+            case "videoResolve":       HandleVideoResolve(sender, payload); break;
             case "videoDownloadStart": HandleVideoDownloadStart(sender, payload); break;
             case "imageLoadFailed":    HandleImageLoadFailed(payload); break;
             // 全 Kind 失敗状態リセット用の統一メッセージ (Step F)。
@@ -577,6 +578,37 @@ public partial class ThreadDisplayPane : UserControl
         var cache = app.ImageCacheServiceInstance;
         if (cache is null) return;
         PushVideoCacheStateTo(sender, cache, url);
+    }
+
+    /// <summary>JS から「動画ページの URL (reddit の <c>v.redd.it/&lt;id&gt;</c>) を再生できる動画の URL にしてほしい」要求。
+    /// 応答 <c>{type:"videoResolved", url, resolvedUrl}</c> (resolvedUrl が null なら取れなかった。noMedia=true なら動画が無いと確定)。</summary>
+    private void HandleVideoResolve(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!payload.TryGetProperty("url", out var urlProp) || urlProp.GetString() is not { Length: > 0 } url) return;
+        if (!ChBrowser.Services.Image.UrlExpander.IsRedditVideoPage(url)) return;
+        if ((Window.GetWindow(this) as MainWindow)?.UrlExpander is not { } expander) return;
+        _ = ReplyVideoResolveAsync(expander, wv, url);
+    }
+
+    private static async Task ReplyVideoResolveAsync(ChBrowser.Services.Image.UrlExpander expander, WebView2 wv, string url)
+    {
+        try
+        {
+            var r = await expander.ResolveVideoAsync(url).ConfigureAwait(true);
+            if (wv.CoreWebView2 is null) return;
+            wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new
+            {
+                type        = "videoResolved",
+                url,
+                resolvedUrl = r.IsResolved ? r.Url : null,
+                noMedia     = r.IsNoMedia,
+            }));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VideoResolve] reply failed: {ex.Message}");
+        }
     }
 
     /// <summary>JS から「DL を開始してほしい」要求。<see cref="VideoDownloadManager.Request"/> を呼ぶ。

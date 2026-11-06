@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -277,6 +278,90 @@ public sealed class UrlExpander : IDisposable
         if (urls.TryGetProperty("original", out u) && u.ValueKind == JsonValueKind.String) return ExpandResult.Of(u.GetString()!);
         if (urls.TryGetProperty("small",    out u) && u.ValueKind == JsonValueKind.String) return ExpandResult.Of(u.GetString()!);
         return ExpandResult.Unavailable;
+    }
+
+    // ---------------------------------------------------------------
+    // reddit の動画ページ (v.redd.it/<id>) — 再生リスト (DASH) の一番大きい mp4
+    // ---------------------------------------------------------------
+
+    /// <summary><c>https://v.redd.it/&lt;id&gt;</c> (動画そのものではなく reddit の動画ページへ転送される URL)。
+    /// JS の <c>V_REDDIT_RE</c> と同期して維持する。</summary>
+    private static readonly Regex RedditVideoRe = new(
+        @"^https?://v\.redd\.it/(?<id>[A-Za-z0-9]+)/?(?:[?#].*)?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private readonly ConcurrentDictionary<string, Task<ExpandResult>> _videoCache = new(StringComparer.Ordinal);
+
+    /// <summary>reddit の動画ページの URL (<c>v.redd.it/&lt;id&gt;</c>) か。</summary>
+    public static bool IsRedditVideoPage(string url) => !string.IsNullOrEmpty(url) && RedditVideoRe.IsMatch(url);
+
+    /// <summary>reddit の動画ページの URL を、再生できる mp4 の URL (<c>v.redd.it/&lt;id&gt;/CMAF_720.mp4</c> 等) にする。
+    /// 再生リスト (<c>DASHPlaylist.mpd</c>。ログイン不要の配信用ホスト) の映像のうち一番大きいもの。
+    /// 映像と音声は別のファイルなので音声は付かない (スレの動画 (<c>reddit_video.fallback_url</c>) と同じ)。
+    /// 結果は <see cref="ExpandAsync"/> と同じく覚え、<see cref="ExpandOutcome.Unavailable"/> だけ次回やり直す。</summary>
+    public async Task<ExpandResult> ResolveVideoAsync(string url)
+    {
+        var m = RedditVideoRe.Match(url ?? "");
+        if (!m.Success) return ExpandResult.Unavailable;
+        var task   = _videoCache.GetOrAdd(url!, _ => ResolveRedditVideoAsync(m.Groups["id"].Value));
+        var result = await task.ConfigureAwait(false);
+        if (result.IsUnavailable) _videoCache.TryRemove(new KeyValuePair<string, Task<ExpandResult>>(url!, task));
+        return result;
+    }
+
+    private async Task<ExpandResult> ResolveRedditVideoAsync(string id)
+    {
+        try
+        {
+            var baseUrl = $"https://v.redd.it/{id}/";
+            using var res = await _http.GetAsync(baseUrl + "DASHPlaylist.mpd").ConfigureAwait(false);
+            if (res.StatusCode == HttpStatusCode.NotFound || res.StatusCode == HttpStatusCode.Forbidden)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id} → HTTP {(int)res.StatusCode} (動画が無い)");
+                return ExpandResult.NoMedia;
+            }
+            if (!res.IsSuccessStatusCode)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id} → HTTP {(int)res.StatusCode}");
+                return ExpandResult.Unavailable;
+            }
+            var xml = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
+            var file = PickLargestVideo(xml);
+            if (file is null)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id}: 再生リストに映像がありません");
+                return ExpandResult.NoMedia;
+            }
+            return ExpandResult.Of(baseUrl + file);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Xml.XmlException)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id}: {ex.GetType().Name}: {ex.Message}");
+            return ExpandResult.Unavailable;
+        }
+    }
+
+    /// <summary>DASH の再生リスト (MPD) から、映像 (mimeType が video/…) のうち画素数の一番大きいもののファイル名 (BaseURL)。</summary>
+    internal static string? PickLargestVideo(string mpdXml)
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(mpdXml);
+        string? best = null;
+        long bestScore = -1;
+        foreach (var rep in doc.Descendants().Where(e => e.Name.LocalName == "Representation"))
+        {
+            var set  = rep.Parent;
+            var mime = (string?)rep.Attribute("mimeType") ?? (string?)set?.Attribute("mimeType") ?? "";
+            var kind = (string?)set?.Attribute("contentType") ?? "";
+            if (!mime.StartsWith("video/", StringComparison.OrdinalIgnoreCase) && !kind.Equals("video", StringComparison.OrdinalIgnoreCase)) continue;
+            var file = rep.Elements().FirstOrDefault(e => e.Name.LocalName == "BaseURL")?.Value.Trim();
+            if (string.IsNullOrEmpty(file) || file.Contains("://", StringComparison.Ordinal) || file.StartsWith('/')) continue;
+            long.TryParse((string?)rep.Attribute("width"), out var w);
+            long.TryParse((string?)rep.Attribute("height"), out var h);
+            long.TryParse((string?)rep.Attribute("bandwidth"), out var bw);
+            var score = w * h > 0 ? w * h * 1000 + bw / 1000 : bw / 1000;   // 画素数優先、同じなら帯域の大きい方
+            if (score > bestScore) { bestScore = score; best = file; }
+        }
+        return best;
     }
 
     public void Dispose() => _http.Dispose();

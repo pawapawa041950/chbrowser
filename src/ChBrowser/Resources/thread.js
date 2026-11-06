@@ -1094,6 +1094,49 @@ var CHB_SCRIPT_READY = 0;
         return VIDEO_EXT_RE.test(url || '');
     }
 
+    // reddit の動画ページ (v.redd.it/<id>)。そのままでは再生できない (reddit のページへ転送される) ので、
+    // C# (UrlExpander.ResolveVideoAsync) に再生できる mp4 の URL を求めてもらってから動画スロットにする。
+    // C# の RedditVideoRe と同期して維持する。
+    const V_REDDIT_RE = /^https?:\/\/v\.redd\.it\/[A-Za-z0-9]+\/?(?:[?#].*)?$/i;
+    /** 動画ページ URL → 再生できる URL (取れなかった / 動画が無いと確定したら '')。 */
+    const resolvedVideoUrls = new Map();
+    /** 問い合わせ中の動画ページ URL。 */
+    const videoResolvePending = new Set();
+
+    /** 直リンク動画のスロット。resolveSrc を渡すと、再生できる URL が分かるまで data-src を持たない (materializeVideoSlot が問い合わせる)。 */
+    function videoSlotHtml(src, href, resolveSrc) {
+        return '<span class="image-slot video deferred"' +
+               (src ? ' data-src="' + escapeHtml(src) + '"' : '') +
+               (resolveSrc ? ' data-resolve-src="' + escapeHtml(resolveSrc) + '"' : '') +
+               ' data-url="' + escapeHtml(href) + '" data-media-type="video" data-cache-state="unknown">' +
+               '<span class="media-play-icon"></span>' +
+               '<span class="image-placeholder-text">動画 - クリックで再生</span>' +
+               '<span class="video-dl-badge" style="display:none">未DL</span>' +
+               '</span>';
+    }
+
+    /** C# からの videoResolved: 同じ動画ページ URL を待っている全スロットに、再生できる URL を入れて通常の動画スロットにする。 */
+    function applyVideoResolved(msg) {
+        const url = msg.url;
+        videoResolvePending.delete(url);
+        const resolved = (typeof msg.resolvedUrl === 'string' && msg.resolvedUrl) ? msg.resolvedUrl : '';
+        // 取れなかっただけ (一時的な失敗) なら覚えない (次の描画でまた問い合わせる)
+        if (resolved || msg.noMedia === true) resolvedVideoUrls.set(url, resolved);
+        document.querySelectorAll('.image-slot.video[data-resolve-src="' + cssEscape(url) + '"]').forEach(function (slot) {
+            if (resolved) {
+                slot.dataset.src = resolved;
+                delete slot.dataset.resolveSrc;
+                materializeVideoSlot(slot);
+            } else if (msg.noMedia === true) {
+                slot.remove();
+            } else {
+                const badge = slot.querySelector('.video-dl-badge');
+                if (badge) { badge.textContent = '取得失敗'; badge.style.display = ''; }
+                slot.dataset.cacheState = 'failed';
+            }
+        });
+    }
+
     // YouTube — watch / youtu.be / shorts / embed の各形を 11 桁 ID で受ける。
     const YOUTUBE_RES = [
         /^https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?(?:[^#]*&)?v=([A-Za-z0-9_-]{11})/i,
@@ -1180,13 +1223,14 @@ var CHB_SCRIPT_READY = 0;
         //     thumb 画像 <img> を埋め込み、必要なら「未DL」バッジを表示する
         //   - クリック時の挙動は cache-state に応じて分岐 (= キャッシュ済みなら仮想ホスト URL で即時再生、
         //     未DLなら原URLストリーミング + 並列 DL kick)
-        if (isVideoUrl(href)) {
-            return '<span class="image-slot video deferred" data-src="' + escapeHtml(href) +
-                   '" data-url="' + escapeHtml(href) + '" data-media-type="video" data-cache-state="unknown">' +
-                   '<span class="media-play-icon"></span>' +
-                   '<span class="image-placeholder-text">動画 - クリックで再生</span>' +
-                   '<span class="video-dl-badge" style="display:none">未DL</span>' +
-                   '</span>';
+        if (isVideoUrl(href)) return videoSlotHtml(href, href, null);
+        // 2b) reddit の動画ページ (v.redd.it/<id>): 再生できる URL が分かっていればそれで、まだなら問い合わせ待ちのスロット
+        if (V_REDDIT_RE.test(href)) {
+            if (resolvedVideoUrls.has(href)) {
+                const r = resolvedVideoUrls.get(href);
+                return r ? videoSlotHtml(r, href, null) : '';
+            }
+            return videoSlotHtml(null, href, href);
         }
         // 3) 同期で決まる画像 URL (直リンク / imgur 単純展開)
         const imgSrc = getInlineImageSrc(href);
@@ -3186,7 +3230,15 @@ var CHB_SCRIPT_READY = 0;
     function materializeVideoSlot(slot) {
         if (slot.dataset.materialized === '1') return;
         const url = slot.dataset.src;
-        if (!url) return;
+        if (!url) {
+            // 再生できる URL をまだ求めていない動画ページ (v.redd.it/<id>): C# に問い合わせる (応答は videoResolved)
+            const page = slot.dataset.resolveSrc;
+            if (page && !videoResolvePending.has(page) && window.chrome && window.chrome.webview) {
+                videoResolvePending.add(page);
+                window.chrome.webview.postMessage({ type: 'videoResolve', url: page });
+            }
+            return;
+        }
         slot.dataset.materialized = '1';
         if (window.chrome && window.chrome.webview) {
             window.chrome.webview.postMessage({ type: 'videoCacheQuery', url: url });
@@ -5908,6 +5960,10 @@ var CHB_SCRIPT_READY = 0;
                 case 'threadPreview':
                     // 5ch.io スレ URL ホバーで投げた threadPreviewRequest の応答 (タイトル + 対象レス本文)。
                     onThreadPreviewResponse(msg);
+                    break;
+                case 'videoResolved':
+                    // 動画ページ (v.redd.it/<id>) の再生できる URL (videoResolve の応答)
+                    if (typeof msg.url === 'string') applyVideoResolved(msg);
                     break;
                 case 'videoCacheState':
                     // Phase 5: 動画スロットのキャッシュ状態 (= サムネ有無 / 動画本体有無 / DL 中 / URL)。

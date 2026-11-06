@@ -53,10 +53,22 @@ public static class ImageTranslator
         };
         var chat = await llm.ChatStreamAsync(settings, messages, _ => { }, null, ct,
             disableReasoning ? ChBrowser.Services.Ng.AiNgJudge.ReasoningOff : null).ConfigureAwait(false);
-        if (!chat.Ok) throw new AiTranslateException(chat.Error ?? "翻訳の要求に失敗しました");
+        if (!chat.Ok) throw new AiTranslateException(ExplainError(chat.Error));
 
         var (text, _) = ChatArchive.SplitThink(chat.Content ?? "");
         return new ImageTranslation(ParseItems(text), settings.Model, DateTimeOffset.Now);
+    }
+
+    /// <summary>接続先の失敗の文言に、分かっている原因を書き添える。
+    /// vLLM は画像を受け付けない起動のしかた (画像を使わない設定 / 文字だけのモデル) だと、どの画像でも
+    /// 「At most 0 image(s) may be provided in one prompt」で断る (アプリのプロファイルの「画像を入力できる」とは別)。</summary>
+    private static string ExplainError(string? error)
+    {
+        var e = error ?? "翻訳の要求に失敗しました";
+        if (e.Contains("At most 0 image", StringComparison.OrdinalIgnoreCase))
+            return "接続先の LLM サーバーが画像を受け付けない設定で動いています (どの画像も送れません)。" +
+                   "サーバーを画像を使える設定で起動し直してください (vLLM なら --limit-mm-per-prompt で image を 0 にしない)。(" + e + ")";
+        return e;
     }
 
     /// <summary>画像をモデルが読める形 (PNG / JPEG の data URL) にする。動く GIF は 1 枚目。長辺が <see cref="MaxSide"/> を超えれば縮める。
