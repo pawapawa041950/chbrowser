@@ -60,6 +60,11 @@ public sealed record AppConfig
     public string NgAiLlmProfileId { get; init; } = "";
     /// <summary>AI 翻訳が使うプロファイル。空 = デフォルト。</summary>
     public string TranslateLlmProfileId { get; init; } = "";
+    /// <summary>AI 翻訳のうち画像の翻訳が使うプロファイル。空 = 文章の翻訳 (<see cref="TranslateLlmProfileId"/>) と同じ、
+    /// <see cref="DefaultLlmProfileRef"/> = デフォルトのプロファイル。</summary>
+    public string ImageTranslateLlmProfileId { get; init; } = "";
+    /// <summary>「デフォルトのプロファイルを使う」を空以外で表す値 (空が別の意味を持つ選択で使う。プロファイルの Id とは重ならない)。</summary>
+    public const string DefaultLlmProfileRef = "*default";
     /// <summary>NG 判定 AI を使うか (プロファイル化でデフォルトの接続があれば動けるようになったので、明示の ON / OFF を持つ)。</summary>
     public bool NgAiEnabled { get; init; } = false;
 

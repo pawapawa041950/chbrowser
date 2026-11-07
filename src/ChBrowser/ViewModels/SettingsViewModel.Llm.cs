@@ -20,12 +20,16 @@ public sealed partial class SettingsViewModel
     /// プロファイルの追加・削除・改名に合わせて中身を差分で更新する (作り直すと ComboBox の選択が外れるため)。</summary>
     public ObservableCollection<LlmProfileChoice> LlmProfileChoices { get; } = new();
 
+    /// <summary>「画像の翻訳に使うプロファイル」の選択肢。先頭は「文章の翻訳と同じ」(Id 空)。</summary>
+    public ObservableCollection<LlmProfileChoice> ImageTranslateLlmProfileChoices { get; } = new();
+
     [ObservableProperty] private LlmProfileItem? _selectedLlmProfile;
     [ObservableProperty] private string _defaultLlmProfileId   = "";
     [ObservableProperty] private string _agentLlmProfileId     = "";
     [ObservableProperty] private string _workerLlmProfileId    = "";
     [ObservableProperty] private string _ngAiLlmProfileId      = "";
     [ObservableProperty] private string _translateLlmProfileId = "";
+    [ObservableProperty] private string _imageTranslateLlmProfileId = "";
     [ObservableProperty] private bool   _ngAiEnabled;
 
     /// <summary>プロファイル一覧の編集 (追加・削除・項目の変更) の版。これが変わると保存する (一覧は入れ子なので)。</summary>
@@ -46,6 +50,9 @@ public sealed partial class SettingsViewModel
         WorkerLlmProfileId    = initial.WorkerLlmProfileId ?? "";
         NgAiLlmProfileId      = initial.NgAiLlmProfileId ?? "";
         TranslateLlmProfileId = initial.TranslateLlmProfileId ?? "";
+        ImageTranslateLlmProfileId = initial.ImageTranslateLlmProfileId ?? "";
+        if (ImageTranslateLlmProfileId is not ("" or AppConfig.DefaultLlmProfileRef) && LlmProfiles.All(i => i.Id != ImageTranslateLlmProfileId))
+            ImageTranslateLlmProfileId = "";
         NgAiEnabled           = initial.NgAiEnabled;
         SelectedLlmProfile    = LlmProfiles.FirstOrDefault();
         RefreshLlmProfileChoices();
@@ -94,6 +101,7 @@ public sealed partial class SettingsViewModel
         if (WorkerLlmProfileId    == item.Id) WorkerLlmProfileId    = "";
         if (NgAiLlmProfileId      == item.Id) NgAiLlmProfileId      = "";
         if (TranslateLlmProfileId == item.Id) TranslateLlmProfileId = "";
+        if (ImageTranslateLlmProfileId == item.Id) ImageTranslateLlmProfileId = "";
         if (DefaultLlmProfileId   == item.Id) DefaultLlmProfileId   = LlmProfiles.FirstOrDefault()?.Id ?? "";
         SelectedLlmProfile = LlmProfiles.Count == 0 ? null : LlmProfiles[Math.Min(index, LlmProfiles.Count - 1)];
         RefreshLlmProfileChoices();
@@ -115,16 +123,28 @@ public sealed partial class SettingsViewModel
         foreach (var p in LlmProfiles) p.IsDefault = p.Id == DefaultLlmProfileId;
         var def = LlmProfiles.FirstOrDefault(p => p.IsDefault);
         var defaultLabel = def is null ? "デフォルトのプロファイルを使う (未登録)" : $"デフォルトのプロファイルを使う ({def.Name})";
-        if (LlmProfileChoices.Count == 0 || LlmProfileChoices[0].Id != "") LlmProfileChoices.Insert(0, new LlmProfileChoice("", defaultLabel));
-        else LlmProfileChoices[0].Label = defaultLabel;
+        SyncChoices(LlmProfileChoices, ("", defaultLabel));
+        SyncChoices(ImageTranslateLlmProfileChoices, ("", "文章の翻訳と同じプロファイルを使う"), (AppConfig.DefaultLlmProfileRef, defaultLabel));
+    }
+
+    /// <summary>選択肢の一覧を、先頭の固定の選択肢 <paramref name="heads"/> + 今のプロファイル一覧に合わせる (差分で更新。
+    /// 作り直すと ComboBox の選択が外れるため)。</summary>
+    private void SyncChoices(ObservableCollection<LlmProfileChoice> choices, params (string Id, string Label)[] heads)
+    {
+        for (var h = 0; h < heads.Length; h++)
+        {
+            if (choices.Count <= h || choices[h].Id != heads[h].Id) choices.Insert(h, new LlmProfileChoice(heads[h].Id, heads[h].Label));
+            else choices[h].Label = heads[h].Label;
+        }
+        var n = heads.Length;
         // 消えたものを除き、残りは名前を更新、新しいものを足す (並びは一覧の順)
-        for (var i = LlmProfileChoices.Count - 1; i >= 1; i--)
-            if (LlmProfiles.All(p => p.Id != LlmProfileChoices[i].Id)) LlmProfileChoices.RemoveAt(i);
+        for (var i = choices.Count - 1; i >= n; i--)
+            if (LlmProfiles.All(p => p.Id != choices[i].Id)) choices.RemoveAt(i);
         for (var i = 0; i < LlmProfiles.Count; i++)
         {
             var p = LlmProfiles[i];
-            var existing = LlmProfileChoices.FirstOrDefault(c => c.Id == p.Id);
-            if (existing is null) LlmProfileChoices.Insert(Math.Min(i + 1, LlmProfileChoices.Count), new LlmProfileChoice(p.Id, p.Name));
+            var existing = choices.FirstOrDefault(c => c.Id == p.Id);
+            if (existing is null) choices.Insert(Math.Min(i + n, choices.Count), new LlmProfileChoice(p.Id, p.Name));
             else existing.Label = p.Name;
         }
     }

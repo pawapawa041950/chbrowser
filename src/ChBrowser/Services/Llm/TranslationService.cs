@@ -50,8 +50,14 @@ public sealed class TranslationService
     /// <summary>今の設定の翻訳用接続。</summary>
     public LlmSettings Settings => LlmSettings.TranslateFromConfig(_config());
 
+    /// <summary>今の設定の画像翻訳用接続 (指定が無ければ文章の翻訳と同じ)。</summary>
+    public LlmSettings ImageSettings => LlmSettings.ImageTranslateFromConfig(_config());
+
     /// <summary>翻訳の接続が設定されているか。</summary>
     public bool IsConfigured => Settings is { } s && !string.IsNullOrWhiteSpace(s.ApiUrl) && !string.IsNullOrWhiteSpace(s.Model);
+
+    /// <summary>画像翻訳の接続が設定されているか。</summary>
+    public bool IsImageConfigured => ImageSettings.IsConfigured;
 
     private bool DisableReasoning => _config().TranslateDisableReasoning;
 
@@ -60,9 +66,10 @@ public sealed class TranslationService
 
     /// <summary>同時実行の枠を 1 つ取ってから <paramref name="body"/> を実行する (枠が空くまで待つ)。
     /// 枠を取った後にしたい処理 (読み込み中の表示など) がある呼び出し元向け。</summary>
-    public async Task<T> WithSlotAsync<T>(Func<Task<T>> body, CancellationToken ct)
+    public Task<T> WithSlotAsync<T>(Func<Task<T>> body, CancellationToken ct) => WithGateAsync(Gate, body, ct);
+
+    private static async Task<T> WithGateAsync<T>(SemaphoreSlim gate, Func<Task<T>> body, CancellationToken ct)
     {
-        var gate = Gate;
         await gate.WaitAsync(ct).ConfigureAwait(true);
         try { return await body().ConfigureAwait(true); }
         finally { gate.Release(); }
@@ -74,14 +81,16 @@ public sealed class TranslationService
         => AiTranslator.TranslateOneAsync(_llm, Settings, plain, DisableReasoning, ct);
 
     public const string ImagesNotSupportedMessage =
-        "AI翻訳に使う LLM が画像の入力に対応していません (設定 → LLM で、AI翻訳に使うプロファイルの「画像を入力できるモデル」を ON にしてください)";
+        "画像の翻訳に使う LLM が画像の入力に対応していません (設定 → AI翻訳 で画像の翻訳に使うプロファイルを選ぶか、設定 → LLM でそのプロファイルの「画像を入力できるモデル」を ON にしてください)";
 
     /// <summary>画像 (キャッシュのファイルの中身) に書かれた文字を日本語に訳す (画像の説明はさせない。文字が複数の場所にあれば場所も)。
     /// 同時実行の枠の中で送る。画像を入力できない接続・失敗 (接続エラー等) は <see cref="AiTranslateException"/>。</summary>
     public Task<ImageTranslation> TranslateImageAsync(byte[] imageBytes, CancellationToken ct)
     {
-        if (!Settings.SupportsImages) throw new AiTranslateException(ImagesNotSupportedMessage);
-        return WithSlotAsync(() => ImageTranslator.TranslateAsync(_llm, Settings, imageBytes, DisableReasoning, ct), ct);
+        var settings = ImageSettings;
+        if (!settings.SupportsImages) throw new AiTranslateException(ImagesNotSupportedMessage);
+        var gate = LlmConcurrency.Gate(settings);   // 枠は画像翻訳に使うプロファイルの分
+        return WithGateAsync(gate, () => ImageTranslator.TranslateAsync(_llm, settings, imageBytes, DisableReasoning, ct), ct);
     }
 
     /// <summary>Markdown で書かれたレス本文 1 件を、記法を保ったまま日本語に訳す (訳した Markdown。応答が空なら null)。同時実行の枠は呼び出し元が取る。</summary>

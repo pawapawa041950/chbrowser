@@ -209,7 +209,7 @@ public static class ImageTranslator
     private static async Task<(ImageTranslation? Result, string? Error)> TranslateCoreAsync(
         TranslationService translation, ChBrowser.Services.Image.ImageCacheService cache, string url, CancellationToken ct)
     {
-        if (!translation.IsConfigured) return (null, TranslationService.NotConfiguredMessage);
+        if (!translation.IsImageConfigured) return (null, TranslationService.NotConfiguredMessage);
         if (!cache.TryGet(url, out var hit, ChBrowser.Services.Image.CacheKind.Image))
             return (null, "画像がまだ読み込まれていません (画像が表示されてから翻訳してください)");
         SetState(url, pending: true, null);

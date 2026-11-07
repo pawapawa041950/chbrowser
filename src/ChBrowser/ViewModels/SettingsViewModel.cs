@@ -641,6 +641,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WorkerLlmProfileId          = WorkerLlmProfileId ?? "",
         NgAiLlmProfileId            = NgAiLlmProfileId ?? "",
         TranslateLlmProfileId       = TranslateLlmProfileId ?? "",
+        ImageTranslateLlmProfileId  = ImageTranslateLlmProfileId ?? "",
         NgAiEnabled                 = NgAiEnabled,
         SeparateWorkerModel         = SeparateWorkerModel,
         AllowParallelWorkers        = AllowParallelWorkers,

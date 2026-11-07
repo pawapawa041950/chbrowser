@@ -42,6 +42,17 @@ public sealed record LlmSettings(string ApiUrl, string ApiKey, string Model, int
     /// <summary>AI 翻訳の接続。</summary>
     public static LlmSettings TranslateFromConfig(AppConfig c) => FromProfile(ResolveProfile(c, c.TranslateLlmProfileId));
 
+    /// <summary>AI 翻訳のうち画像の翻訳の接続。<see cref="AppConfig.DefaultLlmProfileRef"/> ならデフォルトのプロファイル、
+    /// 指定が無い (空・消えたプロファイル) なら文章の翻訳と同じ。</summary>
+    public static LlmSettings ImageTranslateFromConfig(AppConfig c)
+    {
+        var id = c.ImageTranslateLlmProfileId;
+        if (id == AppConfig.DefaultLlmProfileRef) return FromConfig(c);
+        return !string.IsNullOrEmpty(id) && c.LlmProfiles?.FirstOrDefault(p => p.Id == id) is { } p
+            ? FromProfile(p)
+            : TranslateFromConfig(c);
+    }
+
     /// <summary>接続先 (URL とモデル名) が入っているか。</summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiUrl) && !string.IsNullOrWhiteSpace(Model);
 }
