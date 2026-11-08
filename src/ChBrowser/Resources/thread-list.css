@@ -21,6 +21,10 @@ thead th {
      * 同値だと document 順で tbody が後にあって貫通する。 */
     z-index: 10;
     font-weight: 600;
+    /* 列が狭くても見出しは折り返さない (折り返すと見出しの行が縦に太くなる)。収まらない分は省略。 */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 thead th.sortable { cursor: pointer; user-select: none; }
 thead th.sortable:hover { background: #e4e4e4; }

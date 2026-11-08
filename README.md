@@ -13,7 +13,7 @@ Windows 用の掲示板ブラウザ (5ch.io / bbspink、したらば、まちBBS
 - **ポータブル構成** 設定ファイルはexeのあるフォルダに保存
 - **4 ペイン構成** かちゅ～しゃやJaneなどの一般的なレイアウトをデフォルトとし、ペインヘッダのドラッグでレイアウトを自由に変更可  
   <div align="center">
-  <a href="img/sample4.png"><img src="img/sample4.png" width="400"></a>
+  <a href="img/sample4.webp"><img src="img/sample4.webp" width="400"></a>
   </div>
 - **5chライクデザイン** 全掲示板を5chライクなデザインでなおかつツリーで表示。ふたばの引用文による返信もツリー化して表示可能
 - **スレ表示モード** レス順 / ツリー (重複あり) / ツリー (重複なし) を切替可

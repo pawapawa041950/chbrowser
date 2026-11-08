@@ -193,11 +193,15 @@ public sealed class ColorEmojiTextBlock : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         // Arrange 後の実幅で描画結果を確定 (trimming 幅を実際の割当幅に合わせる)。
-        var maxW = ActualWidth > 0 ? ActualWidth : _size.Width;
-        EnsureRendered(maxW);
+        // 幅を 0 にされた (= 親が幅を配れなかった) ときは描かない。以前は 0 のとき全文の幅で描いてしまい、
+        // ペインのヘッダが狭いとスレタイが隣のボタンに重なっていた。描画は割当幅で切る (はみ出さない)。
+        if (ActualWidth <= 0) return;
+        EnsureRendered(ActualWidth);
+        dc.PushClip(new RectangleGeometry(new Rect(0, 0, ActualWidth, Math.Max(ActualHeight, _size.Height))));
         if (_bmp is not null)
             dc.DrawImage(_bmp, new Rect(0, 0, _size.Width, _size.Height));
         else if (_fallback is not null)
             dc.DrawText(_fallback, new Point(0, 0));
+        dc.Pop();
     }
 }
