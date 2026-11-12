@@ -568,22 +568,42 @@ body.slot-resizing * {
 
 /* ---- 「以降新レス」ラベル ---- */
 /* 直前 fetch まで存在しなかった最初のレスの「前」に挿入される細い水平帯。
-   リフレッシュで新着が来たときだけ位置が更新される (= ユーザのスクロールでは動かない)。 */
+   リフレッシュで新着が来たときだけ位置が更新される (= ユーザのスクロールでは動かない)。
+   ラベル自体は高さ 0 で場所を取らない (= 出ても消えても前後のレスの位置が変わらない)。見える部分は ::before を
+   上へはみ出させて、直前のレスの下の余白 (post.css の .post の padding-bottom: 16px) に重ねて描く。
+   そのため見える部分の高さは 16px 以内に収めること。 */
 .new-posts-mark-band {
-    margin: 4px 0 6px 0;
-    padding: 1px 0;
+    position: relative;
+    height: 0;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    pointer-events: none;
+}
+.new-posts-mark-band::before {
+    content: '— 以降新レス —';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 1px;
+    box-sizing: border-box;
+    height: 14px;
+    line-height: 13px;
     border-top: 1px dashed #1e88e5;
     color: #1565c0;
     font-size: 11px;
     text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
     background: rgba(30, 136, 229, 0.06);
-    user-select: none;
 }
-.new-posts-mark-band::before { content: '— 以降新レス —'; }
+/* 先頭のレスの前に付くとき (= 重ねる余白が上に無い) だけは、従来どおり場所を取って描く */
+#posts > .new-posts-mark-band:first-child { height: 14px; margin: 4px 0 6px 0; }
+#posts > .new-posts-mark-band:first-child::before { bottom: 0; }
 /* 差分の先頭に前回の取得で取り切れなかった中間 (reddit) があるとき、その前のラベル (新着の前には通常の「以降新レス」が別に付く)。
    中間と新着が同じ塊に混ざって分けられないときは 1 本で「未取得分 & 新レス」。色は新レスと区別するため橙 */
-.new-posts-mark-band.backfill,
-.new-posts-mark-band.backfill-mixed {
+.new-posts-mark-band.backfill::before,
+.new-posts-mark-band.backfill-mixed::before {
     border-top-color: #fb8c00;
     color: #e65100;
     background: rgba(251, 140, 0, 0.07);
