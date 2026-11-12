@@ -155,9 +155,9 @@ var CHB_SCRIPT_READY = 0;
     let backfillEndNumber = null;
 
     // 「最新リフレッシュ (= 直近の delta batch group) で届いたレス番号」の集合。
-    // section B (= 「以降新レス」ラベル以降) の描画コンテンツと、is-new (= レス No 太字) の判定の両方に使う。
+    // section B (= 「以降新レス」ラベル以降) の描画コンテンツと、is-new (= 左端の緑の縦線) の判定の両方に使う。
     // 新しい refresh の境界 (= mark 値変化) で本 Set はリセットされ、前 refresh のレスは section A に昇格する。
-    // ⇒ 結果、section B には「今 refresh の新着レス + その祖先 chain」だけが残り、太字も今 refresh 分だけになる。
+    // ⇒ 結果、section B には「今 refresh の新着レス + その祖先 chain」だけが残り、縦線も今 refresh 分だけになる。
     const sessionNewPostNumbers = new Set();
 
     // appendPosts 経路だけが見る「最後に観測した delta refresh の mark 値」。
@@ -165,6 +165,10 @@ var CHB_SCRIPT_READY = 0;
     // setMarkPostNumber メッセージは appendPosts より先に届いて markPostNumber を上書きしてしまうため、
     // markPostNumber を比較に使うとタイミング問題で検出が漏れる。それを避けるための独立トラッカー。
     let lastDeltaMark = null;
+    // 新着 0 件の差分取得があった後は true。is-new の縦線を外し、再描画 (表示モード切替等) でも付け直さない。
+    // sessionNewPostNumbers 自体は dedupTree の section B の組み立てにも使うので残し、縦線だけをこの旗で止める。
+    // 次に差分 (新着あり) が届いたら false に戻す。
+    let newPostLinesCleared = false;
 
     // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
     // 評価ルール:
@@ -2233,13 +2237,14 @@ var CHB_SCRIPT_READY = 0;
     }
 
     /** 「最新リフレッシュ (= 直近の delta batch group) で届いたレス」を is-new クラスでマークする。
-     *  post.css 側で .post.is-new .post-no を太字強調。
+     *  post.css 側で .post.is-new の左端に緑の縦線を出す。
      *
      *  sessionNewPostNumbers は per-refresh で運用される:
      *    - 新しい refresh の境界 (= mark 値変化) で appendPosts 側が本 Set をリセットしてくれる前提。
      *    - 旧 delta レスは section A に昇格しているので、本 Set には今 refresh のレスだけが残る。
-     *    - JS リロード (= 別タブ切替・再オープン) でも空に戻るので、再オープン直後で 0 件取得なら太字レスも 0 件。 */
+     *    - JS リロード (= 別タブ切替・再オープン) でも空に戻るので、再オープン直後で 0 件取得なら縦線の付くレスも 0 件。 */
     function markNewPosts() {
+        if (newPostLinesCleared) return;
         if (sessionNewPostNumbers.size === 0) {
             traceLog('markNewPosts: sessionNewPostNumbers is empty → no-op');
             return;
@@ -5481,7 +5486,7 @@ var CHB_SCRIPT_READY = 0;
      *   - mark: 「以降新レス」ラベルの対象レス番号 (session-local; 永続化されない)
      *           毎 batch ペイロードで C# から最新値が届く (= リフレッシュで新着が来た瞬間に値が立ち、
      *           タブ閉じ / アプリ再起動でリセットされる)。
-     *   - incremental: dat 差分追加フラグ。session-new (= is-new 太字対象) の積算 + dedupTree の section B
+     *   - incremental: dat 差分追加フラグ。session-new (= is-new の縦線の対象) の積算 + dedupTree の section B
      *                  再構築経路の振り分けに使う。 */
     window.appendPosts = function (batch, scrollTarget, mark, incremental, hasMore, backfillEnd) {
         if (!Array.isArray(batch) || batch.length === 0) return;
@@ -5534,7 +5539,7 @@ var CHB_SCRIPT_READY = 0;
         }
 
         // 新 refresh 境界処理:
-        //   1. 前 refresh で太字 (= is-new) になっていたレスを細字に戻す (全モード共通)。
+        //   1. 前 refresh で縦線 (= is-new) が付いていたレスから縦線を外す (全モード共通)。
         //   2. モード戦略の promoteOnNewRefresh に dispatch (dedupTree は section B 撤去 + 昇格、他は nop)。
         //   3. sessionNewPostNumbers をリセット (= 後続の per-post loop で current batch が積まれる)。
         if (isNewRefresh) {
@@ -5546,6 +5551,7 @@ var CHB_SCRIPT_READY = 0;
             sessionNewPostNumbers.clear();
         }
         if (isDelta && newMark != null) lastDeltaMark = newMark;
+        if (isDelta) newPostLinesCleared = false;
 
         // 「以降新レス」ラベルは毎 batch で C# から最新値を受け取り上書き。null なら据え置きせずクリア
         // (= リフレッシュ後 C# 側で値が確定 → 全 batch でその値が届く / 一度設定されたら値は減らない)。
@@ -5883,8 +5889,13 @@ var CHB_SCRIPT_READY = 0;
                     // 「以降新レス」ラベル位置の単独 push (= 新着 0 件 refresh で mark を null クリアする等)。
                     // 数値なら設定、それ以外 (= null) ならクリア。後者では updateNewPostsMarkBand が
                     // 既存ラベルを取り除く + scrollbar マーカーも消す。
-                    // is-new (= sessionNewPostNumbers) は別管理なのでここでは触らない (= 太字状態は維持)。
+                    // クリア (= 新着 0 件の差分取得) のときは、前回の差分で付いた is-new の縦線も外す
+                    // (もう「今回の新着」ではないため)。sessionNewPostNumbers は残す (newPostLinesCleared の説明を参照)。
                     markPostNumber = (typeof msg.value === 'number') ? msg.value : null;
+                    if (markPostNumber == null) {
+                        newPostLinesCleared = true;
+                        for (const el of document.querySelectorAll('.post.is-new')) el.classList.remove('is-new');
+                    }
                     backfillEndNumber = (markPostNumber != null && typeof msg.backfillEnd === 'number') ? msg.backfillEnd : null;
                     traceLog('setMarkPostNumber recv: value=' + msg.value
                         + ', resolved markPostNumber=' + markPostNumber
