@@ -1195,14 +1195,56 @@ var CHB_SCRIPT_READY = 0;
     /**
      * 同期では決められないが、非同期 (C# 側の HTML スクレイピング / API 呼び出し) で
      * 実体画像 URL を解決できる可能性のある URL のパターン。
-     * C# の <see cref="ChBrowser.Services.Image.UrlExpander"/> と同期して維持する。
+     * 対象は C# のサムネイルの取得ルール (ThumbnailRuleSet。既定 + 利用者のルール) で決まり、その正規表現 (文字列の配列) を
+     * C# がこのスクリプトの前に window.__asyncExpandPatterns として置く (WebView2Helper.LoadThreadShellHtml)。
+     * JavaScript で通らない書き方のものは飛ばす (そのルールの URL はサムネイルが出ないだけで、他には影響しない)。
      */
-    const ASYNC_EXPANDER_RES = [
-        // x.com (Twitter) — fxtwitter API で展開
-        /^https?:\/\/(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com\/[A-Za-z0-9_]+\/status\/\d+/i,
-        // pixiv — ajax/illust API で展開
-        /^https?:\/\/(?:www\.)?pixiv\.net\/(?:en\/)?artworks\/\d+/i,
-    ];
+    const ASYNC_EXPANDER_RES = (function () {
+        const list = [];
+        for (const p of (Array.isArray(window.__asyncExpandPatterns) ? window.__asyncExpandPatterns : [])) {
+            if (typeof p !== 'string' || !p) continue;
+            try { list.push(new RegExp(p, 'i')); }
+            catch (e) { console.warn('asyncExpandPatterns: この正規表現は使えません: ' + p + ' (' + e.message + ')'); }
+        }
+        return list;
+    })();
+
+    /** 取得ルールで求まった実体の URL: ページの URL → 画像・動画の URL の配列 (1 つの URL に複数あることがある)。
+     *  描き直し (表示モードの切り替え等) のときに、問い合わせ直さずにそのままサムネイルを出すために覚えておく。 */
+    const expandedMediaCache = new Map();
+    /** 1 つの URL から出すサムネイルの上限。これを超える分は「他 N 枚」とだけ出す。 */
+    const MAX_EXPANDED_THUMBS = 4;
+
+    /** 求まった実体の URL (urls) のサムネイル。それぞれ、その URL が本文に直接書かれていたのと同じふつうのスロットにする
+     *  (data-url はページの URL のまま = 右クリックメニュー等は元のリンクを指す)。上限を超える分は「他 N 枚」の表示 1 つ。 */
+    function expandedSlotsHtml(href, urls) {
+        let html = '';
+        for (const u of urls.slice(0, MAX_EXPANDED_THUMBS)) {
+            html += isVideoUrl(u)
+                ? videoSlotHtml(u, href, null)
+                : '<span class="image-slot deferred" data-src="' + escapeHtml(u) + '" data-url="' + escapeHtml(href) + '"></span>';
+        }
+        const more = urls.length - MAX_EXPANDED_THUMBS;
+        if (more > 0) {
+            html += '<a class="media-more" data-url="' + escapeHtml(href) + '" title="残りはリンク先で見られます">他 ' + more + ' 枚</a>';
+        }
+        return html;
+    }
+
+    /** C# からの展開結果 (imageMeta.expanded): 同じページ URL の展開待ちスロットを、求まった URL ごとのスロットに置き換える。 */
+    function applyExpandedMedia(url, urls) {
+        expandedMediaCache.set(url, urls);
+        document.querySelectorAll('.image-slot.async').forEach(function (slot) {
+            if (slot.dataset.url !== url) return;
+            const parent = slot.parentNode;
+            if (!parent) return;
+            const tpl = document.createElement('template');
+            tpl.innerHTML = expandedSlotsHtml(url, urls);
+            imageSlotObserver.unobserve(slot);
+            slot.replaceWith(tpl.content);
+            observeImageSlots(parent);
+        });
+    }
 
     function isExpandableAsync(url) {
         for (const re of ASYNC_EXPANDER_RES) if (re.test(url)) return true;
@@ -1248,6 +1290,8 @@ var CHB_SCRIPT_READY = 0;
             // モード切替や再描画でこの関数が同じ URL に対して何度も呼ばれるが、サムネ枠を毎回作って毎回消すのは無駄。
             const cached = imageMetaCache.get(href);
             if (cached && cached.noMedia) return '';
+            // 既に実体の URL が求まっているなら、問い合わせ直さずにそのサムネイルを出す
+            if (expandedMediaCache.has(href)) return expandedSlotsHtml(href, expandedMediaCache.get(href));
             return '<span class="image-slot deferred async" data-src="' + escapeHtml(href) +
                    '" data-url="' + escapeHtml(href) + '" data-async-expand="1"></span>';
         }
@@ -3028,15 +3072,16 @@ var CHB_SCRIPT_READY = 0;
         if (imgTr.size > 0) refreshImgTrMarks();
     }
 
-    /** HEAD / 非同期展開の結果を 1 枚のスロットに適用。 */
+    /** HEAD / 非同期展開の失敗を 1 枚のスロットに適用。 */
     function applyMetaToSlot(slot, meta) {
         if (!slot.classList.contains('deferred')) return;
         slot.dataset.metaState = 'resolved';
 
-        // 非同期展開対象の slot で resolvedUrl が無い → 展開失敗 (媒体無し / login 要 / API ダウン)。
+        // 非同期展開対象の slot にここで届くのは展開失敗 (login 要 / API ダウン等) だけ
+        // (展開できたときは applyExpandedMedia がスロットごと置き換える)。
         // 「クリックで再試行」プレースホルダにする (= 自動再試行はしない、ユーザクリック時のみ再要求)。
         const isAsyncSlot = slot.classList.contains('async');
-        if (isAsyncSlot && !meta.resolvedUrl) {
+        if (isAsyncSlot) {
             slot.classList.remove('deferred');
             slot.classList.add('expand-failed');
             const text = document.createElement('span');
@@ -3045,9 +3090,6 @@ var CHB_SCRIPT_READY = 0;
             slot.appendChild(text);
             return;
         }
-
-        // resolvedUrl が来ていれば実際のロード対象を更新。
-        if (meta.resolvedUrl) slot.dataset.src = meta.resolvedUrl;
 
         // 過去のセッションで GET 失敗済みの URL は自動ロードしない (= MediaAcquisitionTracker.Image kind)。
         // ユーザクリック (retrySlot) で再試行可。cached=true ならローカルファイルがあるので無視。
@@ -3087,8 +3129,7 @@ var CHB_SCRIPT_READY = 0;
      *  この再要求は前回失敗時とは独立に新しい HTTP 呼び出しが走る。JS 側の imageMetaCache も
      *  この URL に関しては破棄する (= でないと imageMetaRequest で C# まで届かない)。 */
     function retrySlot(slot) {
-        // 非同期展開スロットでは applyMetaToSlot が data-src を resolvedUrl に書き換えていることが
-        // ある。再展開させたいので元 URL に戻す (= data-url にオリジナルが保持されている)。
+        // 非同期展開スロット (展開失敗) は元のページ URL で展開からやり直す。
         if (slot.classList.contains('async') && slot.dataset.url) {
             slot.dataset.src = slot.dataset.url;
         }
@@ -5944,7 +5985,8 @@ var CHB_SCRIPT_READY = 0;
                 case 'imageMeta':
                     // C# が HEAD で取った Content-Length / キャッシュ参照 / 非同期 URL 展開の結果を返してきた。
                     //   noMedia=true → ソース (= ツイート等) に画像/動画が付いていないと確定。スロットを DOM ごと削除。
-                    //   resolvedUrl  → 非同期展開 (x.com/pixiv) で求まった実体画像 URL (slot の data-src を上書き)
+                    //   expanded     → 取得ルール (x.com / pixiv / imgur のアルバム等) で求まった実体の URL の配列 (スロットを URL ごとに置き換える)
+                    //   expandFailed → 取得ルールで求められなかった (ok=false と同じ経路で「クリックで再試行」)
                     //   ok=false     → HEAD 失敗 (size 不明、applyMetaToSlot で「不明 → 読み込む」)
                     //   cached       → ローカルキャッシュにあるので帯域コスト 0、しきい値無視で即ロード
                     if (typeof msg.url === 'string') {
@@ -5953,12 +5995,14 @@ var CHB_SCRIPT_READY = 0;
                             // (= モード切替などで再描画されたときに毎回作って毎回消す無駄を避ける)。
                             imageMetaCache.set(msg.url, { noMedia: true });
                             removeMediaSlotsForUrl(msg.url);
+                        } else if (Array.isArray(msg.expanded)) {
+                            // 取得ルールで実体の URL が求まった (1 件以上): 展開待ちのスロットを URL ごとのスロットに置き換える
+                            applyExpandedMedia(msg.url, msg.expanded.filter(function (u) { return typeof u === 'string' && u; }));
                         } else {
                             applyImageMeta(msg.url, {
-                                ok:          !!msg.ok,
-                                size:        (typeof msg.size === 'number' ? msg.size : null),
-                                cached:      !!msg.cached,
-                                resolvedUrl: (typeof msg.resolvedUrl === 'string' ? msg.resolvedUrl : null),
+                                ok:              !!msg.ok,
+                                size:            (typeof msg.size === 'number' ? msg.size : null),
+                                cached:          !!msg.cached,
                             });
                         }
                     }

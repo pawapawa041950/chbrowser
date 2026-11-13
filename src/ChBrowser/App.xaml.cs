@@ -179,7 +179,10 @@ public partial class App : Application
         _imageCache      = new ImageCacheService(paths);
         _imageCache.MaxBytes = (long)Math.Max(64, _currentConfig.CacheMaxMb) * 1024 * 1024;
         _aiImageMeta     = new AiImageMetadataService(_imageCache);
-        _urlExpander     = new UrlExpander();
+        // サムネイルの取得ルール (既定 + 利用者のファイル)。スレ表示のシェルにも対象 URL の一覧として載せる (それより前に読む)
+        ChBrowser.Services.Image.ThumbnailRuleSet.Current = ChBrowser.Services.Image.ThumbnailRuleSet.Load(
+            ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.json"), paths.ThumbnailRulesPath);
+        _urlExpander     = new UrlExpander(ChBrowser.Services.Image.ThumbnailRuleSet.Current);
 
         // テーマ (post.html / post.css) サービスを登録。
         // 既定テンプレのディスク展開はあえて起動時にはやらない (Phase 11 設定画面の

@@ -26,34 +26,30 @@ public enum ExpandOutcome
 }
 
 /// <summary>非同期 URL 展開の結果。<see cref="ExpandOutcome"/> で 3 値判別。
-/// Url は Resolved の時のみ非 null。</summary>
-public sealed record ExpandResult(string? Url, ExpandOutcome Outcome)
+/// Urls は Resolved の時のみ 1 件以上 (1 つの URL に複数の画像・動画がある場合は複数)。Url はその先頭。</summary>
+public readonly record struct ExpandResult(IReadOnlyList<string>? Urls, ExpandOutcome Outcome)
 {
-    public bool IsResolved    => Outcome == ExpandOutcome.Resolved;
-    public bool IsNoMedia     => Outcome == ExpandOutcome.NoMedia;
-    public bool IsUnavailable => Outcome == ExpandOutcome.Unavailable;
+    public string? Url         => Urls is { Count: > 0 } ? Urls[0] : null;
+    public bool IsResolved     => Outcome == ExpandOutcome.Resolved;
+    public bool IsNoMedia      => Outcome == ExpandOutcome.NoMedia;
+    public bool IsUnavailable  => Outcome == ExpandOutcome.Unavailable;
 
     public static readonly ExpandResult NoMedia     = new(null, ExpandOutcome.NoMedia);
     public static readonly ExpandResult Unavailable = new(null, ExpandOutcome.Unavailable);
-    public static ExpandResult Of(string url)       => new(url,  ExpandOutcome.Resolved);
+    public static ExpandResult Of(string url)                  => new(new[] { url }, ExpandOutcome.Resolved);
+    public static ExpandResult Of(IReadOnlyList<string> urls)  => new(urls, ExpandOutcome.Resolved);
 }
 
 /// <summary>
 /// 画像ホスティングではないページ URL を、実体画像 URL へ非同期展開するサービス。
 ///
 /// <para>
-/// 対象: x.com (Twitter) / pixiv。imgur のような同期 (URL 形だけで決まる) 展開は JS 側で完結
-/// しているのでここでは扱わない。
+/// 対象と手順はサムネイルの取得ルール (<see cref="ThumbnailRuleSet"/>。既定は x.com / pixiv / imgur のアルバム、
+/// 利用者が data/app/thumbnail_rules.json で足せる) で決まる。imgur の単体画像のような同期 (URL 形だけで決まる) 展開は
+/// JS 側で完結しているのでここでは扱わない。reddit の動画ページ (<see cref="ResolveVideoAsync"/>) は専用の処理。
 /// </para>
 ///
 /// <para>
-/// 実装ポリシー:
-/// <list type="bullet">
-///   <item><description>x.com → <c>api.fxtwitter.com</c> の公開 JSON (認証不要)。最初の photo / 動画サムネを返す。
-///     テキストのみツイートは <see cref="ExpandOutcome.NoMedia"/> を返し、JS 側でスロットごと削除させる。</description></item>
-///   <item><description>pixiv → <c>www.pixiv.net/ajax/illust/&lt;id&gt;</c> (Referer 必須)。<c>urls.regular</c> を返す。
-///     R-18 や非公開作品はログインが必要なため <see cref="ExpandOutcome.Unavailable"/> を返す。</description></item>
-/// </list>
 /// 結果は in-memory <see cref="ConcurrentDictionary{TKey,TValue}"/> でセッション中キャッシュ。
 /// <see cref="ExpandOutcome.Unavailable"/> は次回呼び出しで再試行可能にするためキャッシュから外す。
 /// <see cref="ExpandOutcome.Resolved"/> / <see cref="ExpandOutcome.NoMedia"/> は確定情報として保持。
@@ -62,19 +58,15 @@ public sealed record ExpandResult(string? Url, ExpandOutcome Outcome)
 public sealed class UrlExpander : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly ThumbnailRuleSet _rules;
     private readonly ConcurrentDictionary<string, Task<ExpandResult>> _cache = new(StringComparer.Ordinal);
 
-    // ---- パターン (JS の ASYNC_EXPANDER_RES と同期して維持する) ----
-    private static readonly Regex TwitterRe = new(
-        @"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/(?<user>[A-Za-z0-9_]+)/status/(?<id>\d+)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    /// <summary>取得する内容の大きさの上限 (これを超える応答は読まない)。</summary>
+    private const int MaxResponseBytes = 8 * 1024 * 1024;
 
-    private static readonly Regex PixivRe = new(
-        @"^https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/(?<id>\d+)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    public UrlExpander()
+    public UrlExpander(ThumbnailRuleSet rules)
     {
+        _rules = rules;
         var handler = new SocketsHttpHandler
         {
             AutomaticDecompression   = DecompressionMethods.All,
@@ -91,12 +83,11 @@ public sealed class UrlExpander : IDisposable
         _http.DefaultRequestHeaders.AcceptLanguage.ParseAdd("ja,en;q=0.8");
     }
 
-    /// <summary>URL が非同期展開対象 (x.com / pixiv 等) かを高速に判定。</summary>
-    public static bool IsAsyncExpandable(string url) =>
-        !string.IsNullOrEmpty(url) && (TwitterRe.IsMatch(url) || PixivRe.IsMatch(url));
+    /// <summary>URL が非同期展開対象 (取得ルールのどれかに一致する) かを判定。</summary>
+    public bool IsAsyncExpandable(string url) => _rules.IsMatch(url);
 
     /// <summary>
-    /// URL を実体画像 URL に展開。返値の <see cref="ExpandResult.Outcome"/> で 3 値判別。
+    /// URL を実体画像 URL (複数のこともある) に展開。返値の <see cref="ExpandResult.Outcome"/> で 3 値判別。
     /// 同じ URL の同時呼び出しは Task を共有する (= GetOrAdd)。
     /// <see cref="ExpandOutcome.Unavailable"/> はキャッシュから外して次回呼び出しで再試行可能にする。
     /// </summary>
@@ -116,168 +107,60 @@ public sealed class UrlExpander : IDisposable
         return result;
     }
 
+    /// <summary>取得ルールに従って展開する。失敗理由 (HTTP / 内容の読み取り / 何も取れない) は LogService に書く (= ログウィンドウで確認可)。</summary>
     private async Task<ExpandResult> ExpandInternalAsync(string url)
     {
+        var log = ChBrowser.Services.Logging.LogService.Instance;
+        if (_rules.Find(url) is not { } hit) return ExpandResult.Unavailable;
+        var (rule, m) = hit;
         try
         {
-            var tw = TwitterRe.Match(url);
-            if (tw.Success) return await ExpandTwitterAsync(tw.Groups["id"].Value).ConfigureAwait(false);
+            // 取得せずに URL を組み立てるだけのルール
+            if (rule.Result is not null)
+            {
+                var built = ThumbnailRule.Fill(rule.Result, m);
+                return Uri.TryCreate(built, UriKind.Absolute, out var bu) && (bu.Scheme == Uri.UriSchemeHttp || bu.Scheme == Uri.UriSchemeHttps)
+                    ? ExpandResult.Of(bu.AbsoluteUri)
+                    : ExpandResult.Unavailable;
+            }
 
-            var px = PixivRe.Match(url);
-            if (px.Success) return await ExpandPixivAsync(px.Groups["id"].Value).ConfigureAwait(false);
+            var fetchUrl = ThumbnailRule.Fill(rule.FetchUrl!, m);
+            if (!Uri.TryCreate(fetchUrl, UriKind.Absolute, out var fu) || (fu.Scheme != Uri.UriSchemeHttp && fu.Scheme != Uri.UriSchemeHttps))
+            {
+                log.Write($"[UrlExpand] {rule.Name}: 取得先の URL が不正です: {fetchUrl}");
+                return ExpandResult.Unavailable;
+            }
 
+            using var req = new HttpRequestMessage(HttpMethod.Get, fu);
+            foreach (var (k, v) in rule.FetchHeaders) req.Headers.TryAddWithoutValidation(k, v);
+
+            using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            if (!res.IsSuccessStatusCode)
+            {
+                log.Write($"[UrlExpand] {rule.Name}: {fu} → HTTP {(int)res.StatusCode}");
+                return ExpandResult.Unavailable;
+            }
+            if (res.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
+            {
+                log.Write($"[UrlExpand] {rule.Name}: {fu} → 応答が大きすぎます ({len} バイト)");
+                return ExpandResult.Unavailable;
+            }
+            var content = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+            var urls = ThumbnailRuleSet.ExtractUrls(rule, content, fu);
+            if (urls.Count > 0) return ExpandResult.Of(urls);
+
+            // 何も取れなかった: ルールが「画像が無いと確定」としていれば NoMedia (JS がサムネイルの枠を消す)、
+            // そうでなければ取得失敗 (ログインが要る・非公開等。後で取れるかもしれない)
+            if (rule.EmptyMeansNoMedia) return ExpandResult.NoMedia;
+            log.Write($"[UrlExpand] {rule.Name}: {fu} → 画像の URL を取り出せませんでした");
             return ExpandResult.Unavailable;
         }
         catch (Exception ex)
         {
-            ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[UrlExpand] {url}: {ex.GetType().Name}: {ex.Message}");
+            log.Write($"[UrlExpand] {rule.Name}: {url}: {ex.GetType().Name}: {ex.Message}");
             return ExpandResult.Unavailable;
         }
-    }
-
-    // ---------------------------------------------------------------
-    // x.com (Twitter) — fxtwitter API (動画/GIF はサムネイル URL を返す)
-    // ---------------------------------------------------------------
-
-    /// <summary>
-    /// fxtwitter API でツイートを取得し、表示用画像 URL を返す。
-    /// 失敗理由 (HTTP / JSON / メディア無し) は LogService に書き出す (= ログウィンドウで確認可)。
-    ///
-    /// <para>fxtwitter のレスポンス構造:</para>
-    /// <list type="bullet">
-    ///   <item><description><c>tweet.media.photos[]</c> — 写真。<c>url</c> が画像 URL。</description></item>
-    ///   <item><description><c>tweet.media.videos[]</c> — 動画 / GIF。<c>thumbnail_url</c> がサムネイル画像 URL、<c>url</c> は .mp4。</description></item>
-    ///   <item><description><c>tweet.media.all[]</c> — 上記を表示順で混ぜたもの。<c>type</c> で識別。</description></item>
-    ///   <item><description><c>tweet.quote</c> — 引用元ツイート。引用 RT ではメディアが quote 側にある。</description></item>
-    /// </list>
-    /// メイン tweet にメディアがあればそれを、無ければ quote 内のメディアを探す
-    /// (= 引用 RT で本文側に写真が無く quote 側に写真があるパターンに対応)。
-    /// メイン / quote のどちらにも画像が無い場合は <see cref="ExpandOutcome.NoMedia"/> (確定 = JS でスロット削除)。
-    /// </summary>
-    private async Task<ExpandResult> ExpandTwitterAsync(string statusId)
-    {
-        // ユーザ名はパスに必要だが fxtwitter は値を検証しないので "i" を入れておく。
-        var apiUrl = $"https://api.fxtwitter.com/i/status/{statusId}";
-        using var req = new HttpRequestMessage(HttpMethod.Get, apiUrl);
-        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-        using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-        if (!res.IsSuccessStatusCode)
-        {
-            ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[UrlExpand] fxtwitter status={statusId} → HTTP {(int)res.StatusCode}");
-            return ExpandResult.Unavailable;
-        }
-
-        await using var stream = await res.Content.ReadAsStreamAsync().ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-
-        if (!doc.RootElement.TryGetProperty("tweet", out var tweet) || tweet.ValueKind != JsonValueKind.Object)
-        {
-            ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[UrlExpand] fxtwitter status={statusId}: tweet object missing");
-            return ExpandResult.Unavailable;
-        }
-
-        // 1) メイン tweet のメディアを試す
-        var fromMain = TryExtractMediaUrl(tweet);
-        if (fromMain is not null) return ExpandResult.Of(fromMain);
-
-        // 2) 引用ツイート (= quote tweet) のメディアを試す。引用 RT で本文側に画像が無く、
-        //    quote 側に画像があるパターン (5ch でよく見る) に対応。
-        if (tweet.TryGetProperty("quote", out var quote) && quote.ValueKind == JsonValueKind.Object)
-        {
-            var fromQuote = TryExtractMediaUrl(quote);
-            if (fromQuote is not null) return ExpandResult.Of(fromQuote);
-        }
-
-        // メイン / quote どちらにもメディアが無い (= テキストのみのツイート) → NoMedia 確定。
-        // JS 側はこの URL のスロットを DOM から取り除く (= 「画像取得失敗」プレースホルダを出さない)。
-        return ExpandResult.NoMedia;
-    }
-
-    /// <summary>fxtwitter の tweet object (メインまたは quote) から表示用画像 URL を抽出。
-    /// 優先順位: photos[0].url → videos[0].thumbnail_url → all[0].thumbnail_url/url。
-    /// メディアが無い / 取り出せない場合は null。</summary>
-    private static string? TryExtractMediaUrl(JsonElement tweet)
-    {
-        if (!tweet.TryGetProperty("media", out var media) || media.ValueKind != JsonValueKind.Object)
-            return null;
-
-        // 1) 写真 — photos[0].url
-        if (media.TryGetProperty("photos", out var photos)
-            && photos.ValueKind == JsonValueKind.Array && photos.GetArrayLength() > 0
-            && photos[0].ValueKind == JsonValueKind.Object
-            && photos[0].TryGetProperty("url", out var pu)
-            && pu.ValueKind == JsonValueKind.String)
-        {
-            return pu.GetString();
-        }
-
-        // 2) 動画 / GIF — videos[0].thumbnail_url (サムネイル画像)
-        //    .mp4 そのものではなく thumbnail_url を返すのは、JS 側がここに <img> を作る前提のため。
-        if (media.TryGetProperty("videos", out var videos)
-            && videos.ValueKind == JsonValueKind.Array && videos.GetArrayLength() > 0
-            && videos[0].ValueKind == JsonValueKind.Object
-            && videos[0].TryGetProperty("thumbnail_url", out var vt)
-            && vt.ValueKind == JsonValueKind.String)
-        {
-            return vt.GetString();
-        }
-
-        // 3) フォールバック: all[0] から (将来 photos/videos 配列が削られた場合の保険)
-        if (media.TryGetProperty("all", out var all)
-            && all.ValueKind == JsonValueKind.Array && all.GetArrayLength() > 0
-            && all[0].ValueKind == JsonValueKind.Object)
-        {
-            if (all[0].TryGetProperty("thumbnail_url", out var at) && at.ValueKind == JsonValueKind.String)
-                return at.GetString();
-            if (all[0].TryGetProperty("url",           out var au) && au.ValueKind == JsonValueKind.String)
-                return au.GetString();
-        }
-
-        return null;
-    }
-
-    // ---------------------------------------------------------------
-    // pixiv — ajax/illust
-    // ---------------------------------------------------------------
-
-    private async Task<ExpandResult> ExpandPixivAsync(string illustId)
-    {
-        var apiUrl = $"https://www.pixiv.net/ajax/illust/{illustId}";
-        using var req = new HttpRequestMessage(HttpMethod.Get, apiUrl);
-        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        req.Headers.Referrer = new Uri("https://www.pixiv.net/");
-
-        using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-        if (!res.IsSuccessStatusCode)
-        {
-            ChBrowser.Services.Logging.LogService.Instance.Write(
-                $"[UrlExpand] pixiv illust={illustId} → HTTP {(int)res.StatusCode}");
-            return ExpandResult.Unavailable;
-        }
-
-        await using var stream = await res.Content.ReadAsStreamAsync().ConfigureAwait(false);
-        using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-
-        // { error: false, body: { urls: { regular: "..." }, ... } }
-        // pixiv の error=true は R-18 / 非公開 / 認証要を含む。Unavailable 扱い (= 後でログイン状態が変われば
-        // 取れるかもしれないので NoMedia ではない)。
-        if (doc.RootElement.TryGetProperty("error", out var err) &&
-            err.ValueKind == JsonValueKind.True) return ExpandResult.Unavailable;
-
-        if (!doc.RootElement.TryGetProperty("body", out var body)) return ExpandResult.Unavailable;
-        if (body.ValueKind != JsonValueKind.Object) return ExpandResult.Unavailable;
-        if (!body.TryGetProperty("urls", out var urls)) return ExpandResult.Unavailable;
-        if (urls.ValueKind != JsonValueKind.Object) return ExpandResult.Unavailable;
-
-        // regular > original > small の優先で取得 (regular が表示用、original はフルサイズ)
-        if (urls.TryGetProperty("regular",  out var u) && u.ValueKind == JsonValueKind.String) return ExpandResult.Of(u.GetString()!);
-        if (urls.TryGetProperty("original", out u) && u.ValueKind == JsonValueKind.String) return ExpandResult.Of(u.GetString()!);
-        if (urls.TryGetProperty("small",    out u) && u.ValueKind == JsonValueKind.String) return ExpandResult.Of(u.GetString()!);
-        return ExpandResult.Unavailable;
     }
 
     // ---------------------------------------------------------------

@@ -790,6 +790,12 @@ public static partial class WebView2Helper
             var css    = ChBrowser.Services.Render.EmbeddedAssets.ReadCss("thread.css");
             // image-translation.js = 画像の文字の訳の描画 (ビューアの詳細ペインと共通)
             var js     = ChBrowser.Services.Render.EmbeddedAssets.Read("image-translation.js") + "\n" + ChBrowser.Services.Render.EmbeddedAssets.Read("thread.js");
+            // 取得してサムネイルを求める URL (x.com / pixiv / imgur のアルバム等。サムネイルの取得ルールの対象) の正規表現を、
+            // thread.js より前に置く。設定のメッセージ (setConfig) で送ると、最初のレスの描画に間に合わないことがある
+            // (既定の JSON の書き出しは < > & をエスケープするので、script の中に置いても閉じタグにならない)
+            js = "window.__asyncExpandPatterns = "
+               + System.Text.Json.JsonSerializer.Serialize(ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsPatterns)
+               + ";\n" + js;
             var bridge = ChBrowser.Services.Render.EmbeddedAssets.Read("shortcut-bridge.js");
 
             // テーマ (post.html テンプレ + post.css) を注入。テーマ未登録時は埋め込み既定を使う。

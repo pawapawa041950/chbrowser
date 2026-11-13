@@ -139,6 +139,9 @@ public sealed class DataPaths
     /// <summary>ユーザが追加した 5ch 互換の板 (<see cref="ChBrowser.Services.Bbs.UserBoardsProvider"/>)。</summary>
     public string UserBoardsPath => Path.Combine(AppDir, "user_boards.json");
 
+    /// <summary>利用者が足すサムネイルの取得ルール (<see cref="ChBrowser.Services.Image.ThumbnailRuleSet"/>)。無ければ既定のルールだけを使う。</summary>
+    public string ThumbnailRulesPath => Path.Combine(AppDir, ChBrowser.Services.Image.ThumbnailRuleSet.UserFileName);
+
     public string SubjectTxtPath(string host, string directoryName)
         => Path.Combine(BoardDir(host, directoryName), "_subject.txt");
 
