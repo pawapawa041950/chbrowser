@@ -58,7 +58,7 @@ public readonly record struct ExpandResult(IReadOnlyList<string>? Urls, ExpandOu
 public sealed class UrlExpander : IDisposable
 {
     private readonly HttpClient _http;
-    private readonly ThumbnailRuleSet _rules;
+    private volatile ThumbnailRuleSet _rules;
     private readonly ConcurrentDictionary<string, Task<ExpandResult>> _cache = new(StringComparer.Ordinal);
 
     /// <summary>取得する内容の大きさの上限 (これを超える応答は読まない)。</summary>
@@ -107,12 +107,45 @@ public sealed class UrlExpander : IDisposable
         return result;
     }
 
+    /// <summary>取得ルールを入れ替える (設定画面での変更時)。覚えている結果は古いルールのものなので捨てる。</summary>
+    public void SetRules(ThumbnailRuleSet rules)
+    {
+        _rules = rules;
+        _cache.Clear();
+    }
+
     /// <summary>取得ルールに従って展開する。失敗理由 (HTTP / 内容の読み取り / 何も取れない) は LogService に書く (= ログウィンドウで確認可)。</summary>
     private async Task<ExpandResult> ExpandInternalAsync(string url)
     {
-        var log = ChBrowser.Services.Logging.LogService.Instance;
-        if (_rules.Find(url) is not { } hit) return ExpandResult.Unavailable;
+        var (result, failure) = await RunRuleAsync(_rules, url, null).ConfigureAwait(false);
+        if (failure is not null) ChBrowser.Services.Logging.LogService.Instance.Write("[UrlExpand] " + failure);
+        return result;
+    }
+
+    /// <summary>設定画面の「試す」: <paramref name="rules"/> (編集中のルール) で <paramref name="url"/> を展開し、経過と結果を文章で返す。
+    /// 結果は覚えない (何度でも取得し直す)。</summary>
+    public async Task<string> TestAsync(ThumbnailRuleSet rules, string url)
+    {
+        var trace = new List<string>();
+        var (result, failure) = await RunRuleAsync(rules, url, trace).ConfigureAwait(false);
+        if (failure is not null) trace.Add("失敗: " + failure);
+        else if (result.IsNoMedia) trace.Add("結果: 画像なし (サムネイルの枠を出しません)");
+        else if (result.IsResolved)
+        {
+            trace.Add($"結果: {result.Urls!.Count} 件");
+            trace.AddRange(result.Urls!.Take(20).Select((u, i) => $"  {i + 1}. {u}"));
+            if (result.Urls!.Count > 20) trace.Add($"  … 他 {result.Urls.Count - 20} 件");
+        }
+        return string.Join("\n", trace);
+    }
+
+    /// <summary>ルールを 1 回実行する。<paramref name="trace"/> があれば経過 (どのルールか、取得先、HTTP の結果) を足す。
+    /// 取れなかったときは理由の文面も返す (画像なしと確定した場合は理由なし)。</summary>
+    private async Task<(ExpandResult Result, string? Failure)> RunRuleAsync(ThumbnailRuleSet rules, string url, List<string>? trace)
+    {
+        if (rules.Find(url) is not { } hit) return (ExpandResult.Unavailable, "この URL に一致するルールがありません");
         var (rule, m) = hit;
+        trace?.Add($"ルール: {rule.Name}");
         try
         {
             // 取得せずに URL を組み立てるだけのルール
@@ -120,46 +153,41 @@ public sealed class UrlExpander : IDisposable
             {
                 var built = ThumbnailRule.Fill(rule.Result, m);
                 return Uri.TryCreate(built, UriKind.Absolute, out var bu) && (bu.Scheme == Uri.UriSchemeHttp || bu.Scheme == Uri.UriSchemeHttps)
-                    ? ExpandResult.Of(bu.AbsoluteUri)
-                    : ExpandResult.Unavailable;
+                    ? (ExpandResult.Of(bu.AbsoluteUri), null)
+                    : (ExpandResult.Unavailable, $"{rule.Name}: 組み立てた URL が不正です: {built}");
             }
 
             var fetchUrl = ThumbnailRule.Fill(rule.FetchUrl!, m);
             if (!Uri.TryCreate(fetchUrl, UriKind.Absolute, out var fu) || (fu.Scheme != Uri.UriSchemeHttp && fu.Scheme != Uri.UriSchemeHttps))
-            {
-                log.Write($"[UrlExpand] {rule.Name}: 取得先の URL が不正です: {fetchUrl}");
-                return ExpandResult.Unavailable;
-            }
+                return (ExpandResult.Unavailable, $"{rule.Name}: 取得先の URL が不正です: {fetchUrl}");
+            trace?.Add($"取得先: {fu}");
 
             using var req = new HttpRequestMessage(HttpMethod.Get, fu);
             foreach (var (k, v) in rule.FetchHeaders) req.Headers.TryAddWithoutValidation(k, v);
 
             using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            trace?.Add($"応答: HTTP {(int)res.StatusCode} ({res.Content.Headers.ContentType?.MediaType ?? "種類不明"})");
             if (!res.IsSuccessStatusCode)
-            {
-                log.Write($"[UrlExpand] {rule.Name}: {fu} → HTTP {(int)res.StatusCode}");
-                return ExpandResult.Unavailable;
-            }
+                return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → HTTP {(int)res.StatusCode}");
             if (res.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
-            {
-                log.Write($"[UrlExpand] {rule.Name}: {fu} → 応答が大きすぎます ({len} バイト)");
-                return ExpandResult.Unavailable;
-            }
+                return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → 応答が大きすぎます ({len} バイト)");
             var content = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             var urls = ThumbnailRuleSet.ExtractUrls(rule, content, fu);
-            if (urls.Count > 0) return ExpandResult.Of(urls);
+            if (urls.Count > 0) return (ExpandResult.Of(urls), null);
 
             // 何も取れなかった: ルールが「画像が無いと確定」としていれば NoMedia (JS がサムネイルの枠を消す)、
             // そうでなければ取得失敗 (ログインが要る・非公開等。後で取れるかもしれない)
-            if (rule.EmptyMeansNoMedia) return ExpandResult.NoMedia;
-            log.Write($"[UrlExpand] {rule.Name}: {fu} → 画像の URL を取り出せませんでした");
-            return ExpandResult.Unavailable;
+            if (rule.EmptyMeansNoMedia) return (ExpandResult.NoMedia, null);
+            return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → 画像の URL を取り出せませんでした");
+        }
+        catch (JsonException ex)
+        {
+            return (ExpandResult.Unavailable, $"{rule.Name}: 応答を JSON として読めません ({ex.Message})");
         }
         catch (Exception ex)
         {
-            log.Write($"[UrlExpand] {rule.Name}: {url}: {ex.GetType().Name}: {ex.Message}");
-            return ExpandResult.Unavailable;
+            return (ExpandResult.Unavailable, $"{rule.Name}: {url}: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

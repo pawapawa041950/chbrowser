@@ -3,13 +3,72 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace ChBrowser.Services.Image;
 
-/// <summary>サムネイルの取得ルール 1 つ: 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から、
-/// サムネイルにする画像の URL を求める手順。書式の説明は既定のルール (<c>Resources/thumbnail-rules.json</c>) の先頭にある。</summary>
+/// <summary>サムネイルの取得ルール 1 つの、ファイルに書いてあるとおりの内容 (検査前。設定画面の編集とファイルの読み書きに使う)。
+/// 書式の説明は既定のルール (<c>Resources/thumbnail-rules.json</c>) の先頭にある。</summary>
+public sealed record ThumbnailRuleData
+{
+    public string  Name     { get; init; } = "";
+    public bool    Enabled  { get; init; } = true;
+    public string  Match    { get; init; } = "";
+    /// <summary>取得せずに URL を組み立てるだけのとき、その URL のひな形 (空でなければ <see cref="FetchUrl"/> より優先)。</summary>
+    public string? Result   { get; init; }
+    public string? FetchUrl { get; init; }
+    public IReadOnlyDictionary<string, string> Headers { get; init; } = new Dictionary<string, string>();
+    /// <summary>"json" か "regex"。</summary>
+    public string  Format   { get; init; } = "json";
+    public IReadOnlyList<string> Extract { get; init; } = Array.Empty<string>();
+    /// <summary>"unavailable" か "noMedia"。</summary>
+    public string  Empty    { get; init; } = "unavailable";
+
+    /// <summary>内容を検査して、使える形 (<see cref="ThumbnailRule"/>) にする。書き間違いは <see cref="FormatException"/> (利用者に見せる文面)。</summary>
+    public ThumbnailRule Compile()
+    {
+        if (string.IsNullOrWhiteSpace(Match)) throw new FormatException("対象 URL (match) がありません");
+        Regex regex;
+        try { regex = new Regex(Match, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); }
+        catch (ArgumentException ex) { throw new FormatException("対象 URL (match) の正規表現が正しくありません: " + ex.Message); }
+
+        var result   = string.IsNullOrWhiteSpace(Result)   ? null : Result!.Trim();
+        var fetchUrl = string.IsNullOrWhiteSpace(FetchUrl) ? null : FetchUrl!.Trim();
+        if (result is null && fetchUrl is null) throw new FormatException("組み立てる URL (result) か取得先の URL (fetch.url) のどちらかが要ります");
+
+        var format = (Format ?? "json").Trim().ToLowerInvariant();
+        if (format != "json" && format != "regex") throw new FormatException($"読み方 (format) \"{Format}\" は使えません (json / regex)");
+
+        var extract = Extract.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList();
+        if (result is null && extract.Count == 0) throw new FormatException("取り出し方 (extract) がありません");
+        if (result is null && format == "regex")
+        {
+            foreach (var x in extract)
+            {
+                try { _ = new Regex(x); }
+                catch (ArgumentException ex) { throw new FormatException($"取り出し方 (extract) の正規表現が正しくありません: {x} ({ex.Message})"); }
+            }
+        }
+
+        return new ThumbnailRule
+        {
+            Name              = string.IsNullOrWhiteSpace(Name) ? "(名前なし)" : Name.Trim(),
+            Match             = Match,
+            Regex             = regex,
+            Result            = result,
+            FetchUrl          = fetchUrl,
+            FetchHeaders      = new Dictionary<string, string>(Headers, StringComparer.OrdinalIgnoreCase),
+            UseRegex          = format == "regex",
+            Extract           = extract,
+            EmptyMeansNoMedia = string.Equals((Empty ?? "").Trim(), "noMedia", StringComparison.OrdinalIgnoreCase),
+        };
+    }
+}
+
+/// <summary>サムネイルの取得ルール 1 つ (検査済み): 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から、
+/// サムネイルにする画像の URL を求める手順。</summary>
 public sealed class ThumbnailRule
 {
     public required string Name  { get; init; }
@@ -43,10 +102,10 @@ public sealed class ThumbnailRule
 /// <summary>サムネイルの取得ルールの一覧 (利用者のルール → 既定のルールの順。最初に一致した 1 つを使う)。</summary>
 public sealed class ThumbnailRuleSet
 {
-    /// <summary>利用者のルールのファイル名 (データフォルダの直下)。</summary>
+    /// <summary>利用者のルールのファイル名 (データフォルダの app の下)。</summary>
     public const string UserFileName = "thumbnail_rules.json";
 
-    /// <summary>起動時に読み込んだ一覧 (スレ表示の設定 <c>setConfig.asyncExpandPatterns</c> を作る側が参照する)。</summary>
+    /// <summary>今使っている一覧 (起動時と設定画面での変更時に入れ替える)。スレ表示が対象 URL の一覧を表示側へ渡すのに使う。</summary>
     public static ThumbnailRuleSet Current { get; set; } = new(Array.Empty<ThumbnailRule>());
 
     public IReadOnlyList<ThumbnailRule> Rules { get; }
@@ -72,26 +131,38 @@ public sealed class ThumbnailRuleSet
     }
 
     /// <summary>既定のルール (埋め込み) と利用者のルール (<paramref name="userPath"/>。無ければ既定だけ) を読む。
-    /// 同じ名前の利用者のルールは既定を置き換え、<c>"enabled": false</c> はそのルールを止める。
     /// 読めないルールは飛ばしてログに書く (1 つの書き間違いで全部が止まらないように)。</summary>
     public static ThumbnailRuleSet Load(string builtinJson, string? userPath)
     {
         var log = ChBrowser.Services.Logging.LogService.Instance;
-        var user = new List<(ThumbnailRule? Rule, string Name)>();
+        var user = new List<ThumbnailRuleData>();
         if (userPath is not null && File.Exists(userPath))
         {
-            try { user = Parse(File.ReadAllText(userPath), "利用者のルール"); }
+            try { user = ReadData(File.ReadAllText(userPath)); }
             catch (Exception ex) { log.Write($"[ThumbRule] {UserFileName} を読めません: {ex.Message}"); }
         }
-        List<(ThumbnailRule? Rule, string Name)> builtin;
-        try { builtin = Parse(builtinJson, "既定のルール"); }
+        List<ThumbnailRuleData> builtin;
+        try { builtin = ReadData(builtinJson); }
         catch (Exception ex) { log.Write($"[ThumbRule] 既定のルールを読めません: {ex.Message}"); builtin = new(); }
 
+        var set = Build(user, builtin, log.Write);
+        if (user.Count > 0) log.Write($"[ThumbRule] 利用者のルール {user.Count} 件を読み込みました (有効なルールは合計 {set.Rules.Count} 件)");
+        return set;
+    }
+
+    /// <summary>利用者のルール → 既定のルールの順に並べた一覧を作る。同じ名前の利用者のルールは既定を置き換え、
+    /// 止めてある (<see cref="ThumbnailRuleData.Enabled"/> = false) ルールは使わない (同じ名前の既定も止まる)。</summary>
+    public static ThumbnailRuleSet Build(IReadOnlyList<ThumbnailRuleData> user, IReadOnlyList<ThumbnailRuleData> builtin, Action<string>? log = null)
+    {
+        var rules = new List<ThumbnailRule>();
         var userNames = new HashSet<string>(user.Select(u => u.Name), StringComparer.OrdinalIgnoreCase);
-        var rules = user.Where(u => u.Rule is not null).Select(u => u.Rule!)
-            .Concat(builtin.Where(b => b.Rule is not null && !userNames.Contains(b.Name)).Select(b => b.Rule!))
-            .ToList();
-        if (user.Count > 0) log.Write($"[ThumbRule] 利用者のルール {user.Count} 件を読み込みました (有効なルールは合計 {rules.Count} 件)");
+        foreach (var (d, label) in user.Select(u => (u, "利用者のルール"))
+                     .Concat(builtin.Where(b => !userNames.Contains(b.Name)).Select(b => (b, "既定のルール"))))
+        {
+            if (!d.Enabled) continue;
+            try { rules.Add(d.Compile()); }
+            catch (FormatException ex) { log?.Invoke($"[ThumbRule] {label}「{d.Name}」を読めないので飛ばします: {ex.Message}"); }
+        }
         return new ThumbnailRuleSet(rules);
     }
 
@@ -101,11 +172,10 @@ public sealed class ThumbnailRuleSet
         AllowTrailingCommas = true,
     };
 
-    /// <summary>ルールのファイルを読む。止めてあるルール (<c>enabled: false</c>) は Rule = null で名前だけ返す (既定を止めるのに使う)。</summary>
-    internal static List<(ThumbnailRule? Rule, string Name)> Parse(string json, string label)
+    /// <summary>ルールのファイルを、書いてあるとおりに読む (検査はしない)。ファイル自体が JSON として読めなければ例外。</summary>
+    public static List<ThumbnailRuleData> ReadData(string json)
     {
-        var log  = ChBrowser.Services.Logging.LogService.Instance;
-        var list = new List<(ThumbnailRule?, string)>();
+        var list = new List<ThumbnailRuleData>();
         using var doc = JsonDocument.Parse(json, ParseOptions);
         if (doc.RootElement.ValueKind != JsonValueKind.Object ||
             !doc.RootElement.TryGetProperty("rules", out var rules) || rules.ValueKind != JsonValueKind.Array)
@@ -116,61 +186,80 @@ public sealed class ThumbnailRuleSet
         {
             i++;
             if (e.ValueKind != JsonValueKind.Object) continue;
-            var name = Str(e, "name") ?? $"#{i}";
-            try
+
+            string? fetchUrl = null;
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (e.TryGetProperty("fetch", out var f) && f.ValueKind == JsonValueKind.Object)
             {
-                if (e.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.False) { list.Add((null, name)); continue; }
-
-                var match = Str(e, "match") ?? throw new FormatException("match がありません");
-                var regex = new Regex(match, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
-
-                var result = Str(e, "result");
-                string? fetchUrl = null;
-                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (e.TryGetProperty("fetch", out var f) && f.ValueKind == JsonValueKind.Object)
-                {
-                    fetchUrl = Str(f, "url");
-                    if (f.TryGetProperty("headers", out var h) && h.ValueKind == JsonValueKind.Object)
-                        foreach (var p in h.EnumerateObject())
-                            if (p.Value.ValueKind == JsonValueKind.String) headers[p.Name] = p.Value.GetString()!;
-                }
-                if (result is null && fetchUrl is null) throw new FormatException("result か fetch.url のどちらかが要ります");
-
-                var format = (Str(e, "format") ?? "json").ToLowerInvariant();
-                if (format != "json" && format != "regex") throw new FormatException($"format \"{format}\" は使えません (json / regex)");
-
-                var extract = new List<string>();
-                if (e.TryGetProperty("extract", out var ex))
-                {
-                    if (ex.ValueKind == JsonValueKind.String) extract.Add(ex.GetString()!);
-                    else if (ex.ValueKind == JsonValueKind.Array)
-                        extract.AddRange(ex.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!));
-                }
-                if (result is null && extract.Count == 0) throw new FormatException("extract がありません");
-                if (format == "regex")
-                    foreach (var x in extract) _ = new Regex(x);   // 書き間違いをここで見つける
-
-                var empty = (Str(e, "empty") ?? "unavailable").ToLowerInvariant();
-
-                list.Add((new ThumbnailRule
-                {
-                    Name              = name,
-                    Match             = match,
-                    Regex             = regex,
-                    Result            = result,
-                    FetchUrl          = fetchUrl,
-                    FetchHeaders      = headers,
-                    UseRegex          = format == "regex",
-                    Extract           = extract,
-                    EmptyMeansNoMedia = empty == "nomedia",
-                }, name));
+                fetchUrl = Str(f, "url");
+                if (f.TryGetProperty("headers", out var h) && h.ValueKind == JsonValueKind.Object)
+                    foreach (var p in h.EnumerateObject())
+                        if (p.Value.ValueKind == JsonValueKind.String) headers[p.Name] = p.Value.GetString()!;
             }
-            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            var extract = new List<string>();
+            if (e.TryGetProperty("extract", out var ex))
             {
-                log.Write($"[ThumbRule] {label}「{name}」を読めないので飛ばします: {ex.Message}");
+                if (ex.ValueKind == JsonValueKind.String) extract.Add(ex.GetString()!);
+                else if (ex.ValueKind == JsonValueKind.Array)
+                    extract.AddRange(ex.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!));
             }
+            list.Add(new ThumbnailRuleData
+            {
+                Name     = Str(e, "name") ?? $"#{i}",
+                Enabled  = !(e.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.False),
+                Match    = Str(e, "match") ?? "",
+                Result   = Str(e, "result"),
+                FetchUrl = fetchUrl,
+                Headers  = headers,
+                Format   = Str(e, "format") ?? "json",
+                Extract  = extract,
+                Empty    = Str(e, "empty") ?? "unavailable",
+            });
         }
         return list;
+    }
+
+    /// <summary>ルールの一覧をファイルの書式 (JSON) にする (設定画面からの保存用)。</summary>
+    public static string WriteData(IEnumerable<ThumbnailRuleData> rules)
+    {
+        using var ms = new MemoryStream();
+        using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WriteStartArray("rules");
+            foreach (var d in rules)
+            {
+                w.WriteStartObject();
+                w.WriteString("name", d.Name);
+                if (!d.Enabled) w.WriteBoolean("enabled", false);
+                w.WriteString("match", d.Match);
+                if (!string.IsNullOrWhiteSpace(d.Result)) w.WriteString("result", d.Result);
+                if (!string.IsNullOrWhiteSpace(d.FetchUrl) || d.Headers.Count > 0)
+                {
+                    w.WriteStartObject("fetch");
+                    w.WriteString("url", d.FetchUrl ?? "");
+                    if (d.Headers.Count > 0)
+                    {
+                        w.WriteStartObject("headers");
+                        foreach (var (k, v) in d.Headers) w.WriteString(k, v);
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndObject();
+                }
+                w.WriteString("format", d.Format);
+                if (d.Extract.Count > 0)
+                {
+                    w.WriteStartArray("extract");
+                    foreach (var x in d.Extract) w.WriteStringValue(x);
+                    w.WriteEndArray();
+                }
+                if (!string.Equals(d.Empty, "unavailable", StringComparison.OrdinalIgnoreCase)) w.WriteString("empty", d.Empty);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        return System.Text.Encoding.UTF8.GetString(ms.ToArray()) + "\n";
     }
 
     private static string? Str(JsonElement e, string name)

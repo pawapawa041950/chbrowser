@@ -402,8 +402,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         Action?           clearEddiCookiesAction   = null,
         Action?           openAiBoardGuideAction   = null,
         Func<LlmSettings, System.Threading.Tasks.Task<(bool ok, string message)>>? testLlmConnectionAction = null,
-        RedditSettingsHooks? reddit = null)
+        RedditSettingsHooks? reddit = null,
+        ThumbnailSettingsHooks? thumbnails = null)
     {
+        InitThumbnailRules(thumbnails);
         _reddit = reddit;
         _redditLoginStatus = reddit?.GetStatus() ?? "";
         RedditLoginCommand  = new AsyncRelayCommand(() => RunRedditAsync(r => r.Login()),  () => _reddit is not null);
@@ -445,6 +447,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Categories.Add(new("アンカー判定", "掲示板ごとのレス参照 (アンカー) の判定規則"));
         Categories.Add(new("タブ",         "タブ幅 (スレ一覧タブ / スレッドタブ)"));
         Categories.Add(new("画像",         "キャッシュ上限、キャッシュフォルダを開く、キャッシュクリア"));
+        Categories.Add(new("サムネイル取得", "x.com・imgur のアルバム等、ページの URL からサムネイルを出すルールの追加・編集・テスト"));
         Categories.Add(new("ビューア",     "タブのサムネイルサイズ"));
         Categories.Add(new("デザイン編集", "各ペインの CSS をエディタで開いて編集する"));
         SelectedCategory = Categories[0];

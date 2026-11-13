@@ -712,6 +712,7 @@ public partial class App : Application
             clearCookiesAction:       () => ClearDonguriCookiesNow(),
             clearEddiCookiesAction:   () => ClearProviderCookiesNow("eddi"),
             reddit:                   CreateRedditSettingsHooks(),
+            thumbnails:               CreateThumbnailSettingsHooks(),
             loginNowAction:           LoginDonguriNow,
             openAiBoardGuideAction:   OpenAiBoardGuideFile,
             // LLM カテゴリ「接続確認」: LlmClient に委譲し、結果を (bool, string) に変換して返す。
@@ -724,6 +725,30 @@ public partial class App : Application
         // 起動時試行の最終状態を設定画面にも反映 (= ウィンドウ開いた瞬間に「ログイン済」/「認証失敗 (...)」が見える)。
         if (_mainVm is not null) SetLoginStatus(_mainVm, _mainVm.DonguriLoginStatus);
         return vm;
+    }
+
+    /// <summary>設定「サムネイル取得」用: ルールのファイルの場所・既定のルール・反映・テスト。</summary>
+    private ChBrowser.ViewModels.ThumbnailSettingsHooks? CreateThumbnailSettingsHooks()
+    {
+        if (_paths is null || _urlExpander is null) return null;
+        var expander = _urlExpander;
+        return new ChBrowser.ViewModels.ThumbnailSettingsHooks(
+            UserPath:    _paths.ThumbnailRulesPath,
+            BuiltinJson: ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.json"),
+            Apply:       ApplyThumbnailRules,
+            Test:        (rules, url) => expander.TestAsync(rules, url));
+    }
+
+    /// <summary>設定画面で変えたサムネイルの取得ルールを反映する: 取得側のルールを入れ替え、対象 URL の一覧が変わっていれば
+    /// 表示側にも届ける (開いているスレへは設定のメッセージで、これから開くスレへはシェルの作り直しで)。</summary>
+    private void ApplyThumbnailRules(ChBrowser.Services.Image.ThumbnailRuleSet rules)
+    {
+        var patternsChanged = !ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsPatterns.SequenceEqual(rules.JsPatterns);
+        ChBrowser.Services.Image.ThumbnailRuleSet.Current = rules;
+        _urlExpander?.SetRules(rules);
+        if (!patternsChanged) return;
+        WebView2Helper.InvalidateShellCaches();
+        _mainVm?.RefreshThreadConfigForThumbnailRules();
     }
 
     /// <summary>設定画面が閉じた時に MainWindow から呼ばれる。<see cref="_currentSettingsVm"/> をクリアする

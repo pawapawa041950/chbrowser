@@ -65,6 +65,7 @@
         <DataTemplate x:Key="AnchorRulesTemplate">   <settings:AnchorRulesPanel /> </DataTemplate>
         <DataTemplate x:Key="TabTemplate">           <settings:TabPanel /> </DataTemplate>
         <DataTemplate x:Key="ImageTemplate">      <settings:ImagePanel /> </DataTemplate>
+        <DataTemplate x:Key="ThumbnailRulesTemplate"> <settings:ThumbnailRulesPanel /> </DataTemplate>
         <DataTemplate x:Key="ViewerTemplate">     <settings:ViewerPanel /> </DataTemplate>
         <DataTemplate x:Key="DesignTemplate">     <settings:DesignPanel /> </DataTemplate>
 
@@ -212,6 +213,9 @@
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="画像">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ImageTemplate}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="サムネイル取得">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource ThumbnailRulesTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="ビューア">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ViewerTemplate}" />

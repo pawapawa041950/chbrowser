@@ -1197,17 +1197,20 @@ var CHB_SCRIPT_READY = 0;
      * 実体画像 URL を解決できる可能性のある URL のパターン。
      * 対象は C# のサムネイルの取得ルール (ThumbnailRuleSet。既定 + 利用者のルール) で決まり、その正規表現 (文字列の配列) を
      * C# がこのスクリプトの前に window.__asyncExpandPatterns として置く (WebView2Helper.LoadThreadShellHtml)。
+     * 設定画面でルールを変えたときは setConfig.asyncExpandPatterns でも届く (それ以降に描くレスから効く)。
      * JavaScript で通らない書き方のものは飛ばす (そのルールの URL はサムネイルが出ないだけで、他には影響しない)。
      */
-    const ASYNC_EXPANDER_RES = (function () {
+    function compileAsyncExpandPatterns(patterns) {
         const list = [];
-        for (const p of (Array.isArray(window.__asyncExpandPatterns) ? window.__asyncExpandPatterns : [])) {
+        for (const p of (Array.isArray(patterns) ? patterns : [])) {
             if (typeof p !== 'string' || !p) continue;
             try { list.push(new RegExp(p, 'i')); }
             catch (e) { console.warn('asyncExpandPatterns: この正規表現は使えません: ' + p + ' (' + e.message + ')'); }
         }
         return list;
-    })();
+    }
+    let ASYNC_EXPANDER_RES = compileAsyncExpandPatterns(window.__asyncExpandPatterns);
+    let asyncExpandPatternsKey = JSON.stringify(Array.isArray(window.__asyncExpandPatterns) ? window.__asyncExpandPatterns : []);
 
     /** 取得ルールで求まった実体の URL: ページの URL → 画像・動画の URL の配列 (1 つの URL に複数あることがある)。
      *  描き直し (表示モードの切り替え等) のときに、問い合わせ直さずにそのままサムネイルを出すために覚えておく。 */
@@ -5972,6 +5975,15 @@ var CHB_SCRIPT_READY = 0;
                     // ---- 掲示板提供者ごとの設定 (doc/multi-bbs-design.md) ----
                     if (typeof msg.postNumberDigits === 'number' && msg.postNumberDigits >= 1) NUM_JUMP_MAX_DIGITS = Math.min(12, msg.postNumberDigits);
                     if (Array.isArray(msg.threadLinkRules)) THREAD_LINK_RULES = compileThreadLinkRules(msg.threadLinkRules);
+                    if (Array.isArray(msg.asyncExpandPatterns)) {
+                        // ルールが変わったら、覚えている展開結果も古いので捨てる (変わっていなければそのまま)
+                        const key = JSON.stringify(msg.asyncExpandPatterns);
+                        if (key !== asyncExpandPatternsKey) {
+                            asyncExpandPatternsKey = key;
+                            ASYNC_EXPANDER_RES = compileAsyncExpandPatterns(msg.asyncExpandPatterns);
+                            expandedMediaCache.clear();
+                        }
+                    }
                     if (Array.isArray(msg.anchorRules)) {
                         // 規則が変わるとアンカー抽出結果 (= 返信ツリー / 逆引き) が変わる。通常はレス到着前に届くので
                         // 再描画はしないが、既にレスがある場合は逆引きだけ最新化しておく (表示はタブ再オープンで揃う)。
