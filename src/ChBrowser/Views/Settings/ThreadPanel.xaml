@@ -44,6 +44,16 @@
                  HorizontalAlignment="Left"
                  Margin="0,0,0,16" />
 
+        <TextBlock Text="1 つの URL から出すサムネイルの上限 (枚)" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <TextBlock Text="画像が複数ある URL (imgur のアルバム、複数画像の x.com の投稿等) で、サムネイル・動画プレーヤーを何枚まで出すか (1〜100)。これを超える分は「他 N 枚」と表示します。変更はすぐ反映されます。"
+                   Foreground="#666"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,4" />
+        <TextBox Text="{Binding MaxThumbnailsPerUrl, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay, Delay=400}"
+                 Width="80"
+                 HorizontalAlignment="Left"
+                 Margin="0,0,0,16" />
+
         <TextBlock Text="ID 強調しきい値 (件)" FontWeight="SemiBold" Margin="0,0,0,4" />
         <TextBlock Text="同一 ID の書き込みがこの件数以上ある場合、レス先頭の「ID」文字列を赤色で強調表示します。1 にすると同 ID が 2 件以上で赤、5 にすると 5 件以上で赤になります。同 ID が 2 件以上のときの「ID」のリンク風装飾 (ホバーで一覧ポップアップ) は閾値に関係なく常時有効です。"
                    Foreground="#666"

@@ -162,6 +162,6 @@
                  Height="120" Margin="0,6,0,0" TextWrapping="NoWrap"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Background="#FAFAFA" />
         <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
-                   Text="いまの (編集中の) ルールで、その URL からどの画像の URL が取り出せるかを確かめます。スレでは 1 つの URL につき 4 枚までサムネイルを出し、残りは「他 N 枚」と表示します。" />
+                   Text="いまの (編集中の) ルールで、その URL からどの画像の URL が取り出せるかを確かめます。スレでは 1 つの URL につき設定した枚数 (設定 → スレッド。既定は 4 枚) までサムネイルを出し、残りは「他 N 枚」と表示します。" />
     </StackPanel>
 </UserControl>

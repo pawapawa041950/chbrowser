@@ -224,6 +224,13 @@ public sealed record AppConfig
     /// <summary>画像 HEAD 自動取得しきい値 (MB)。これ以上の画像はクリックされるまで取得しない。即時反映。</summary>
     public int ImageSizeThresholdMb { get; init; } = 5;
 
+    /// <summary>1 つの URL から出すサムネイル (動画プレーヤー等を含む) の上限。アルバムや複数画像の投稿でこれを超える分は
+    /// 「他 N 枚」とだけ出す。1〜<see cref="MaxThumbnailsPerUrlLimit"/>。即時反映 (表示中のスレも描き直す)。</summary>
+    public int MaxThumbnailsPerUrl { get; init; } = 4;
+
+    /// <summary><see cref="MaxThumbnailsPerUrl"/> に設定できる上限。</summary>
+    public const int MaxThumbnailsPerUrlLimit = 100;
+
     /// <summary>同一 ID の書込が何件以上あったら ID の "ID" 文字列を赤色で強調するかの閾値 (Phase 22)。
     /// 既定 5 = 同一 ID が 5 件以上で赤。1 にすると同 ID が 2 件以上で赤、等。
     /// 同 ID が 2 件以上 (= 単に複数) のときはリンク風装飾は常に出る (赤化はこの閾値を超えたときだけ)。

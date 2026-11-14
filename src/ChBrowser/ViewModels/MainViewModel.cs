@@ -819,6 +819,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             type                  = "setConfig",
             popularThreshold      = config.PopularThreshold,
             imageSizeThresholdMb  = config.ImageSizeThresholdMb,
+            maxThumbnailsPerUrl   = Math.Clamp(config.MaxThumbnailsPerUrl, 1, AppConfig.MaxThumbnailsPerUrlLimit),
             idHighlightThreshold  = config.IdHighlightThreshold,
             metaPopupClickOnly    = config.MetaPopupClickOnly,
             debug                 = config.DebugDisableRecovery,

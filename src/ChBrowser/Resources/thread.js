@@ -1217,8 +1217,9 @@ var CHB_SCRIPT_READY = 0;
     /** サムネイルルールで求まった実体の URL: ページの URL → { urls: 画像・動画の URL の配列 (1 つの URL に複数あることがある), display: 出し方 }。
      *  描き直し (表示モードの切り替え等) のときに、問い合わせ直さずにそのままサムネイルを出すために覚えておく。 */
     const expandedMediaCache = new Map();
-    /** 1 つの URL から出すサムネイルの上限。これを超える分は「他 N 枚」とだけ出す。 */
-    const MAX_EXPANDED_THUMBS = 4;
+    /** 1 つの URL から出すサムネイルの上限。これを超える分は「他 N 枚」とだけ出す。
+     *  設定 (スレッド → 1 つの URL から出すサムネイルの上限) で変えられ、setConfig.maxThumbnailsPerUrl で届く。 */
+    let MAX_EXPANDED_THUMBS = 4;
 
     /** 求まった実体の URL (urls) のスロット。display (ルールの「表示のしかた」) に従って、それぞれ
      *    image    → 画像のスロット (その URL が本文に直接書かれていたのと同じ)
@@ -5998,6 +5999,17 @@ var CHB_SCRIPT_READY = 0;
                     // Phase 11: アプリ設定の即時反映
                     if (typeof msg.popularThreshold     === 'number') POPULAR_THRESHOLD     = msg.popularThreshold;
                     if (typeof msg.imageSizeThresholdMb === 'number') IMAGE_SIZE_THRESHOLD  = msg.imageSizeThresholdMb * 1024 * 1024;
+                    if (typeof msg.maxThumbnailsPerUrl === 'number' && msg.maxThumbnailsPerUrl >= 1
+                        && Math.floor(msg.maxThumbnailsPerUrl) !== MAX_EXPANDED_THUMBS) {
+                        MAX_EXPANDED_THUMBS = Math.floor(msg.maxThumbnailsPerUrl);
+                        // 表示済みのレスにも反映する (設定のメッセージは最初のレスの描画より後に届くことがあるので、
+                        // 起動時に復元したスレでも設定どおりの枚数になるように)。位置はそのまま
+                        if (allPosts.length > 0) {
+                            const y = window.scrollY || 0;
+                            renderCurrentViewMode();
+                            window.scrollTo(0, y);
+                        }
+                    }
                     if (typeof msg.idHighlightThreshold === 'number' && msg.idHighlightThreshold !== ID_HIGHLIGHT_THRESHOLD) {
                         ID_HIGHLIGHT_THRESHOLD = msg.idHighlightThreshold;
                         // しきい値変化で id-many クラスの付与判定が変わるので decoration を再計算

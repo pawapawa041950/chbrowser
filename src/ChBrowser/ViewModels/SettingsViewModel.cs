@@ -183,6 +183,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
     [ObservableProperty] private string _defaultThreadViewMode = "DedupTree2";
     [ObservableProperty] private int    _imageSizeThresholdMb  = 5;
+    /// <summary>1 つの URL から出すサムネイルの上限 (1〜<see cref="AppConfig.MaxThumbnailsPerUrlLimit"/>)。</summary>
+    [ObservableProperty] private int    _maxThumbnailsPerUrl   = 4;
     [ObservableProperty] private int    _idHighlightThreshold  = 5;
     [ObservableProperty] private bool   _metaPopupClickOnly    = true;
     [ObservableProperty] private int    _cacheMaxMb            = 1024;
@@ -484,6 +486,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         InitLlmProfiles(initial);
         DefaultThreadViewMode        = initial.DefaultThreadViewMode;
         ImageSizeThresholdMb         = initial.ImageSizeThresholdMb;
+        MaxThumbnailsPerUrl          = Math.Clamp(initial.MaxThumbnailsPerUrl, 1, AppConfig.MaxThumbnailsPerUrlLimit);
         IdHighlightThreshold         = initial.IdHighlightThreshold;
         MetaPopupClickOnly           = initial.MetaPopupClickOnly;
         CacheMaxMb                   = initial.CacheMaxMb;
@@ -662,6 +665,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                                         : new System.Collections.Generic.Dictionary<string, AnchorRule[]>(_anchorRulesByProvider, StringComparer.Ordinal),
         DefaultThreadViewMode       = DefaultThreadViewMode,
         ImageSizeThresholdMb        = ImageSizeThresholdMb,
+        MaxThumbnailsPerUrl         = Math.Clamp(MaxThumbnailsPerUrl, 1, AppConfig.MaxThumbnailsPerUrlLimit),
         IdHighlightThreshold        = IdHighlightThreshold,
         MetaPopupClickOnly          = MetaPopupClickOnly,
         CacheMaxMb                  = CacheMaxMb,
