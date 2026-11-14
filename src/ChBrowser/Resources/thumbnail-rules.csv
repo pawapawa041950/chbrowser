@@ -63,6 +63,8 @@
 #             - HTTP GET で取得する (POST はできない)。転送 (リダイレクト) は 5 回までたどる。15 秒で打ち切る。
 #             - 応答が 200 番台でないとき、8MB を超えるときは失敗になる。
 #             - ログインは使えない (アプリ内ブラウザのログイン状態・Cookie は送られない)。誰でも見られる URL だけが対象。
+#               例外: www.reddit.com と old.reddit.com への取得だけは、このアプリの reddit のログイン (設定 → 認証) を使って送る
+#               (reddit はログイン無しの取得を断るため)。reddit にログインしていないと失敗になる。
 #             - JavaScript は実行されない。取得した文字列そのもの (JSON や HTML のソース) から取り出す。
 #               ブラウザで「ページのソースを表示」したときに画像の URL が見えないページは、HTML からは取り出せない。
 #               その場合は、そのサイトが公開している JSON の問い合わせ先 (API) を fetch_url にする。
@@ -83,6 +85,8 @@
 #             ● format が json のとき: 項目の場所を書く。
 #                 .      下の階層へ進む                       例: data.image.url
 #                 []     配列のすべての要素                   例: media[].url        (media の各要素の url を全部)
+#                        オブジェクトに付けると、そのすべての項目の値 (キーが ID になっている JSON 用)
+#                                                             例: {"items":{"abc":{"url":"…"},"def":{"url":"…"}}}  →  items[].url
 #                 [0]    配列の 1 つの要素 (0 が先頭)         例: media[0].url
 #                 a|b    a があれば a、無ければ b (要素ごと)   例: media[].thumbnail_url|url
 #               文字列の値だけが取り出される (数値・真偽・オブジェクトは取り出されない)。空文字と null は「無い」扱い。
@@ -143,6 +147,9 @@
 #   imgur-gallery imgur.com/gallery/<ID> と imgur.com/gallery/<題名>-<ID>。公開の投稿 (アルバムか単体の画像・動画)。
 #   imgur         単体画像のページ imgur.com/<ID> (a/ gallery/ t/ は先読みで除く)。URL の形だけで決まるので result。
 #   youtube       watch / youtu.be / shorts / embed / live。アプリ内では再生できないので、サムネイルを組み立てて external。
+#   reddit-gallery reddit.com/gallery/<ID> (画像を複数付けた投稿)。投稿の JSON を reddit のログインで取得し、
+#                 media_metadata (キーが画像の ID のオブジェクト) の各画像の URL を取り出す。GIF は gif の方に入っている。
+#                 並び順はアプリが投稿での順 (gallery_data) に直す。reddit にログインしていないと取れない。
 #
 # enabled,name,match,result,fetch_url,headers,format,extract,empty,display
 1,x.com,"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/[A-Za-z0-9_]+/status/(?<id>\d+)",,https://api.fxtwitter.com/i/status/{id},Accept: application/json,json,tweet.media.all[].url || tweet.quote.media.all[].url,noMedia,auto
@@ -151,3 +158,4 @@
 1,imgur-gallery,^https?://(?:www\.|m\.)?imgur\.com/gallery/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/posts/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable,auto
 1,imgur,^https?://(?:www\.|m\.)?imgur\.com/(?!(?:a|gallery|t)(?:[/?#]|$))(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,https://i.imgur.com/{id}.jpg,,,json,,unavailable,image
 1,youtube,^https?://(?:(?:www\.|m\.)?youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)(?<id>[A-Za-z0-9_-]{11}),https://i.ytimg.com/vi/{id}/hqdefault.jpg,,,json,,unavailable,external
+1,reddit-gallery,^https?://(?:www\.|old\.|new\.|m\.)?reddit\.com/gallery/(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://www.reddit.com/comments/{id}.json?limit=1&raw_json=1,Accept: application/json,json,[0].data.children[0].data.media_metadata[].s.u|gif,unavailable,auto

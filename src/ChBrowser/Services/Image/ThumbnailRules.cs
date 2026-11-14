@@ -488,7 +488,7 @@ public sealed class ThumbnailRuleSet
     }
 
     /// <summary>JSON の項目の場所 (<c>a.b[].c|d</c>) をたどって文字列の値を集める。
-    /// <c>[]</c> = 配列の全要素、<c>[n]</c> = n 番目、<c>a|b</c> = a が無ければ b (要素ごとに判定)。</summary>
+    /// <c>[]</c> = 配列の全要素 (オブジェクトなら全項目の値)、<c>[n]</c> = n 番目、<c>a|b</c> = a が無ければ b (要素ごとに判定)。</summary>
     internal static List<string> ByJsonPath(JsonElement root, string path)
     {
         var current = new List<JsonElement> { root };
@@ -529,6 +529,8 @@ public sealed class ThumbnailRuleSet
                     var expanded = new List<JsonElement>();
                     foreach (var it in items)
                     {
+                        // [] はオブジェクトにも使える (すべての項目の値。キーが ID になっている JSON 用)
+                        if (ix is null && it.ValueKind == JsonValueKind.Object) { expanded.AddRange(it.EnumerateObject().Select(p => p.Value)); continue; }
                         if (it.ValueKind != JsonValueKind.Array) continue;
                         if (ix is null) expanded.AddRange(it.EnumerateArray());
                         else if (ix >= 0 && ix < it.GetArrayLength()) expanded.Add(it[ix.Value]);

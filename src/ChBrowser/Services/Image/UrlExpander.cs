@@ -77,7 +77,9 @@ public sealed class UrlExpander : IDisposable
             MaxAutomaticRedirections = 5,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         };
-        _http = new HttpClient(handler)
+        // reddit (www.reddit.com 等) への取得は、掲示板の通信と同じくアプリ内のログインセッションを通す
+        // (匿名の取得は確認ページで弾かれるため)。それ以外のホストは通常の HTTP のまま。
+        _http = new HttpClient(new ChBrowser.Services.Bbs.ProviderTransportHandler(handler))
         {
             Timeout = TimeSpan.FromSeconds(15),
         };
@@ -176,15 +178,24 @@ public sealed class UrlExpander : IDisposable
             using var req = new HttpRequestMessage(HttpMethod.Get, fu);
             foreach (var (k, v) in rule.FetchHeaders) req.Headers.TryAddWithoutValidation(k, v);
 
-            using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            // ログインセッション経由のホスト (reddit) か。サムネイルのための取得なので、弾かれてもログイン窓は出さない
+            var viaSession = ChBrowser.Services.Bbs.ProviderTransports.Find(fu.Host) is not null;
+            if (viaSession) trace?.Add("(アプリ内のログインセッションで取得します)");
+            HttpResponseMessage res;
+            using (ChBrowser.Services.Bbs.ProviderRequestContext.Optional())
+                res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            using var _res = res;
             trace?.Add($"応答: HTTP {(int)res.StatusCode} ({res.Content.Headers.ContentType?.MediaType ?? "種類不明"})");
             if (!res.IsSuccessStatusCode)
-                return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → HTTP {(int)res.StatusCode}");
+                return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → HTTP {(int)res.StatusCode}"
+                    + (viaSession && res.ReasonPhrase is { Length: > 0 } why ? $" ({why})" : ""));
             if (res.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
                 return (ExpandResult.Unavailable, $"{rule.Name}: {fu} → 応答が大きすぎます ({len} バイト)");
             var content = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             var urls = ThumbnailRuleSet.ExtractUrls(rule, content, fu);
+            // reddit のギャラリー: 画像の一覧 (media_metadata) は順不同なので、投稿の並び (gallery_data) に直す
+            if (viaSession && urls.Count > 1) urls = ChBrowser.Services.Bbs.RedditProvider.OrderGalleryUrls(content, urls);
             if (urls.Count > 0) return (ExpandResult.Of(urls) with { Display = rule.Display }, null);
 
             // 何も取れなかった: ルールが「画像が無いと確定」としていれば NoMedia (JS がサムネイルの枠を消す)、

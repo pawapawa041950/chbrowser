@@ -815,6 +815,50 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             foreach (var x in c.EnumerateArray()) yield return x;
     }
 
+    /// <summary>ギャラリーの画像 URL の並びを、投稿での並び (<c>gallery_data.items</c> の <c>media_id</c> の順) に直す。
+    /// <c>media_metadata</c> は ID をキーにしたオブジェクトで順不同のため (サムネイルルール「reddit-gallery」用)。
+    /// 画像の URL には media_id が入っている (<c>preview.redd.it/&lt;media_id&gt;.jpg?…</c>) ので、それで突き合わせる。
+    /// <paramref name="json"/> がギャラリーの応答でなければ <paramref name="urls"/> をそのまま返す。</summary>
+    public static List<string> OrderGalleryUrls(string json, List<string> urls)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var order = new List<string>();
+            CollectGalleryOrder(doc.RootElement, order, 0);
+            if (order.Count == 0) return urls;
+            int Rank(string u)
+            {
+                for (var i = 0; i < order.Count; i++)
+                    if (u.Contains("/" + order[i] + ".", StringComparison.Ordinal)) return i;
+                return int.MaxValue;
+            }
+            return urls.Select((u, i) => (u, r: Rank(u), i)).OrderBy(x => x.r).ThenBy(x => x.i).Select(x => x.u).ToList();
+        }
+        catch (JsonException) { return urls; }
+    }
+
+    /// <summary>応答の中から最初の <c>gallery_data.items[].media_id</c> を探す (投稿は配列・Listing の浅い所にある)。</summary>
+    private static bool CollectGalleryOrder(JsonElement el, List<string> order, int depth)
+    {
+        if (depth > 8) return false;
+        if (el.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var x in el.EnumerateArray()) if (CollectGalleryOrder(x, order, depth + 1)) return true;
+            return false;
+        }
+        if (el.ValueKind != JsonValueKind.Object) return false;
+        if (el.TryGetProperty("gallery_data", out var gd) && gd.ValueKind == JsonValueKind.Object
+            && gd.TryGetProperty("items", out var gi) && gi.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in gi.EnumerateArray()) if (Str(item, "media_id") is { Length: > 0 } mid) order.Add(mid);
+            return true;
+        }
+        foreach (var name in new[] { "data", "children" })
+            if (el.TryGetProperty(name, out var c) && CollectGalleryOrder(c, order, depth + 1)) return true;
+        return false;
+    }
+
     private static SnapshotPost ToSubmission(JsonElement d)
     {
         var id      = Str(d, "id") ?? "";
