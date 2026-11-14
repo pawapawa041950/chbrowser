@@ -324,6 +324,41 @@ body.slot-resizing * {
     border-color: #ccc;
 }
 
+/* 別ファイルの音声 (reddit の動画) の音量操作: 再生中のスロット右上。つまみはマウスを乗せたときだけ出す */
+.image-slot audio.separate-audio { display: none; }
+.separate-audio-ctl {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0.45;
+    transition: opacity 0.15s;
+}
+.image-slot:hover .separate-audio-ctl { opacity: 1; }
+.separate-audio-ctl button {
+    border: none;
+    background: none;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    color: #fff;
+}
+.separate-audio-ctl input[type="range"] {
+    display: none;
+    width: 70px;
+    height: 12px;
+    margin: 0;
+    cursor: pointer;
+}
+.separate-audio-ctl:hover input[type="range"] { display: block; }
+
 /* Phase 5: キャッシュサムネ画像がスロット内に描画されているときはストライプ背景を消す */
 .image-slot.video img.video-thumb {
     display: block;

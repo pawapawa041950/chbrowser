@@ -3589,6 +3589,117 @@ var CHB_SCRIPT_READY = 0;
         try { video.load(); } catch (_) {}
     }
 
+    // ---------- 別ファイルの音声 (reddit の動画) ----------
+    // reddit の動画 (v.redd.it/<id>/DASH_720.mp4 等) は映像と音声が別のファイルで、映像のファイルには音が入っていない。
+    // 再生を始めるときに C# (UrlExpander.ResolveRedditAudioAsync) に音声ファイルの URL を求めてもらい、
+    // 見えない <audio> を映像に合わせて (再生 / 停止 / シーク / 速度) 動かす。
+    // 映像側に音声が無いと <video controls> の音量ボタンは使えないので、音量はスロット右上の専用の操作で変える。
+    // C# の RedditVideoFileRe と同期して維持する。
+    const V_REDDIT_FILE_RE = /^https?:\/\/v\.redd\.it\/[A-Za-z0-9]+\/[^\/?#]+\.mp4(?:[?#].*)?$/i;
+    const separateAudioUrls    = new Map();   // 動画 URL → 音声 URL ('' = 音声の無い動画)
+    const separateAudioWaiting = new Map();   // 動画 URL → 応答待ちの [{slot, video}]
+    let separateAudioVolume = 1;
+    let separateAudioMuted  = false;
+    try {
+        const v = parseFloat(localStorage.getItem('chb.sepAudioVolume'));
+        if (v >= 0 && v <= 1) separateAudioVolume = v;
+        separateAudioMuted = localStorage.getItem('chb.sepAudioMuted') === '1';
+    } catch (_) { /* 保存できない環境では既定のまま */ }
+
+    function attachSeparateAudio(slot, video, url) {
+        if (!url || !V_REDDIT_FILE_RE.test(url)) return;
+        if (separateAudioUrls.has(url)) {
+            const known = separateAudioUrls.get(url);
+            if (known) wireSeparateAudio(slot, video, known);
+            return;
+        }
+        if (!(window.chrome && window.chrome.webview)) return;
+        const waiting = separateAudioWaiting.get(url);
+        if (waiting) { waiting.push({ slot: slot, video: video }); return; }
+        separateAudioWaiting.set(url, [{ slot: slot, video: video }]);
+        window.chrome.webview.postMessage({ type: 'videoAudioResolve', url: url });
+    }
+
+    /** C# からの videoAudioResolved: 待っている再生中の動画に音声を付ける。 */
+    function applyVideoAudioResolved(msg) {
+        const url = msg.url;
+        const audioUrl = (typeof msg.audioUrl === 'string' && msg.audioUrl) ? msg.audioUrl : '';
+        if (msg.known === true) separateAudioUrls.set(url, audioUrl);   // 取れなかっただけなら覚えない (次の再生でまた問い合わせる)
+        const waiting = separateAudioWaiting.get(url) || [];
+        separateAudioWaiting.delete(url);
+        if (!audioUrl) return;
+        waiting.forEach(function (w) {
+            if (w.video.isConnected && w.slot.contains(w.video)) wireSeparateAudio(w.slot, w.video, audioUrl);
+        });
+    }
+
+    function wireSeparateAudio(slot, video, audioUrl) {
+        if (slot.querySelector('audio.separate-audio')) return;
+        const audio = document.createElement('audio');
+        audio.className = 'separate-audio';
+        audio.preload = 'auto';
+        audio.src = audioUrl;
+        audio.volume = separateAudioVolume;
+        audio.muted  = separateAudioMuted;
+        slot.appendChild(audio);   // スロットごと消えるときは releaseMediaIn が止める
+
+        const seekToVideo = function () { try { audio.currentTime = video.currentTime; } catch (_) {} };
+        const follow = function () {
+            // 映像が進んでいるときだけ鳴らす。ずれが大きいときだけ合わせ直す (毎回合わせると音が途切れる)
+            if (video.paused || video.ended || video.seeking || video.readyState < 3) { if (!audio.paused) audio.pause(); return; }
+            if (Math.abs(audio.currentTime - video.currentTime) > 0.3) seekToVideo();
+            if (audio.playbackRate !== video.playbackRate) audio.playbackRate = video.playbackRate;
+            const dur = audio.duration;
+            if (audio.paused && !(dur > 0 && video.currentTime >= dur - 0.05)) audio.play().catch(function () {});
+        };
+        ['playing', 'timeupdate', 'seeked', 'ratechange', 'canplay'].forEach(function (ev) { video.addEventListener(ev, follow); });
+        ['pause', 'waiting', 'ended', 'emptied'].forEach(function (ev) { video.addEventListener(ev, function () { audio.pause(); }); });
+        video.addEventListener('seeking', function () { audio.pause(); seekToVideo(); });
+
+        // 音量の操作 (スロット右上。ボタン = 消音の切り替え、つまみ = 音量)
+        const ctl = document.createElement('span');
+        ctl.className = 'separate-audio-ctl';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const range = document.createElement('input');
+        range.type = 'range'; range.min = '0'; range.max = '1'; range.step = '0.05';
+        const show = function () {
+            const silent = audio.muted || audio.volume === 0;
+            btn.textContent = silent ? '🔇' : '🔊';
+            btn.title = silent ? '音声を出す' : '消音';
+            range.value = String(audio.volume);
+            range.title = '音量 ' + Math.round(audio.volume * 100) + '%';
+        };
+        const remember = function () {
+            separateAudioVolume = audio.volume;
+            separateAudioMuted  = audio.muted;
+            try {
+                localStorage.setItem('chb.sepAudioVolume', String(audio.volume));
+                localStorage.setItem('chb.sepAudioMuted', audio.muted ? '1' : '0');
+            } catch (_) {}
+            show();
+        };
+        btn.addEventListener('click', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (audio.muted || audio.volume === 0) { audio.muted = false; if (audio.volume === 0) audio.volume = 0.5; }
+            else audio.muted = true;
+            remember();
+        });
+        range.addEventListener('input', function () {
+            audio.volume = Math.min(1, Math.max(0, parseFloat(range.value) || 0));
+            audio.muted = false;
+            remember();
+        });
+        ['click', 'mousedown', 'dblclick', 'wheel'].forEach(function (ev) {
+            ctl.addEventListener(ev, function (e) { e.stopPropagation(); });
+        });
+        ctl.appendChild(range);   // つまみを左に置く (右寄せなので、つまみが出てもボタンの位置が動かない)
+        ctl.appendChild(btn);
+        slot.appendChild(ctl);
+        show();
+        follow();
+    }
+
     /** 直リンク動画スロットを実際の <video> 再生要素に置換する。
      *  YouTube はインライン埋め込みすると Error 153 が出るためここでは扱わず、
      *  クリックハンドラ側でデフォルトブラウザに飛ばす。 */
@@ -3640,6 +3751,7 @@ var CHB_SCRIPT_READY = 0;
             }, { once: true });
             slot.appendChild(video);
             slot.classList.add('playing');
+            attachSeparateAudio(slot, video, originalUrl);   // reddit の動画は音声が別ファイル
 
             // 未キャッシュなら並列 DL を kick (完了時に C# が videoCacheState を broadcast)。
             // ユーザの明示クリックなので、先に mediaSlotRetry で全 Kind 失敗状態をリセット
@@ -6081,6 +6193,10 @@ var CHB_SCRIPT_READY = 0;
                 case 'threadPreview':
                     // 5ch.io スレ URL ホバーで投げた threadPreviewRequest の応答 (タイトル + 対象レス本文)。
                     onThreadPreviewResponse(msg);
+                    break;
+                case 'videoAudioResolved':
+                    // 動画の音声ファイルの URL (videoAudioResolve の応答)
+                    if (typeof msg.url === 'string') applyVideoAudioResolved(msg);
                     break;
                 case 'videoResolved':
                     // 動画ページ (v.redd.it/<id>) の再生できる URL (videoResolve の応答)

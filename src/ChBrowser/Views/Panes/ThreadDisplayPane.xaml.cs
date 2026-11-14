@@ -235,6 +235,7 @@ public partial class ThreadDisplayPane : UserControl
             }
             case "videoCacheQuery":    HandleVideoCacheQuery(sender, payload); break;
             case "videoResolve":       HandleVideoResolve(sender, payload); break;
+            case "videoAudioResolve":  HandleVideoAudioResolve(sender, payload); break;
             case "videoDownloadStart": HandleVideoDownloadStart(sender, payload); break;
             case "imageLoadFailed":    HandleImageLoadFailed(payload); break;
             // 全 Kind 失敗状態リセット用の統一メッセージ (Step F)。
@@ -589,6 +590,32 @@ public partial class ThreadDisplayPane : UserControl
         if (!ChBrowser.Services.Image.UrlExpander.IsRedditVideoPage(url)) return;
         if ((Window.GetWindow(this) as MainWindow)?.UrlExpander is not { } expander) return;
         _ = ReplyVideoResolveAsync(expander, wv, url);
+    }
+
+    /// <summary>JS から「この動画 (reddit の <c>v.redd.it/&lt;id&gt;/….mp4</c>) の音声ファイルの URL を教えてほしい」要求
+    /// (reddit は映像と音声が別ファイル)。応答 <c>{type:"videoAudioResolved", url, known, audioUrl}</c>
+    /// (known=true で audioUrl が null なら音声の無い動画。known=false は取れなかっただけ)。</summary>
+    private void HandleVideoAudioResolve(object sender, JsonElement payload)
+    {
+        if (sender is not WebView2 wv) return;
+        if (!payload.TryGetProperty("url", out var urlProp) || urlProp.GetString() is not { Length: > 0 } url) return;
+        if (!ChBrowser.Services.Image.UrlExpander.IsRedditVideoFile(url)) return;
+        if ((Window.GetWindow(this) as MainWindow)?.UrlExpander is not { } expander) return;
+        _ = ReplyVideoAudioResolveAsync(expander, wv, url);
+    }
+
+    private static async Task ReplyVideoAudioResolveAsync(ChBrowser.Services.Image.UrlExpander expander, WebView2 wv, string url)
+    {
+        try
+        {
+            var (known, audioUrl) = await expander.ResolveRedditAudioAsync(url).ConfigureAwait(true);
+            if (wv.CoreWebView2 is null) return;
+            wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "videoAudioResolved", url, known, audioUrl }));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VideoAudioResolve] reply failed: {ex.Message}");
+        }
     }
 
     private static async Task ReplyVideoResolveAsync(ChBrowser.Services.Image.UrlExpander expander, WebView2 wv, string url)

@@ -274,6 +274,77 @@ public sealed class UrlExpander : IDisposable
         }
     }
 
+    // ---------------------------------------------------------------
+    // reddit の動画の音声 — 映像 (v.redd.it/<id>/DASH_720.mp4 等) とは別のファイルで配信されている
+    // ---------------------------------------------------------------
+
+    /// <summary>reddit の動画ファイルの URL (<c>https://v.redd.it/&lt;id&gt;/DASH_720.mp4</c>・<c>CMAF_720.mp4?source=fallback</c> 等)。
+    /// JS の <c>V_REDDIT_FILE_RE</c> と同期して維持する。</summary>
+    private static readonly Regex RedditVideoFileRe = new(
+        @"^https?://v\.redd\.it/(?<id>[A-Za-z0-9]+)/[^/?#]+\.mp4(?:[?#].*)?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private readonly ConcurrentDictionary<string, Task<(bool Known, string? Url)>> _audioCache = new(StringComparer.Ordinal);
+
+    /// <summary>reddit の動画ファイルの URL か (音声が別ファイルになっているもの)。</summary>
+    public static bool IsRedditVideoFile(string url) => !string.IsNullOrEmpty(url) && RedditVideoFileRe.IsMatch(url);
+
+    /// <summary>reddit の動画ファイルの URL から、その動画の音声ファイルの URL (<c>v.redd.it/&lt;id&gt;/DASH_AUDIO_128.mp4</c> 等) を求める。
+    /// 再生リスト (<c>DASHPlaylist.mpd</c>) の音声のうち帯域の一番大きいもの。Known=true で Url=null なら「音声の無い動画」と確定。
+    /// Known=false は取れなかっただけ (覚えず、次回やり直す)。</summary>
+    public async Task<(bool Known, string? Url)> ResolveRedditAudioAsync(string videoUrl)
+    {
+        var m = RedditVideoFileRe.Match(videoUrl ?? "");
+        if (!m.Success) return (true, null);
+        var id     = m.Groups["id"].Value;
+        var task   = _audioCache.GetOrAdd(id, FetchRedditAudioAsync);
+        var result = await task.ConfigureAwait(false);
+        if (!result.Known) _audioCache.TryRemove(new KeyValuePair<string, Task<(bool, string?)>>(id, task));
+        return result;
+    }
+
+    private async Task<(bool Known, string? Url)> FetchRedditAudioAsync(string id)
+    {
+        try
+        {
+            var baseUrl = $"https://v.redd.it/{id}/";
+            using var res = await _http.GetAsync(baseUrl + "DASHPlaylist.mpd").ConfigureAwait(false);
+            if (res.StatusCode == HttpStatusCode.NotFound || res.StatusCode == HttpStatusCode.Forbidden) return (true, null);
+            if (!res.IsSuccessStatusCode)
+            {
+                ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id} (音声) → HTTP {(int)res.StatusCode}");
+                return (false, null);
+            }
+            var file = PickBestAudio(await res.Content.ReadAsStringAsync().ConfigureAwait(false));
+            return (true, file is null ? null : baseUrl + file);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Xml.XmlException)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[UrlExpand] v.redd.it/{id} (音声): {ex.GetType().Name}: {ex.Message}");
+            return (false, null);
+        }
+    }
+
+    /// <summary>DASH の再生リスト (MPD) から、音声 (mimeType が audio/…) のうち帯域の一番大きいもののファイル名 (BaseURL)。無ければ null。</summary>
+    internal static string? PickBestAudio(string mpdXml)
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(mpdXml);
+        string? best = null;
+        long bestBw = -1;
+        foreach (var rep in doc.Descendants().Where(e => e.Name.LocalName == "Representation"))
+        {
+            var set  = rep.Parent;
+            var mime = (string?)rep.Attribute("mimeType") ?? (string?)set?.Attribute("mimeType") ?? "";
+            var kind = (string?)set?.Attribute("contentType") ?? "";
+            if (!mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) && !kind.Equals("audio", StringComparison.OrdinalIgnoreCase)) continue;
+            var file = rep.Elements().FirstOrDefault(e => e.Name.LocalName == "BaseURL")?.Value.Trim();
+            if (string.IsNullOrEmpty(file) || file.Contains("://", StringComparison.Ordinal) || file.StartsWith('/')) continue;
+            long.TryParse((string?)rep.Attribute("bandwidth"), out var bw);
+            if (bw > bestBw) { bestBw = bw; best = file; }
+        }
+        return best;
+    }
+
     /// <summary>DASH の再生リスト (MPD) から、映像 (mimeType が video/…) のうち画素数の一番大きいもののファイル名 (BaseURL)。</summary>
     internal static string? PickLargestVideo(string mpdXml)
     {
