@@ -942,8 +942,17 @@ var CHB_SCRIPT_READY = 0;
         for (const s of suffixes) if (host === s || host.endsWith('.' + s)) return true;
         return false;
     }
+    /** 5ch のスマホ向けサイトのスレ URL (itest.5ch.io/<サーバ名>/test/read.cgi/…) を、通常の形
+     *  (<サーバ名>.5ch.io/test/read.cgi/…) に読み替える (C# の FiveChProvider.TryParseUrl と同じ)。それ以外はそのまま返す。 */
+    const MOBILE_THREAD_URL_RE = /^(https?:\/\/)itest\.(5ch\.io|5ch\.net|bbspink\.com)\/([A-Za-z0-9-]+)(\/test\/read\.cgi\/.*)$/i;
+    function normalizeMobileThreadUrl(href) {
+        const m = MOBILE_THREAD_URL_RE.exec(href);
+        return m ? m[1] + m[3] + '.' + m[2] + m[4] : href;
+    }
+
     function parseThreadLinkUrl(href) {
         if (!href) return null;
+        href = normalizeMobileThreadUrl(href);
         for (const rule of THREAD_LINK_RULES) {
             const m = rule.re.exec(href);
             if (!m || !m.groups) continue;

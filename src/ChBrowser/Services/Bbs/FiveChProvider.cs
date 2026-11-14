@@ -77,9 +77,26 @@ public sealed class FiveChProvider : IBbsProvider
         return host;
     }
 
+    /// <summary>スマホ向けサイト (itest.5ch.io / itest.bbspink.com) のスレ URL のパス: 先頭にサーバ名が付く
+    /// (<c>/mevius/test/read.cgi/esite/1608870876/</c> = <c>mevius.5ch.io</c> の <c>/test/read.cgi/esite/1608870876/</c>)。</summary>
+    private static readonly Regex MobileThreadPathRegex = new(
+        @"^/(?<server>[A-Za-z0-9-]+)(?<rest>/test/read\.cgi/.*)$",
+        RegexOptions.Compiled);
+
+    private const string MobileHostPrefix = "itest.";
+
     public AddressBarTarget? TryParseUrl(Uri uri, string host)
     {
         var path = uri.AbsolutePath;
+
+        // スマホ向けサイトのスレ URL は、通常のホスト (<サーバ名>.5ch.io) とパスに読み替える
+        // (以降はふつうのスレ URL として扱うので、アドレスバーにも読み替えた後の URL が出る)。
+        if (host.StartsWith(MobileHostPrefix, StringComparison.OrdinalIgnoreCase)
+            && MobileThreadPathRegex.Match(path) is { Success: true } mobile)
+        {
+            host = mobile.Groups["server"].Value.ToLowerInvariant() + host[(MobileHostPrefix.Length - 1)..];
+            path = mobile.Groups["rest"].Value;
+        }
 
         // スレ判定が先 (= /test/read.cgi/<dir>/<key>/)。Board の方が短い path にマッチするので後判定。
         var threadMatch = ThreadPathRegex.Match(path);
