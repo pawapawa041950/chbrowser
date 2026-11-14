@@ -179,9 +179,9 @@ public partial class App : Application
         _imageCache      = new ImageCacheService(paths);
         _imageCache.MaxBytes = (long)Math.Max(64, _currentConfig.CacheMaxMb) * 1024 * 1024;
         _aiImageMeta     = new AiImageMetadataService(_imageCache);
-        // サムネイルの取得ルール (既定 + 利用者のファイル)。スレ表示のシェルにも対象 URL の一覧として載せる (それより前に読む)
+        // サムネイルルール (既定 + 利用者のファイル)。スレ表示のシェルにも対象 URL の一覧として載せる (それより前に読む)
         ChBrowser.Services.Image.ThumbnailRuleSet.Current = ChBrowser.Services.Image.ThumbnailRuleSet.Load(
-            ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.json"), paths.ThumbnailRulesPath);
+            ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.csv"), paths.ThumbnailRulesPath);
         _urlExpander     = new UrlExpander(ChBrowser.Services.Image.ThumbnailRuleSet.Current);
 
         // テーマ (post.html / post.css) サービスを登録。
@@ -727,19 +727,19 @@ public partial class App : Application
         return vm;
     }
 
-    /// <summary>設定「サムネイル取得」用: ルールのファイルの場所・既定のルール・反映・テスト。</summary>
+    /// <summary>設定「サムネイルルール」用: ルールのファイルの場所・既定のルール・反映・テスト。</summary>
     private ChBrowser.ViewModels.ThumbnailSettingsHooks? CreateThumbnailSettingsHooks()
     {
         if (_paths is null || _urlExpander is null) return null;
         var expander = _urlExpander;
         return new ChBrowser.ViewModels.ThumbnailSettingsHooks(
             UserPath:    _paths.ThumbnailRulesPath,
-            BuiltinJson: ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.json"),
+            BuiltinCsv: ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.csv"),
             Apply:       ApplyThumbnailRules,
             Test:        (rules, url) => expander.TestAsync(rules, url));
     }
 
-    /// <summary>設定画面で変えたサムネイルの取得ルールを反映する: 取得側のルールを入れ替え、対象 URL の一覧が変わっていれば
+    /// <summary>設定画面で変えたサムネイルルールを反映する: 取得側のルールを入れ替え、対象 URL の一覧が変わっていれば
     /// 表示側にも届ける (開いているスレへは設定のメッセージで、これから開くスレへはシェルの作り直しで)。</summary>
     private void ApplyThumbnailRules(ChBrowser.Services.Image.ThumbnailRuleSet rules)
     {

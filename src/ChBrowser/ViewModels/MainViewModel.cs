@@ -826,12 +826,12 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
             threadLinkRules       = ChBrowser.Services.Bbs.BbsRegistry.All
                                         .Select(pv => new { hostSuffixes = pv.HostSuffixes, pattern = pv.ThreadLinkJsPattern })
                                         .ToArray(),
-            // 取得してサムネイルを求める URL (サムネイルの取得ルールの対象) の正規表現。最初の描画に間に合うようシェルにも
+            // 取得してサムネイルを求める URL (サムネイルルールの対象) の正規表現。最初の描画に間に合うようシェルにも
             // 置いてある (WebView2Helper.LoadThreadShellHtml)。こちらは設定画面でルールを変えたときに、開いているスレへ届ける分
             asyncExpandPatterns   = ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsPatterns,
         });
 
-    /// <summary>サムネイルの取得ルールが変わったとき: スレ表示の設定を作り直して、開いているスレへ送る。</summary>
+    /// <summary>サムネイルルールが変わったとき: スレ表示の設定を作り直して、開いているスレへ送る。</summary>
     public void RefreshThreadConfigForThumbnailRules() => ThreadConfigJson = BuildThreadConfigJson(CurrentConfig);
 
     /// <summary>NgService への外部アクセス (NgWindow から再ロード等を呼ぶため)。</summary>

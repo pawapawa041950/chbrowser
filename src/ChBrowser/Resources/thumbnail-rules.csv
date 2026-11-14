@@ -1,0 +1,29 @@
+# サムネイルルール (既定)。画像・動画そのものではないページの URL から、サムネイルにする画像の URL を求める。1 行が 1 つのルール。
+# 利用者のルールは data/app/thumbnail_rules.csv に同じ形式で書く (設定 → サムネイルルール で編集できる)。
+# 利用者のルールが先に試され、最初に match したルール 1 つだけが使われる。同じ name の利用者のルールはこの既定を置き換える
+# (enabled を 0 にすると、その name の既定を止められる)。
+#
+# 書き方は普通の CSV: 項目をカンマで区切る。カンマや " を含む項目は全体を " で囲み、中の " は "" と書く。# で始まる行は読まない。
+#
+#   enabled    1 = 使う、0 = 使わない
+#   name       ルールの名前 (置き換え・ログ用)
+#   match      対象 URL の正規表現 (大文字小文字は区別しない)。名前付きグループ (?<id>…) を result / fetch_url の {id} で使える。
+#              アプリ (.NET) と表示側 (JavaScript) の両方で使うので、どちらでも通る書き方にする
+#   result     取得せずに URL を組み立てるだけのとき、その URL (例 https://example.com/img/{id}.jpg)。書いてあれば fetch_url より優先
+#   fetch_url  取得するとき、その URL (例 https://example.com/api/{id})
+#   headers    取得時に付けるヘッダー (名前: 値)。複数は || で区切る (例 Accept: application/json || Referer: https://example.com/)
+#   format     取得した内容の読み方: json か regex (HTML 等の文字列)
+#   extract    取り出し方の候補。複数は || で区切る。左から試し、1 件以上取れた最初の候補を使う。
+#              json : 項目の場所。"." で下の階層、"[]" で配列の全要素、"[0]" で配列の 1 要素、"a|b" は a が無ければ b
+#              regex: 正規表現。グループ 1 (無ければ一致した全体) が URL。一致した数だけ取り出す
+#   empty      何も取れなかったときの扱い: unavailable (「取得失敗 — クリックで再試行」の枠) か noMedia (画像なしと確定。枠を出さない)
+#
+# 取り出した URL が動画 (.mp4 等) なら動画のサムネイルになる。複数取れたら複数のサムネイルを出す (4 枚まで。残りは「他 N 枚」)。
+#
+# x.com      : fxtwitter の公開 JSON。写真は url、動画 / GIF はサムネイル画像 (thumbnail_url)。本文側に無ければ引用元 (quote)。どちらにも無ければ文字だけの投稿
+# pixiv      : 作品の全ページ。R-18・非公開はログインが要るので取れない。画像 (i.pximg.net) の取得に要る Referer はアプリが別に付けている
+# imgur-album: imgur.com/a/<id> と imgur.com/a/<題名>-<id>。client_id は imgur 自身のサイト用のもの (使えなくなったら利用者のルールで差し替える)
+enabled,name,match,result,fetch_url,headers,format,extract,empty
+1,x.com,"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/[A-Za-z0-9_]+/status/(?<id>\d+)",,https://api.fxtwitter.com/i/status/{id},Accept: application/json,json,tweet.media.all[].thumbnail_url|url || tweet.quote.media.all[].thumbnail_url|url,noMedia
+1,pixiv,^https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/(?<id>\d+),,https://www.pixiv.net/ajax/illust/{id}/pages,Accept: application/json || Referer: https://www.pixiv.net/,json,body[].urls.regular|original|small,unavailable
+1,imgur-album,^https?://(?:www\.|m\.)?imgur\.com/a/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/albums/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable

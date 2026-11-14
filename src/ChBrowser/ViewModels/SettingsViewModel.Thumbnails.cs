@@ -11,18 +11,18 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ChBrowser.ViewModels;
 
-/// <summary>設定ウィンドウ「サムネイル取得」がアプリ側に頼むこと。</summary>
-/// <param name="UserPath">利用者のルールのファイル (data/app/thumbnail_rules.json)。</param>
-/// <param name="BuiltinJson">既定のルール (埋め込み)。</param>
+/// <summary>設定ウィンドウ「サムネイルルール」がアプリ側に頼むこと。</summary>
+/// <param name="UserPath">利用者のルールのファイル (data/app/thumbnail_rules.csv)。</param>
+/// <param name="BuiltinCsv">既定のルール (埋め込み)。</param>
 /// <param name="Apply">編集後のルールをアプリに反映する。</param>
 /// <param name="Test">編集中のルールで URL を 1 つ試し、経過と結果の文章を返す。</param>
 public sealed record ThumbnailSettingsHooks(
     string UserPath,
-    string BuiltinJson,
+    string BuiltinCsv,
     Action<ThumbnailRuleSet> Apply,
     Func<ThumbnailRuleSet, string, Task<string>> Test);
 
-/// <summary>設定ウィンドウ「サムネイル取得」カテゴリ: サムネイルの取得ルール (<see cref="ThumbnailRuleSet"/>) の一覧・編集・テスト。
+/// <summary>設定ウィンドウ「サムネイルルール」カテゴリ: サムネイルルール (<see cref="ThumbnailRuleSet"/>) の一覧・編集・テスト。
 /// 一覧は「利用者のルール (編集できる。上から順に試される)」→「既定のルール (見るだけ。同じ名前の利用者のルールがあれば出さない)」。
 /// 利用者のルールは変更のたびにファイルへ保存し、すぐアプリに反映する (他の設定と同じ)。</summary>
 public sealed partial class SettingsViewModel
@@ -30,6 +30,9 @@ public sealed partial class SettingsViewModel
     private ThumbnailSettingsHooks? _thumb;
     private List<ThumbnailRuleData> _builtinThumbnailRules = new();
     private bool _suppressThumbnailSave;
+    /// <summary>利用者のファイルの、ルールに付かないコメント行 (見出し行の前 / 最後のルールの後)。保存のときにそのまま書き戻す。</summary>
+    private string? _thumbnailFilePreamble;
+    private string  _thumbnailFileTrailer = "";
 
     public ObservableCollection<ThumbnailRuleItem> ThumbnailRules { get; } = new();
 
@@ -60,13 +63,19 @@ public sealed partial class SettingsViewModel
         OpenThumbnailRulesFolderCommand = new RelayCommand(OpenThumbnailRulesFolder, () => _thumb is not null);
         if (hooks is null) return;
 
-        try { _builtinThumbnailRules = ThumbnailRuleSet.ReadData(hooks.BuiltinJson); }
+        try { _builtinThumbnailRules = ThumbnailRuleSet.ReadData(hooks.BuiltinCsv); }
         catch (Exception) { _builtinThumbnailRules = new(); }
 
         var user = new List<ThumbnailRuleData>();
         if (File.Exists(hooks.UserPath))
         {
-            try { user = ThumbnailRuleSet.ReadData(File.ReadAllText(hooks.UserPath)); }
+            try
+            {
+                var file = ThumbnailRuleSet.ReadFile(File.ReadAllText(hooks.UserPath));
+                user = file.Rules;
+                _thumbnailFilePreamble = file.Preamble;
+                _thumbnailFileTrailer  = file.Trailer;
+            }
             catch (Exception ex)
             {
                 ThumbnailRulesFileError = $"{ThumbnailRuleSet.UserFileName} を読めませんでした ({ex.Message})。"
@@ -202,7 +211,7 @@ public sealed partial class SettingsViewModel
             if (user.Count > 0 || File.Exists(_thumb.UserPath))
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_thumb.UserPath)!);
-                File.WriteAllText(_thumb.UserPath, ThumbnailRuleSet.WriteData(user));
+                File.WriteAllText(_thumb.UserPath, ThumbnailRuleSet.WriteData(user, _thumbnailFilePreamble, _thumbnailFileTrailer));
             }
             ThumbnailRulesFileError = "";
             _thumb.Apply(BuildThumbnailRuleSet());
@@ -236,7 +245,7 @@ public sealed partial class SettingsViewModel
     }
 }
 
-/// <summary>設定ウィンドウで見る / 編集するサムネイルの取得ルール 1 件。</summary>
+/// <summary>設定ウィンドウで見る / 編集するサムネイルルール 1 件。</summary>
 public sealed partial class ThumbnailRuleItem : ObservableObject
 {
     public const string KindRewrite = "rewrite";
@@ -281,8 +290,12 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
         => (Enabled ? "" : "(停止) ") + (string.IsNullOrWhiteSpace(Name) ? "(名前なし)" : Name)
          + (IsBuiltin ? "  [既定]" : OverridesBuiltin ? "  [既定を置き換え]" : "");
 
+    /// <summary>ファイルでこのルールの直前に書いてあったコメント行 (編集はしない。保存のときにそのまま書き戻す)。</summary>
+    private readonly string _comment;
+
     public ThumbnailRuleItem(ThumbnailRuleData d, bool isBuiltin)
     {
+        _comment           = isBuiltin ? "" : d.Comment;
         IsBuiltin          = isBuiltin;
         _enabled           = d.Enabled;
         _name              = d.Name ?? "";
@@ -318,6 +331,7 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
             Format   = Kind == KindRegex ? "regex" : "json",
             Extract  = rewrite ? Array.Empty<string>() : Lines(ExtractText).ToArray(),
             Empty    = EmptyMeansNoMedia ? "noMedia" : "unavailable",
+            Comment  = _comment,
         };
     }
 

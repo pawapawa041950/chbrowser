@@ -1195,7 +1195,7 @@ var CHB_SCRIPT_READY = 0;
     /**
      * 同期では決められないが、非同期 (C# 側の HTML スクレイピング / API 呼び出し) で
      * 実体画像 URL を解決できる可能性のある URL のパターン。
-     * 対象は C# のサムネイルの取得ルール (ThumbnailRuleSet。既定 + 利用者のルール) で決まり、その正規表現 (文字列の配列) を
+     * 対象は C# のサムネイルルール (ThumbnailRuleSet。既定 + 利用者のルール) で決まり、その正規表現 (文字列の配列) を
      * C# がこのスクリプトの前に window.__asyncExpandPatterns として置く (WebView2Helper.LoadThreadShellHtml)。
      * 設定画面でルールを変えたときは setConfig.asyncExpandPatterns でも届く (それ以降に描くレスから効く)。
      * JavaScript で通らない書き方のものは飛ばす (そのルールの URL はサムネイルが出ないだけで、他には影響しない)。

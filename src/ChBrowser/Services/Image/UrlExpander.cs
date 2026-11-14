@@ -44,8 +44,8 @@ public readonly record struct ExpandResult(IReadOnlyList<string>? Urls, ExpandOu
 /// 画像ホスティングではないページ URL を、実体画像 URL へ非同期展開するサービス。
 ///
 /// <para>
-/// 対象と手順はサムネイルの取得ルール (<see cref="ThumbnailRuleSet"/>。既定は x.com / pixiv / imgur のアルバム、
-/// 利用者が data/app/thumbnail_rules.json で足せる) で決まる。imgur の単体画像のような同期 (URL 形だけで決まる) 展開は
+/// 対象と手順はサムネイルルール (<see cref="ThumbnailRuleSet"/>。既定は x.com / pixiv / imgur のアルバム、
+/// 利用者が data/app/thumbnail_rules.csv で足せる) で決まる。imgur の単体画像のような同期 (URL 形だけで決まる) 展開は
 /// JS 側で完結しているのでここでは扱わない。reddit の動画ページ (<see cref="ResolveVideoAsync"/>) は専用の処理。
 /// </para>
 ///

@@ -3,14 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace ChBrowser.Services.Image;
 
-/// <summary>サムネイルの取得ルール 1 つの、ファイルに書いてあるとおりの内容 (検査前。設定画面の編集とファイルの読み書きに使う)。
-/// 書式の説明は既定のルール (<c>Resources/thumbnail-rules.json</c>) の先頭にある。</summary>
+/// <summary>サムネイルルール 1 つの、ファイルに書いてあるとおりの内容 (検査前。設定画面の編集とファイルの読み書きに使う)。
+/// 書式の説明は既定のルール (<c>Resources/thumbnail-rules.csv</c>) の先頭にある。</summary>
 public sealed record ThumbnailRuleData
 {
     public string  Name     { get; init; } = "";
@@ -25,6 +24,8 @@ public sealed record ThumbnailRuleData
     public IReadOnlyList<string> Extract { get; init; } = Array.Empty<string>();
     /// <summary>"unavailable" か "noMedia"。</summary>
     public string  Empty    { get; init; } = "unavailable";
+    /// <summary>ファイルでこのルールの直前に書いてあったコメント行 (# で始まる行・空行。書いてあるとおり)。保存のときにそのまま書き戻す。</summary>
+    public string  Comment  { get; init; } = "";
 
     /// <summary>内容を検査して、使える形 (<see cref="ThumbnailRule"/>) にする。書き間違いは <see cref="FormatException"/> (利用者に見せる文面)。</summary>
     public ThumbnailRule Compile()
@@ -67,7 +68,13 @@ public sealed record ThumbnailRuleData
     }
 }
 
-/// <summary>サムネイルの取得ルール 1 つ (検査済み): 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から、
+/// <summary>ルールのファイル 1 つ分: ルールと、ルールに付かないコメント行。</summary>
+/// <param name="Rules">ルール (直前のコメント行は各ルールの <see cref="ThumbnailRuleData.Comment"/>)。</param>
+/// <param name="Preamble">見出し行の前のコメント行 (見出し行が無いファイルでは null)。</param>
+/// <param name="Trailer">最後のルールより後のコメント行。</param>
+public sealed record ThumbnailRuleFile(List<ThumbnailRuleData> Rules, string? Preamble, string Trailer);
+
+/// <summary>サムネイルルール 1 つ (検査済み): 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から、
 /// サムネイルにする画像の URL を求める手順。</summary>
 public sealed class ThumbnailRule
 {
@@ -99,11 +106,11 @@ public sealed class ThumbnailRule
         });
 }
 
-/// <summary>サムネイルの取得ルールの一覧 (利用者のルール → 既定のルールの順。最初に一致した 1 つを使う)。</summary>
+/// <summary>サムネイルルールの一覧 (利用者のルール → 既定のルールの順。最初に一致した 1 つを使う)。</summary>
 public sealed class ThumbnailRuleSet
 {
     /// <summary>利用者のルールのファイル名 (データフォルダの app の下)。</summary>
-    public const string UserFileName = "thumbnail_rules.json";
+    public const string UserFileName = "thumbnail_rules.csv";
 
     /// <summary>今使っている一覧 (起動時と設定画面での変更時に入れ替える)。スレ表示が対象 URL の一覧を表示側へ渡すのに使う。</summary>
     public static ThumbnailRuleSet Current { get; set; } = new(Array.Empty<ThumbnailRule>());
@@ -132,7 +139,7 @@ public sealed class ThumbnailRuleSet
 
     /// <summary>既定のルール (埋め込み) と利用者のルール (<paramref name="userPath"/>。無ければ既定だけ) を読む。
     /// 読めないルールは飛ばしてログに書く (1 つの書き間違いで全部が止まらないように)。</summary>
-    public static ThumbnailRuleSet Load(string builtinJson, string? userPath)
+    public static ThumbnailRuleSet Load(string builtinCsv, string? userPath)
     {
         var log = ChBrowser.Services.Logging.LogService.Instance;
         var user = new List<ThumbnailRuleData>();
@@ -142,7 +149,7 @@ public sealed class ThumbnailRuleSet
             catch (Exception ex) { log.Write($"[ThumbRule] {UserFileName} を読めません: {ex.Message}"); }
         }
         List<ThumbnailRuleData> builtin;
-        try { builtin = ReadData(builtinJson); }
+        try { builtin = ReadData(builtinCsv); }
         catch (Exception ex) { log.Write($"[ThumbRule] 既定のルールを読めません: {ex.Message}"); builtin = new(); }
 
         var set = Build(user, builtin, log.Write);
@@ -166,104 +173,170 @@ public sealed class ThumbnailRuleSet
         return new ThumbnailRuleSet(rules);
     }
 
-    private static readonly JsonDocumentOptions ParseOptions = new()
-    {
-        CommentHandling     = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-    };
+    // ---------------------------------------------------------------
+    // ファイル (CSV。1 行 = 1 ルール)
+    // ---------------------------------------------------------------
 
-    /// <summary>ルールのファイルを、書いてあるとおりに読む (検査はしない)。ファイル自体が JSON として読めなければ例外。</summary>
-    public static List<ThumbnailRuleData> ReadData(string json)
+    /// <summary>列の並び (見出し行)。ファイルに見出し行があればその並びで読む (列を入れ替えてあっても読める)。</summary>
+    private static readonly string[] Columns = { "enabled", "name", "match", "result", "fetch_url", "headers", "format", "extract", "empty" };
+
+    /// <summary>1 つの項目に複数の値 (ヘッダー・取り出し方の候補) を書くときの区切り。</summary>
+    private const string ListSeparator = "||";
+
+    /// <summary>ルールのファイル (CSV) を、書いてあるとおりに読む (検査はしない)。# で始まる行と空行はルールではない。</summary>
+    public static List<ThumbnailRuleData> ReadData(string csv) => ReadFile(csv).Rules;
+
+    /// <summary>ルールのファイル (CSV) を、コメント行 (# で始まる行・空行) ごと読む。コメント行は、直後のルール
+    /// (<see cref="ThumbnailRuleData.Comment"/>)・見出し行の前 (<see cref="ThumbnailRuleFile.Preamble"/>)・
+    /// 最後のルールの後 (<see cref="ThumbnailRuleFile.Trailer"/>) に分けて持ち、<see cref="WriteData"/> で元の位置に書き戻す。</summary>
+    public static ThumbnailRuleFile ReadFile(string csv)
     {
         var list = new List<ThumbnailRuleData>();
-        using var doc = JsonDocument.Parse(json, ParseOptions);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object ||
-            !doc.RootElement.TryGetProperty("rules", out var rules) || rules.ValueKind != JsonValueKind.Array)
-            throw new FormatException("\"rules\" の配列がありません");
-
+        var order = Columns;
+        string? preamble = null;
+        var first = true;
         var i = 0;
-        foreach (var e in rules.EnumerateArray())
+        var (records, trailer) = ParseCsv(csv);
+        foreach (var (rec, leading) in records)
         {
+            if (first)
+            {
+                first = false;
+                // 見出し行 (enabled,name,… の名前が並ぶ行) ならその並びを使う。見出しが無ければ既定の並びで読む
+                var head = rec.Select(c => c.Trim().ToLowerInvariant()).ToArray();
+                if (head.Contains("name") && head.Contains("match")) { order = head; preamble = leading; continue; }
+            }
             i++;
-            if (e.ValueKind != JsonValueKind.Object) continue;
-
-            string? fetchUrl = null;
+            string Col(string name)
+            {
+                var ix = Array.IndexOf(order, name);
+                return ix >= 0 && ix < rec.Count ? rec[ix].Trim() : "";
+            }
+            var enabled = Col("enabled").ToLowerInvariant();
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (e.TryGetProperty("fetch", out var f) && f.ValueKind == JsonValueKind.Object)
+            foreach (var h in SplitList(Col("headers")))
             {
-                fetchUrl = Str(f, "url");
-                if (f.TryGetProperty("headers", out var h) && h.ValueKind == JsonValueKind.Object)
-                    foreach (var p in h.EnumerateObject())
-                        if (p.Value.ValueKind == JsonValueKind.String) headers[p.Name] = p.Value.GetString()!;
+                var colon = h.IndexOf(':');
+                if (colon > 0) headers[h.Substring(0, colon).Trim()] = h.Substring(colon + 1).Trim();
             }
-            var extract = new List<string>();
-            if (e.TryGetProperty("extract", out var ex))
-            {
-                if (ex.ValueKind == JsonValueKind.String) extract.Add(ex.GetString()!);
-                else if (ex.ValueKind == JsonValueKind.Array)
-                    extract.AddRange(ex.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!));
-            }
+            var name = Col("name");
             list.Add(new ThumbnailRuleData
             {
-                Name     = Str(e, "name") ?? $"#{i}",
-                Enabled  = !(e.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.False),
-                Match    = Str(e, "match") ?? "",
-                Result   = Str(e, "result"),
-                FetchUrl = fetchUrl,
+                Name     = name.Length > 0 ? name : $"#{i}",
+                Enabled  = enabled is not ("0" or "false" or "no" or "off"),
+                Match    = Col("match"),
+                Result   = Col("result") is { Length: > 0 } r ? r : null,
+                FetchUrl = Col("fetch_url") is { Length: > 0 } f ? f : null,
                 Headers  = headers,
-                Format   = Str(e, "format") ?? "json",
-                Extract  = extract,
-                Empty    = Str(e, "empty") ?? "unavailable",
+                Format   = Col("format") is { Length: > 0 } fm ? fm : "json",
+                Extract  = SplitList(Col("extract")).ToList(),
+                Empty    = Col("empty") is { Length: > 0 } em ? em : "unavailable",
+                Comment  = leading,
             });
         }
-        return list;
+        return new ThumbnailRuleFile(list, preamble, trailer);
     }
 
-    /// <summary>ルールの一覧をファイルの書式 (JSON) にする (設定画面からの保存用)。</summary>
-    public static string WriteData(IEnumerable<ThumbnailRuleData> rules)
+    /// <summary>新しく作るファイルの先頭に入れる説明 (利用者が書き換えたらそれを保つ)。</summary>
+    private const string DefaultPreamble =
+        "# サムネイルルール (利用者のルール)。1 行が 1 つのルール。設定 → サムネイルルール で編集できる。\n" +
+        "# headers と extract に複数の値を書くときは || で区切る。カンマや \" を含む項目は \" で囲み、中の \" は \"\" と書く。\n" +
+        "# # で始まる行はコメント (設定画面で編集しても残る。ルールの直前のコメントはそのルールと一緒に動き、ルールを消すと一緒に消える)。\n";
+
+    /// <summary>ルールの一覧をファイルの書式 (CSV。見出し行 + 1 行 1 ルール) にする (設定画面からの保存用)。
+    /// コメント行は読んだときの位置に書き戻す: <paramref name="preamble"/> = 見出し行の前 (null なら既定の説明)、
+    /// 各ルールの <see cref="ThumbnailRuleData.Comment"/> = そのルールの直前、<paramref name="trailer"/> = 最後のルールの後。</summary>
+    public static string WriteData(IEnumerable<ThumbnailRuleData> rules, string? preamble = null, string trailer = "")
     {
-        using var ms = new MemoryStream();
-        using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        var sb = new System.Text.StringBuilder();
+        sb.Append(CommentBlock(preamble ?? DefaultPreamble));
+        sb.Append(string.Join(",", Columns)).Append('\n');
+        foreach (var d in rules)
         {
-            w.WriteStartObject();
-            w.WriteStartArray("rules");
-            foreach (var d in rules)
+            sb.Append(CommentBlock(d.Comment));
+            var cells = new[]
             {
-                w.WriteStartObject();
-                w.WriteString("name", d.Name);
-                if (!d.Enabled) w.WriteBoolean("enabled", false);
-                w.WriteString("match", d.Match);
-                if (!string.IsNullOrWhiteSpace(d.Result)) w.WriteString("result", d.Result);
-                if (!string.IsNullOrWhiteSpace(d.FetchUrl) || d.Headers.Count > 0)
-                {
-                    w.WriteStartObject("fetch");
-                    w.WriteString("url", d.FetchUrl ?? "");
-                    if (d.Headers.Count > 0)
-                    {
-                        w.WriteStartObject("headers");
-                        foreach (var (k, v) in d.Headers) w.WriteString(k, v);
-                        w.WriteEndObject();
-                    }
-                    w.WriteEndObject();
-                }
-                w.WriteString("format", d.Format);
-                if (d.Extract.Count > 0)
-                {
-                    w.WriteStartArray("extract");
-                    foreach (var x in d.Extract) w.WriteStringValue(x);
-                    w.WriteEndArray();
-                }
-                if (!string.Equals(d.Empty, "unavailable", StringComparison.OrdinalIgnoreCase)) w.WriteString("empty", d.Empty);
-                w.WriteEndObject();
-            }
-            w.WriteEndArray();
-            w.WriteEndObject();
+                d.Enabled ? "1" : "0",
+                d.Name,
+                d.Match,
+                d.Result ?? "",
+                d.FetchUrl ?? "",
+                string.Join(" " + ListSeparator + " ", d.Headers.Select(h => h.Key + ": " + h.Value)),
+                d.Format,
+                string.Join(" " + ListSeparator + " ", d.Extract),
+                d.Empty,
+            };
+            sb.Append(string.Join(",", cells.Select(CsvCell))).Append('\n');
         }
-        return System.Text.Encoding.UTF8.GetString(ms.ToArray()) + "\n";
+        sb.Append(CommentBlock(trailer));
+        return sb.ToString();
     }
 
-    private static string? Str(JsonElement e, string name)
-        => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: > 0 } s ? s : null;
+    /// <summary>コメント行のかたまりを、行末を揃えて返す (空なら空)。</summary>
+    private static string CommentBlock(string? block)
+    {
+        if (string.IsNullOrEmpty(block)) return "";
+        var t = block.Replace("\r", "");
+        return t.EndsWith('\n') ? t : t + "\n";
+    }
+
+    private static IEnumerable<string> SplitList(string cell)
+        => cell.Split(ListSeparator).Select(x => x.Trim()).Where(x => x.Length > 0);
+
+    /// <summary>CSV の 1 項目。カンマ・" ・改行・前後の空白・先頭の # を含むものは " で囲む (1 行 1 ルールを保つため、改行は空白にする)。</summary>
+    private static string CsvCell(string? value)
+    {
+        var v = (value ?? "").Replace("\r", "").Replace('\n', ' ');
+        var quote = v.Contains(',') || v.Contains('"') || v.StartsWith('#') || v.StartsWith(' ') || v.EndsWith(' ');
+        return quote ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+
+    /// <summary>CSV を行ごとの項目の並びにする (" で囲んだ項目の中のカンマ・"" に対応)。# で始まる行と空行はルールの行ではなく、
+    /// 直後の行の <c>Leading</c> (その行の前のコメント。書いてあるとおり) に入れて返す。最後の行より後のものは <c>Trailer</c>。</summary>
+    internal static (List<(List<string> Cells, string Leading)> Records, string Trailer) ParseCsv(string text)
+    {
+        var records = new List<(List<string>, string)>();
+        var leading = new System.Text.StringBuilder();
+        var pos = 0;
+        if (text.Length > 0 && text[0] == '\uFEFF') pos = 1;   // BOM
+        while (pos < text.Length)
+        {
+            // 行の先頭: # の行と空行はコメントとして溜める
+            var lineEnd = text.IndexOf('\n', pos);
+            var line = lineEnd < 0 ? text.Substring(pos) : text.Substring(pos, lineEnd - pos);
+            if (line.TrimStart().StartsWith('#') || line.Trim().Length == 0)
+            {
+                leading.Append(line.TrimEnd('\r')).Append('\n');
+                pos = lineEnd < 0 ? text.Length : lineEnd + 1;
+                continue;
+            }
+            var rec = new List<string>();
+            var cell = new System.Text.StringBuilder();
+            var quoted = false;      // いま " の中か
+            while (pos < text.Length)
+            {
+                var c = text[pos];
+                if (quoted)
+                {
+                    if (c == '"')
+                    {
+                        if (pos + 1 < text.Length && text[pos + 1] == '"') { cell.Append('"'); pos += 2; continue; }
+                        quoted = false; pos++; continue;
+                    }
+                    cell.Append(c); pos++; continue;
+                }
+                if (c == '"' && cell.ToString().Trim().Length == 0) { quoted = true; cell.Clear(); pos++; continue; }
+                if (c == ',') { rec.Add(cell.ToString()); cell.Clear(); pos++; continue; }
+                if (c == '\n') { pos++; break; }
+                if (c == '\r') { pos++; continue; }
+                cell.Append(c); pos++;
+            }
+            rec.Add(cell.ToString());
+            records.Add((rec, leading.ToString()));
+            leading.Clear();
+        }
+        return (records, leading.ToString());
+    }
 
     // ---------------------------------------------------------------
     // 取り出し

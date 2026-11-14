@@ -214,7 +214,7 @@
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="画像">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ImageTemplate}" />
                                     </DataTrigger>
-                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="サムネイル取得">
+                                    <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="サムネイルルール">
                                         <Setter Property="ContentTemplate" Value="{StaticResource ThumbnailRulesTemplate}" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding SelectedCategory.Name}" Value="ビューア">

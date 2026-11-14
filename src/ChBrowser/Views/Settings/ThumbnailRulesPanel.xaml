@@ -6,7 +6,7 @@
              xmlns:vm="clr-namespace:ChBrowser.ViewModels"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:SettingsViewModel}">
-    <!-- 「サムネイル取得」カテゴリ: 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から
+    <!-- 「サムネイルルール」カテゴリ: 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム等) から
          サムネイルを出すためのルールの一覧・編集・テスト。 -->
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
@@ -69,7 +69,7 @@
                         ToolTip="選択中の既定のルールを写し取って、編集できるようにします (止めたいときは写し取ってから「有効」を外します)" />
                 <Button Content="保存先のフォルダを開く" Padding="8,2" Margin="0,6,0,0" HorizontalAlignment="Left"
                         Command="{Binding OpenThumbnailRulesFolderCommand}"
-                        ToolTip="追加・編集したルールは thumbnail_rules.json に保存されます" />
+                        ToolTip="追加・編集したルールは thumbnail_rules.csv に保存されます" />
             </StackPanel>
 
             <!-- 右: 選択中のルール -->
