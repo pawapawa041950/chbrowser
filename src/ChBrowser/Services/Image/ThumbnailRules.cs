@@ -198,7 +198,8 @@ public sealed class ThumbnailRuleSet
     // ファイル (CSV。1 行 = 1 ルール)
     // ---------------------------------------------------------------
 
-    /// <summary>列の並び (見出し行)。ファイルに見出し行があればその並びで読む (列を入れ替えてあっても読める)。</summary>
+    /// <summary>列の並び。ファイルの見出し行はコメント (「# enabled,name,…」。人と AI が読むためのもの) で、ルールの行はこの並びで読む。
+    /// コメントでない見出し行が書いてあるファイルは、その並びで読む (列を入れ替えてあっても読める)。</summary>
     private static readonly string[] Columns = { "enabled", "name", "match", "result", "fetch_url", "headers", "format", "extract", "empty", "display" };
 
     /// <summary>1 つの項目に複数の値 (ヘッダー・取り出し方の候補) を書くときの区切り。</summary>
@@ -218,14 +219,17 @@ public sealed class ThumbnailRuleSet
         var first = true;
         var i = 0;
         var (records, trailer) = ParseCsv(csv);
-        foreach (var (rec, leading) in records)
+        foreach (var (rec, leadingRaw) in records)
         {
+            var leading = leadingRaw;
             if (first)
             {
                 first = false;
-                // 見出し行 (enabled,name,… の名前が並ぶ行) ならその並びを使う。見出しが無ければ既定の並びで読む
+                // コメントでない見出し行 (enabled,name,… の名前が並ぶ行) ならその並びを使う。その前のコメントはファイルの説明
                 var head = rec.Select(c => c.Trim().ToLowerInvariant()).ToArray();
                 if (head.Contains("name") && head.Contains("match")) { order = head; preamble = leading; continue; }
+                // ふつうの形: 見出し行はコメント。そこまでがファイルの説明で、その後ろのコメントが最初のルールのもの
+                if (SplitAtCommentedHeader(leading) is { } split) { preamble = split.Preamble; leading = split.After; }
             }
             i++;
             string Col(string name)
@@ -256,23 +260,97 @@ public sealed class ThumbnailRuleSet
                 Comment  = leading,
             });
         }
+        // ルールが 1 つも無いファイル: コメントは全部「最後のルールの後」に入っているので、見出し行のコメントまでを説明に分ける
+        if (records.Count == 0 && SplitAtCommentedHeader(trailer) is { } only) { preamble = only.Preamble; trailer = only.After; }
         return new ThumbnailRuleFile(list, preamble, trailer);
     }
 
-    /// <summary>新しく作るファイルの先頭に入れる説明 (利用者が書き換えたらそれを保つ)。</summary>
+    /// <summary>コメント行のかたまりを、最後の「見出し行のコメント」(# enabled,name,… ) までとその後ろに分ける。無ければ null。</summary>
+    private static (string Preamble, string After)? SplitAtCommentedHeader(string comments)
+    {
+        var lines = comments.Split('\n');
+        for (var i = lines.Length - 1; i >= 0; i--)
+        {
+            if (!IsCommentedHeader(lines[i])) continue;
+            return (string.Join("\n", lines.Take(i + 1)) + "\n", string.Join("\n", lines.Skip(i + 1)));
+        }
+        return null;
+    }
+
+    private static bool IsCommentedHeader(string line)
+    {
+        var t = line.Trim();
+        if (!t.StartsWith('#')) return false;
+        var cells = t.TrimStart('#').Split(',').Select(c => c.Trim().ToLowerInvariant()).ToArray();
+        return cells.Length >= 3 && cells[0] == "enabled" && cells.Contains("name") && cells.Contains("match");
+    }
+
+    /// <summary>見出し行のコメント (説明の最後に置く 1 行)。</summary>
+    private static string CommentedHeader => "# " + string.Join(",", Columns) + "\n";
+
+    /// <summary>利用者のファイルのひな形を、既定のルールのファイル (埋め込み) から作る: 説明のコメント (#@ で始まる開発者向けの行は除く)
+    /// + 既定のルールの行を「# 」でコメントにしたサンプル + 見出し行のコメント。ルールは 1 つも入っていない (= 既定のルールだけが使われる)。
+    /// AI にこのファイルを見せるだけでルールを書いてもらえるよう、書式の説明は既定のルールのファイル側にまとめてある。</summary>
+    public static string BuildUserTemplate(string builtinCsv)
+    {
+        var sb = new System.Text.StringBuilder();
+        var samples = new List<string>();
+        var seenHeader = false;
+        foreach (var raw in builtinCsv.Replace("\r", "").TrimStart('\uFEFF').Split('\n'))
+        {
+            if (raw.StartsWith("#@")) continue;
+            // 見出し (コメント。昔の形ではコメントでない行) は下で書き直すので写さない
+            if (IsCommentedHeader(raw) || IsCommentedHeader("#" + raw)) { seenHeader = true; continue; }
+            if (raw.TrimStart().StartsWith('#') || raw.Trim().Length == 0)
+            {
+                if (!seenHeader) sb.Append(raw).Append('\n');   // 見出しより前のコメント = 説明
+                continue;
+            }
+            samples.Add(raw);
+        }
+        sb.Append(CommentedHeader);
+        foreach (var row in samples) sb.Append("# ").Append(row).Append('\n');
+        sb.Append("#\n");
+        sb.Append("# ==============================================================================================================\n");
+        sb.Append("# ここから下が実際に使われるルール。下の見出し (コメント) の列の順に、1 行 1 ルールで書く\n");
+        sb.Append("# ==============================================================================================================\n");
+        sb.Append(CommentedHeader);
+        return sb.ToString();
+    }
+
+    /// <summary>利用者のファイルが無ければ、説明とサンプル入りのひな形 (<see cref="BuildUserTemplate"/>) で作る (起動時)。
+    /// 既にあるファイルには触らない。作れなくても動作には影響しない (既定のルールだけで動く) のでログに書くだけ。</summary>
+    public static void EnsureUserFile(string userPath, string builtinCsv)
+    {
+        try
+        {
+            if (File.Exists(userPath)) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(userPath)!);
+            File.WriteAllText(userPath, BuildUserTemplate(builtinCsv));
+        }
+        catch (Exception ex)
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write($"[ThumbRule] {UserFileName} を作れません: {ex.Message}");
+        }
+    }
+
+    /// <summary>見出し行の無いファイルを書き直すときに先頭に入れる説明 (ふつうはひな形の説明がファイルに残っているので使わない)。</summary>
     private const string DefaultPreamble =
         "# サムネイルルール (利用者のルール)。1 行が 1 つのルール。設定 → サムネイルルール で編集できる。\n" +
         "# headers と extract に複数の値を書くときは || で区切る。カンマや \" を含む項目は \" で囲み、中の \" は \"\" と書く。\n" +
-        "# # で始まる行はコメント (設定画面で編集しても残る。ルールの直前のコメントはそのルールと一緒に動き、ルールを消すと一緒に消える)。\n";
+        "# # で始まる行はコメント (設定画面で編集しても残る。ルールの直前のコメントはそのルールと一緒に動き、ルールを消すと一緒に消える)。\n" +
+        "# 列の順は下の見出し (コメント) のとおり。\n";
 
-    /// <summary>ルールの一覧をファイルの書式 (CSV。見出し行 + 1 行 1 ルール) にする (設定画面からの保存用)。
+    /// <summary>ルールの一覧をファイルの書式 (CSV。説明のコメント (最後の行が見出しのコメント) + 1 行 1 ルール) にする (設定画面からの保存用)。
     /// コメント行は読んだときの位置に書き戻す: <paramref name="preamble"/> = 見出し行の前 (null なら既定の説明)、
     /// 各ルールの <see cref="ThumbnailRuleData.Comment"/> = そのルールの直前、<paramref name="trailer"/> = 最後のルールの後。</summary>
     public static string WriteData(IEnumerable<ThumbnailRuleData> rules, string? preamble = null, string trailer = "")
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append(CommentBlock(preamble ?? DefaultPreamble));
-        sb.Append(string.Join(",", Columns)).Append('\n');
+        // 説明の最後は見出し行のコメント (読むときに、説明と最初のルールのコメントの境目になる)。無ければ足す
+        var pre = CommentBlock(preamble ?? DefaultPreamble);
+        sb.Append(pre);
+        if (SplitAtCommentedHeader(pre) is not { After: "" }) sb.Append(CommentedHeader);
         foreach (var d in rules)
         {
             sb.Append(CommentBlock(d.Comment));

@@ -180,8 +180,11 @@ public partial class App : Application
         _imageCache.MaxBytes = (long)Math.Max(64, _currentConfig.CacheMaxMb) * 1024 * 1024;
         _aiImageMeta     = new AiImageMetadataService(_imageCache);
         // サムネイルルール (既定 + 利用者のファイル)。スレ表示のシェルにも対象 URL の一覧として載せる (それより前に読む)
+        // 利用者のファイルが無ければ、書式の説明と既定のルールのサンプル (コメント) を入れたひな形で作っておく
+        var builtinThumbnailRules = ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.csv");
+        ChBrowser.Services.Image.ThumbnailRuleSet.EnsureUserFile(paths.ThumbnailRulesPath, builtinThumbnailRules);
         ChBrowser.Services.Image.ThumbnailRuleSet.Current = ChBrowser.Services.Image.ThumbnailRuleSet.Load(
-            ChBrowser.Services.Render.EmbeddedAssets.Read("thumbnail-rules.csv"), paths.ThumbnailRulesPath);
+            builtinThumbnailRules, paths.ThumbnailRulesPath);
         _urlExpander     = new UrlExpander(ChBrowser.Services.Image.ThumbnailRuleSet.Current);
 
         // テーマ (post.html / post.css) サービスを登録。

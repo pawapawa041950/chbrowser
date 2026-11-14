@@ -1,39 +1,153 @@
-# サムネイルルール (既定)。画像・動画そのものではないページの URL から、サムネイルにする画像の URL を求める。1 行が 1 つのルール。
-# 利用者のルールは data/app/thumbnail_rules.csv に同じ形式で書く (設定 → サムネイルルール で編集できる)。
-# 利用者のルールが先に試され、最初に match したルール 1 つだけが使われる。同じ name の利用者のルールはこの既定を置き換える
-# (enabled を 0 にすると、その name の既定を止められる)。
+#@ このファイルは ChBrowser に埋め込まれる「既定のサムネイルルール」。下の説明 (# の行) は、利用者のファイル
+#@ (data/app/thumbnail_rules.csv) を新しく作るときにそのまま先頭へ写される (ThumbnailRuleSet.BuildUserTemplate)。
+#@ そのとき既定のルールの行は「# 」を付けたサンプルとして写される。#@ で始まる行は写されない (開発者向けのメモ)。
+# ==============================================================================================================
+# ChBrowser サムネイルルール
+# ==============================================================================================================
 #
-# 書き方は普通の CSV: 項目をカンマで区切る。カンマや " を含む項目は全体を " で囲み、中の " は "" と書く。# で始まる行は読まない。
+# ■ これは何か
+#   掲示板のレスに書かれた URL のうち、画像・動画そのものではない「ページの URL」(SNS の投稿、画像アルバム、動画サイト等) から、
+#   サムネイルや動画プレーヤーを出すためのルールを書くファイル。1 行が 1 つのルール。
+#   URL の末尾が画像 (.jpg .jpeg .png .gif .webp) や動画 (.mp4 .webm .mov) の拡張子なら、ルール無しでサムネイル / 動画プレーヤーが出る。
+#   ここに書くのは、それ以外の URL のためのルール。
 #
-#   enabled    1 = 使う、0 = 使わない
-#   name       ルールの名前 (置き換え・ログ用)
-#   match      対象 URL の正規表現 (大文字小文字は区別しない)。名前付きグループ (?<id>…) を result / fetch_url の {id} で使える。
-#              アプリ (.NET) と表示側 (JavaScript) の両方で使うので、どちらでも通る書き方にする
-#   result     取得せずに URL を組み立てるだけのとき、その URL (例 https://example.com/img/{id}.jpg)。書いてあれば fetch_url より優先
-#   fetch_url  取得するとき、その URL (例 https://example.com/api/{id})
-#   headers    取得時に付けるヘッダー (名前: 値)。複数は || で区切る (例 Accept: application/json || Referer: https://example.com/)
-#   format     取得した内容の読み方: json か regex (HTML 等の文字列)
-#   extract    取り出し方の候補。複数は || で区切る。左から試し、1 件以上取れた最初の候補を使う。
-#              json : 項目の場所。"." で下の階層、"[]" で配列の全要素、"[0]" で配列の 1 要素、"a|b" は a が無ければ b
-#              regex: 正規表現。グループ 1 (無ければ一致した全体) が URL。一致した数だけ取り出す
-#   empty      何も取れなかったときの扱い: unavailable (「取得失敗 — クリックで再試行」の枠) か noMedia (画像なしと確定。枠を出さない)
-#   display    求まった URL の出し方:
-#              auto     URL の拡張子が動画 (.mp4 .webm .mov) なら動画プレーヤー、それ以外はサムネイル (写真と動画が混ざるページ向け。既定)
-#              image    サムネイル (拡張子の無い画像 URL)
-#              video    動画プレーヤー (拡張子の無い動画 URL。このアプリで再生できるもの)
-#              external サムネイルに再生マークを重ね、クリックで元の URL を既定のブラウザで開く (このアプリで再生できない動画のページ。
-#                       取り出す URL はサムネイル画像にする)
+# ■ AI にルールを作ってもらうとき
+#   このファイルの内容をすべて AI に見せ、「https://～ のページでサムネイルを出せるようにしてほしい」と対象の URL の例を添えて頼む。
+#   AI は下の「ルールの作り方」に従い、このファイルの末尾に足す 1 行 (CSV) を答えること。
+#   足したあとはアプリを起動し直す (または 設定 → サムネイルルール で同じ内容を入力する。こちらはすぐ反映される)。
+#   設定 → サムネイルルール の「URL を入れて試す」で、その URL からどの URL が取り出せるかを確かめられる。
 #
-# 複数取れたら複数出す (4 つまで。残りは「他 N 枚」)。
+# ■ アプリがルールをどう使うか
+#   1. レスの中の URL を、ルールの match (正規表現) と上から順に照らし合わせ、最初に一致したルール 1 つだけを使う。
+#      このファイルのルール → アプリ内蔵の既定のルール (下にサンプルとして載せてあるもの) の順に試す。
+#   2. 一致したルールに result があれば、通信せずにその URL を組み立てて使う。
+#      無ければ fetch_url を HTTP GET で取得し、その内容から extract の書き方で URL を取り出す。
+#   3. 求まった URL を display の指定に従って出す (サムネイル / 動画プレーヤー / 外部サイトへ誘導)。
+#      複数求まったら複数出す (1 つの URL につき 4 つまで。それを超える分は「他 N 枚」と出る)。
 #
-# x.com      : fxtwitter の公開 JSON。写真は画像、動画 / GIF は mp4 (動画プレーヤー)。本文側に無ければ引用元 (quote)。どちらにも無ければ文字だけの投稿
-# pixiv      : 作品の全ページ。R-18・非公開はログインが要るので取れない。画像 (i.pximg.net) の取得に要る Referer はアプリが別に付けている
-# imgur-album: imgur.com/a/<id> と imgur.com/a/<題名>-<id>。client_id は imgur 自身のサイト用のもの (使えなくなったら利用者のルールで差し替える)
-# imgur      : 単体画像のページ imgur.com/<id> (a/ gallery/ t/ は除く)。i.imgur.com/<id>.<拡張子> の直リンクはルール無しで出る
-# youtube    : watch / youtu.be / shorts / embed / live。埋め込み再生は YouTube 側の制限でできないので、サムネイルを出してブラウザで開く
-enabled,name,match,result,fetch_url,headers,format,extract,empty,display
+# ■ CSV の書き方
+#   - 列の順番は、このファイルの「# enabled,name,match,…」の行 (列の名前を並べた見出し。コメント) のとおり。
+#     ルールの行は、見出しと同じ順に項目を並べる。後ろの項目を省いたときは空として扱う。
+#   - 項目はカンマで区切る。カンマ・"・前後の空白を含む項目は全体を " で囲み、中の " は "" と書く。
+#     例: 正規表現 <meta property="og:image" content="([^"]+)"  →  "<meta property=""og:image"" content=""([^""]+)"""
+#   - 1 つのルールは必ず 1 行に書く (項目の中で改行しない)。
+#   - # で始まる行と空行はコメント。設定画面で編集してもコメントは残る (ルールの直前のコメントはそのルールと一緒に動き、
+#     ルールを消すと一緒に消える。見出し行より前と、最後のルールより後のコメントは常に残る)。
+#   - 1 つの項目に複数の値を書けるのは headers と extract だけ。値と値の間を || で区切る。
+#
+# ■ 列の説明
+#
+#   enabled   このルールを使うか。1 = 使う、0 = 使わない。
+#             内蔵の既定のルールと同じ name のルールを 0 にすると、その既定のルールを止められる。
+#
+#   name      ルールの名前 (自由な文字列)。内蔵の既定のルールと同じ name にすると、その既定のルールを置き換える。
+#             ログと「URL を入れて試す」の結果に出る。
+#
+#   match     対象にする URL の正規表現。必須。
+#             - 大文字と小文字は区別しない。URL 全体に一致させたいときは ^ と $ を付ける (付けなければ部分一致)。
+#             - URL の一部を後で使うには、名前付きグループ (?<id>…) で囲む。result と fetch_url の中で {id} と書くと、
+#               その部分 (URL 用にエスケープした文字列) に置き換わる。名前は英数字と _。番号 {1} {2} でも指定できる。
+#               エスケープされるので、/ を含む部分を 1 つのグループで取ると %2F になる。パスの各部分は別々のグループにする。
+#             - この正規表現はアプリ (.NET) と表示側 (ブラウザの JavaScript) の両方で使う。両方で通る書き方にすること:
+#               後読み (?<=…) (?<!…) は使えない。(?i) のような指定は使えない。同じ名前のグループを 2 回書けない。
+#               先読み (?=…) (?!…)、(?:…)、\d \w [^/?#] などは使える。
+#             - 画像や動画の拡張子で終わる URL はルールより先に処理されるので、ここで一致させても使われない。
+#
+#   result    通信せずに URL を組み立てるだけのルールで使う。求める URL のひな形を書く (http:// か https:// で始まる URL)。
+#             例: https://i.ytimg.com/vi/{id}/hqdefault.jpg
+#             ここに書いてあれば fetch_url・headers・format・extract は使わない。通信しないので表示が速い。
+#             URL の形だけでサムネイル画像の URL が決まるサイトはこちらを使う。
+#
+#   fetch_url 取得して URL を取り出すルールで使う。取得する URL のひな形を書く (http:// か https:// で始まる URL)。
+#             例: https://api.example.com/posts/{id}
+#             - HTTP GET で取得する (POST はできない)。転送 (リダイレクト) は 5 回までたどる。15 秒で打ち切る。
+#             - 応答が 200 番台でないとき、8MB を超えるときは失敗になる。
+#             - ログインは使えない (アプリ内ブラウザのログイン状態・Cookie は送られない)。誰でも見られる URL だけが対象。
+#             - JavaScript は実行されない。取得した文字列そのもの (JSON や HTML のソース) から取り出す。
+#               ブラウザで「ページのソースを表示」したときに画像の URL が見えないページは、HTML からは取り出せない。
+#               その場合は、そのサイトが公開している JSON の問い合わせ先 (API) を fetch_url にする。
+#             - 送られる User-Agent は Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ChBrowser/0.1。
+#             - 取得は 1 回だけ。取得した結果を使ってもう一度別の URL を取得することはできない。
+#
+#   headers   fetch_url の取得時に付ける HTTP ヘッダー。「名前: 値」の形で書く。複数は || で区切る。無ければ空。
+#             例: Accept: application/json || Referer: https://www.example.com/
+#
+#   format    fetch_url で取得した内容の読み方。json か regex。空なら json。
+#             json  = 内容を JSON として読み、extract に書いた「項目の場所」の値を取り出す。
+#             regex = 内容を文字列のまま読み、extract に書いた正規表現に一致した部分を取り出す (HTML 向け)。
+#
+#   extract   URL の取り出し方。format によって書き方が違う。
+#             候補を || で区切って複数書ける。左から順に試し、1 つ以上取り出せた最初の候補の結果だけを使う
+#             (例: 本文の画像が無ければ引用元の画像、のような代わりの場所を書く)。
+#
+#             ● format が json のとき: 項目の場所を書く。
+#                 .      下の階層へ進む                       例: data.image.url
+#                 []     配列のすべての要素                   例: media[].url        (media の各要素の url を全部)
+#                 [0]    配列の 1 つの要素 (0 が先頭)         例: media[0].url
+#                 a|b    a があれば a、無ければ b (要素ごと)   例: media[].thumbnail_url|url
+#               文字列の値だけが取り出される (数値・真偽・オブジェクトは取り出されない)。空文字と null は「無い」扱い。
+#               例: {"post":{"images":[{"link":"https://…/1.jpg"},{"link":"https://…/2.jpg"}]}}  →  post.images[].link
+#               一番外側が配列の JSON は、先頭を [] で始める。例: [{"url":"…"},{"url":"…"}]  →  [].url
+#
+#             ● format が regex のとき: 正規表現を書く (.NET の正規表現。大文字と小文字は区別しない)。
+#               かっこ ( ) で囲んだ 1 つ目の部分が URL になる。かっこが無ければ一致した全体が URL になる。
+#               内容の中で一致したすべての箇所から取り出す。取り出した文字列の &amp; などは & に戻す。
+#               正規表現の中に || は書けない (候補の区切りと見なされる)。
+#               例 (HTML の og:image): "<meta property=""og:image"" content=""([^""]+)"""
+#
+#             どちらの場合も、取り出した URL が相対 URL なら fetch_url を基準に絶対 URL にする。http / https 以外は捨てる。
+#             同じ URL の重複は 1 つにまとめる。200 個までで打ち切る。
+#
+#   empty     fetch_url は取得できたが、URL が 1 つも取り出せなかったときの扱い。空なら unavailable。
+#             unavailable = 「画像取得失敗 — クリックで再試行」の枠を出す (取れるはずのページで取れなかった、という扱い)。
+#             noMedia     = 画像・動画が付いていないページだった、という扱いにして、枠を出さない
+#                           (文字だけの投稿があり得る SNS 等はこちら)。
+#
+#   display   求まった URL の出し方。空なら auto。
+#             auto     = URL の末尾が動画の拡張子 (.mp4 .webm .mov。後ろに ?… が付いていてもよい) なら動画プレーヤー、
+#                        それ以外はサムネイル。写真と動画が混ざるページはこれにする。
+#             image    = 拡張子に関係なくサムネイル (画像) として出す。クリックでアプリ内のビューアに開く。
+#             video    = 拡張子に関係なく動画プレーヤーとして出す。URL は mp4 / webm などの動画ファイルそのものであること
+#                        (分割配信の .m3u8 / .mpd や、動画サイトのページの URL は再生できない)。
+#             external = サムネイルに再生マークと「ブラウザで開く」を重ねて出し、クリックで元のページを既定のブラウザで開く。
+#                        このアプリで再生できない動画のページ (YouTube 等) で使う。取り出す URL はサムネイル画像の URL にする。
+#
+# ■ ルールの作り方 (AI への手順)
+#   1. 対象の URL の形を調べ、match を書く。ID などの変わる部分を名前付きグループにする。似た別の種類のページ
+#      (一覧ページ、ユーザーのページ等) に一致しないようにする。http と https、www. の有無の両方に一致させる。
+#   2. 画像・動画の URL の求め方を、次の順に検討する。
+#      (a) ページの URL の ID だけで画像の URL が決まる → result に書く (通信しないので一番よい)。
+#      (b) ログイン無しで使える JSON の問い合わせ先がある → fetch_url に書き、format を json、extract に項目の場所を書く。
+#      (c) ページの HTML のソースに画像の URL が書かれている (og:image 等) → fetch_url にページの URL、
+#          format を regex、extract に正規表現を書く。
+#      どれにも当てはまらない (ログインが要る、JavaScript を実行しないと出ない、取得を 2 回以上しないと分からない) ものは、
+#      このルールでは対応できない。その場合はできないと答えること。
+#   3. display を決める。画像なら image か auto。再生できる動画ファイルの URL が取れるなら auto か video。
+#      動画のページだがこのアプリで再生できないなら、サムネイル画像の URL を取り出して external にする。
+#   4. empty を決める。画像が付かないことがあるページは noMedia、それ以外は unavailable。
+#   5. 見出し (# enabled,name,…) の列の順に 1 行で書く。カンマや " を含む項目は " で囲む。
+#   6. 画像の配信元が Referer の無い要求を断るサイトでは、URL は取り出せてもサムネイルが表示されないことがある
+#      (画像の取得時に付けるヘッダーは、このルールでは指定できない)。
+#
+# ■ サンプル: アプリ内蔵の既定のルール
+#   下の「# 」で始まる行は、アプリに内蔵されている既定のルールと同じ内容 (コメントなので、このままでは読まれない。
+#   内蔵のものが使われる)。書き方の見本として使える。変えたいときは、行頭の「# 」を外した行をファイルの末尾に書く
+#   (同じ name のルールは内蔵のものを置き換える)。
+#
+#   x.com         投稿の ID から、公開の JSON を取得する。写真は画像、動画 / GIF は mp4 が url に入っているので auto。
+#                 本文に無ければ引用元 (quote) を見る。どちらにも無ければ文字だけの投稿なので noMedia。
+#   pixiv         作品の全ページの画像。Referer が無いと JSON が取れないので headers に書いている。
+#                 R-18・非公開の作品はログインが要るので取れない (取得失敗になる)。
+#   imgur-album   imgur.com/a/<ID> と imgur.com/a/<題名>-<ID>。アルバムの全画像・動画。
+#                 client_id は imgur 自身のサイトが使っているもの (使えなくなったら差し替える)。
+#   imgur-gallery imgur.com/gallery/<ID> と imgur.com/gallery/<題名>-<ID>。公開の投稿 (アルバムか単体の画像・動画)。
+#   imgur         単体画像のページ imgur.com/<ID> (a/ gallery/ t/ は先読みで除く)。URL の形だけで決まるので result。
+#   youtube       watch / youtu.be / shorts / embed / live。アプリ内では再生できないので、サムネイルを組み立てて external。
+#
+# enabled,name,match,result,fetch_url,headers,format,extract,empty,display
 1,x.com,"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/[A-Za-z0-9_]+/status/(?<id>\d+)",,https://api.fxtwitter.com/i/status/{id},Accept: application/json,json,tweet.media.all[].url || tweet.quote.media.all[].url,noMedia,auto
 1,pixiv,^https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/(?<id>\d+),,https://www.pixiv.net/ajax/illust/{id}/pages,Accept: application/json || Referer: https://www.pixiv.net/,json,body[].urls.regular|original|small,unavailable,image
 1,imgur-album,^https?://(?:www\.|m\.)?imgur\.com/a/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/albums/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable,auto
+1,imgur-gallery,^https?://(?:www\.|m\.)?imgur\.com/gallery/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/posts/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable,auto
 1,imgur,^https?://(?:www\.|m\.)?imgur\.com/(?!(?:a|gallery|t)(?:[/?#]|$))(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,https://i.imgur.com/{id}.jpg,,,json,,unavailable,image
 1,youtube,^https?://(?:(?:www\.|m\.)?youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)(?<id>[A-Za-z0-9_-]{11}),https://i.ytimg.com/vi/{id}/hqdefault.jpg,,,json,,unavailable,external
