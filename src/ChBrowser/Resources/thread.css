@@ -136,6 +136,14 @@ a.anchor.missing {
     color: #003a7a;
 }
 
+/* サムネイル (画像 / 動画プレーヤー) や「他 N 枚」にマウスを乗せている間、本文中の元の URL に付く印。
+   どの URL のサムネイルかが分かればよいので控えめに (薄い黄色の地 + 細い枠)。枠は outline なので文字の位置は動かない */
+a.media-link-hover {
+    background: rgba(255, 213, 79, 0.45);
+    outline: 1px solid rgba(214, 158, 0, 0.7);
+    border-radius: 2px;
+}
+
 /* AI 生成画像 (= comfyUI / SD WebUI Forge / etc.) を識別するバッジ行。
    サムネイル左上に絶対配置で重ねる。生成元ラベルの右にモデル名バッジを並べる。
    pointer-events:none で画像クリックの邪魔をしない。 */

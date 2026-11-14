@@ -3057,6 +3057,40 @@ var CHB_SCRIPT_READY = 0;
     });
     window.addEventListener('scroll', hideImgTrPopup, { passive: true });
 
+    // ---------- サムネイルに乗せている間、本文の元の URL に印を付ける ----------
+    // 1 つのレスに URL とサムネイルが複数あると、どのサムネイルがどの URL のものか分かりにくい (1 つの URL から複数出ることもある)。
+    // サムネイル (画像 / 動画プレーヤー / 外部サイトへ誘導) や「他 N 枚」にマウスを乗せている間、同じレスの本文中の
+    // その URL のリンクにクラス media-link-hover を付ける (見た目は thread.css)。
+    let mediaLinkHoverEl = null;      // いま乗っているサムネイル / 「他 N 枚」
+    let mediaLinkHoverLinks = [];     // 印を付けたリンク
+
+    function clearMediaLinkHover() {
+        for (const a of mediaLinkHoverLinks) a.classList.remove('media-link-hover');
+        mediaLinkHoverLinks = [];
+        mediaLinkHoverEl = null;
+    }
+
+    document.addEventListener('mouseover', function (e) {
+        const el = e.target.closest && e.target.closest('.image-slot[data-url], .media-more[data-url]');
+        if (el === mediaLinkHoverEl) return;
+        clearMediaLinkHover();
+        if (!el) return;
+        mediaLinkHoverEl = el;
+        const post = el.closest('.post');
+        const body = post && post.querySelector(':scope > .post-body');
+        if (!body) return;
+        const url = el.dataset.url;
+        body.querySelectorAll('a[data-url]').forEach(function (a) {
+            // 入れ子のレス (ツリー表示で本文の中に展開されたもの) のリンクは別のレスのものなので除く
+            if (a.dataset.url === url && a.closest('.post') === post) {
+                a.classList.add('media-link-hover');
+                mediaLinkHoverLinks.push(a);
+            }
+        });
+    });
+    // ウィンドウの外へ出たときは mouseover が来ないので、ここで外す
+    document.addEventListener('mouseleave', clearMediaLinkHover);
+
     function observeImageSlots(root) {
         const scope = root || document;
         // image-slot.deferred (画像 HEAD) と image-slot.video (動画 materialize) の両方を監視する。
