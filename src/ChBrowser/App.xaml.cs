@@ -743,7 +743,7 @@ public partial class App : Application
     /// 表示側にも届ける (開いているスレへは設定のメッセージで、これから開くスレへはシェルの作り直しで)。</summary>
     private void ApplyThumbnailRules(ChBrowser.Services.Image.ThumbnailRuleSet rules)
     {
-        var patternsChanged = !ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsPatterns.SequenceEqual(rules.JsPatterns);
+        var patternsChanged = ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsRulesJson != rules.JsRulesJson;
         ChBrowser.Services.Image.ThumbnailRuleSet.Current = rules;
         _urlExpander?.SetRules(rules);
         if (!patternsChanged) return;

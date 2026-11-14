@@ -17,13 +17,23 @@
 #              json : 項目の場所。"." で下の階層、"[]" で配列の全要素、"[0]" で配列の 1 要素、"a|b" は a が無ければ b
 #              regex: 正規表現。グループ 1 (無ければ一致した全体) が URL。一致した数だけ取り出す
 #   empty      何も取れなかったときの扱い: unavailable (「取得失敗 — クリックで再試行」の枠) か noMedia (画像なしと確定。枠を出さない)
+#   display    求まった URL の出し方:
+#              auto     URL の拡張子が動画 (.mp4 .webm .mov) なら動画プレーヤー、それ以外はサムネイル (写真と動画が混ざるページ向け。既定)
+#              image    サムネイル (拡張子の無い画像 URL)
+#              video    動画プレーヤー (拡張子の無い動画 URL。このアプリで再生できるもの)
+#              external サムネイルに再生マークを重ね、クリックで元の URL を既定のブラウザで開く (このアプリで再生できない動画のページ。
+#                       取り出す URL はサムネイル画像にする)
 #
-# 取り出した URL が動画 (.mp4 等) なら動画のサムネイルになる。複数取れたら複数のサムネイルを出す (4 枚まで。残りは「他 N 枚」)。
+# 複数取れたら複数出す (4 つまで。残りは「他 N 枚」)。
 #
-# x.com      : fxtwitter の公開 JSON。写真は url、動画 / GIF はサムネイル画像 (thumbnail_url)。本文側に無ければ引用元 (quote)。どちらにも無ければ文字だけの投稿
+# x.com      : fxtwitter の公開 JSON。写真は画像、動画 / GIF は mp4 (動画プレーヤー)。本文側に無ければ引用元 (quote)。どちらにも無ければ文字だけの投稿
 # pixiv      : 作品の全ページ。R-18・非公開はログインが要るので取れない。画像 (i.pximg.net) の取得に要る Referer はアプリが別に付けている
 # imgur-album: imgur.com/a/<id> と imgur.com/a/<題名>-<id>。client_id は imgur 自身のサイト用のもの (使えなくなったら利用者のルールで差し替える)
-enabled,name,match,result,fetch_url,headers,format,extract,empty
-1,x.com,"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/[A-Za-z0-9_]+/status/(?<id>\d+)",,https://api.fxtwitter.com/i/status/{id},Accept: application/json,json,tweet.media.all[].thumbnail_url|url || tweet.quote.media.all[].thumbnail_url|url,noMedia
-1,pixiv,^https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/(?<id>\d+),,https://www.pixiv.net/ajax/illust/{id}/pages,Accept: application/json || Referer: https://www.pixiv.net/,json,body[].urls.regular|original|small,unavailable
-1,imgur-album,^https?://(?:www\.|m\.)?imgur\.com/a/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/albums/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable
+# imgur      : 単体画像のページ imgur.com/<id> (a/ gallery/ t/ は除く)。i.imgur.com/<id>.<拡張子> の直リンクはルール無しで出る
+# youtube    : watch / youtu.be / shorts / embed / live。埋め込み再生は YouTube 側の制限でできないので、サムネイルを出してブラウザで開く
+enabled,name,match,result,fetch_url,headers,format,extract,empty,display
+1,x.com,"^https?://(?:www\.|m\.|mobile\.)?(?:twitter|x|fxtwitter|vxtwitter)\.com/[A-Za-z0-9_]+/status/(?<id>\d+)",,https://api.fxtwitter.com/i/status/{id},Accept: application/json,json,tweet.media.all[].url || tweet.quote.media.all[].url,noMedia,auto
+1,pixiv,^https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/(?<id>\d+),,https://www.pixiv.net/ajax/illust/{id}/pages,Accept: application/json || Referer: https://www.pixiv.net/,json,body[].urls.regular|original|small,unavailable,image
+1,imgur-album,^https?://(?:www\.|m\.)?imgur\.com/a/(?:[^/?#]*-)?(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,,https://api.imgur.com/post/v1/albums/{id}?client_id=546c25a59c58ad7&include=media,Accept: application/json,json,media[].url,unavailable,auto
+1,imgur,^https?://(?:www\.|m\.)?imgur\.com/(?!(?:a|gallery|t)(?:[/?#]|$))(?<id>[A-Za-z0-9]+)(?:[/?#].*)?$,https://i.imgur.com/{id}.jpg,,,json,,unavailable,image
+1,youtube,^https?://(?:(?:www\.|m\.)?youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)(?<id>[A-Za-z0-9_-]{11}),https://i.ytimg.com/vi/{id}/hqdefault.jpg,,,json,,unavailable,external

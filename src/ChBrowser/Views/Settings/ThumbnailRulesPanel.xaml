@@ -28,8 +28,8 @@
 
     <StackPanel>
         <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,8">
-            画像や動画そのものではないページの URL (x.com の投稿、pixiv の作品、imgur のアルバム等) からサムネイルを出すためのルールです。
-            URL が「対象 URL」に一致すると、そのルールの手順で画像の URL を求めます。上から順に試し、最初に一致したルール 1 つだけを使います。
+            画像や動画そのものではないページの URL (x.com の投稿、pixiv の作品、imgur のアルバム、YouTube 等) から、サムネイルや動画プレーヤーを出すためのルールです。
+            URL が「対象 URL」に一致すると、そのルールの手順で画像・動画の URL を求めます。上から順に試し、最初に一致したルール 1 つだけを使います。
             変更はすぐ保存されます (開いているスレは、開き直すか更新した分から反映されます)。
         </TextBlock>
         <TextBlock Text="{Binding ThumbnailRulesFileError}" Foreground="#C00" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6">
@@ -103,6 +103,13 @@
                               SelectedValuePath="Key" DisplayMemberPath="Value"
                               SelectedValue="{Binding Kind, Mode=TwoWay}" IsEnabled="{Binding IsEditable}"
                               HorizontalAlignment="Left" Width="280" Margin="0,0,0,6" />
+
+                    <TextBlock Text="表示のしかた" Style="{StaticResource FieldLabel}" />
+                    <ComboBox ItemsSource="{x:Static vm:ThumbnailRuleItem.Displays}"
+                              SelectedValuePath="Key" DisplayMemberPath="Value"
+                              SelectedValue="{Binding Display, Mode=TwoWay}" IsEnabled="{Binding IsEditable}"
+                              HorizontalAlignment="Left" Width="400" Margin="0,0,0,6"
+                              ToolTip="このアプリで再生できない動画のページ (YouTube 等) は「外部サイトへ誘導」にして、取り出す URL をサムネイル画像にします" />
 
                     <!-- URL を組み立てるだけ -->
                     <StackPanel>

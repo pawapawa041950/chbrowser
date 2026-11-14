@@ -828,7 +828,7 @@ public sealed partial class MainViewModel : ObservableObject, ChBrowser.Services
                                         .ToArray(),
             // 取得してサムネイルを求める URL (サムネイルルールの対象) の正規表現。最初の描画に間に合うようシェルにも
             // 置いてある (WebView2Helper.LoadThreadShellHtml)。こちらは設定画面でルールを変えたときに、開いているスレへ届ける分
-            asyncExpandPatterns   = ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsPatterns,
+            thumbRules            = ChBrowser.Services.Image.ThumbnailRuleSet.Current.JsRules,
         });
 
     /// <summary>サムネイルルールが変わったとき: スレ表示の設定を作り直して、開いているスレへ送る。</summary>

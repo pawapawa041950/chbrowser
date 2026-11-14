@@ -260,6 +260,15 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
         new KeyValuePair<string, string>(KindRewrite, "URL を組み立てるだけ (取得しない)"),
     };
 
+    /// <summary>「表示のしかた」の選択肢 (値 → 表示)。</summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> Displays { get; } = new[]
+    {
+        new KeyValuePair<string, string>(ThumbnailRule.DisplayAuto,     "自動 (拡張子が動画なら動画プレーヤー、それ以外はサムネイル)"),
+        new KeyValuePair<string, string>(ThumbnailRule.DisplayImage,    "サムネイル (画像)"),
+        new KeyValuePair<string, string>(ThumbnailRule.DisplayVideo,    "動画プレーヤー"),
+        new KeyValuePair<string, string>(ThumbnailRule.DisplayExternal, "サムネイルを出して外部サイトへ誘導 (クリックでブラウザを開く)"),
+    };
+
     /// <summary>既定のルールか (見るだけで、編集できない)。</summary>
     public bool IsBuiltin  { get; }
     public bool IsEditable => !IsBuiltin;
@@ -277,6 +286,8 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
     [ObservableProperty] private string _extractText;
     /// <summary>何も取れなかったとき「画像なし」と確定するか (false = 取得失敗の扱い)。</summary>
     [ObservableProperty] private bool   _emptyMeansNoMedia;
+    /// <summary>取り出した URL の出し方 (<see cref="ThumbnailRule.DisplayAuto"/> 等)。</summary>
+    [ObservableProperty] private string _display;
     /// <summary>検証エラー (空なら OK)。表示専用。</summary>
     [ObservableProperty] private string _error = "";
     /// <summary>同じ名前の既定のルールを置き換えているか (一覧の表示用)。</summary>
@@ -307,6 +318,7 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
         _headersText       = string.Join("\n", d.Headers.Select(h => h.Key + ": " + h.Value));
         _extractText       = string.Join("\n", d.Extract);
         _emptyMeansNoMedia = string.Equals(d.Empty, "noMedia", StringComparison.OrdinalIgnoreCase);
+        _display           = (d.Display ?? "").Trim().ToLowerInvariant() is { Length: > 0 } dp && Displays.Any(x => x.Key == dp) ? dp : ThumbnailRule.DisplayAuto;
         Validate();
     }
 
@@ -331,6 +343,7 @@ public sealed partial class ThumbnailRuleItem : ObservableObject
             Format   = Kind == KindRegex ? "regex" : "json",
             Extract  = rewrite ? Array.Empty<string>() : Lines(ExtractText).ToArray(),
             Empty    = EmptyMeansNoMedia ? "noMedia" : "unavailable",
+            Display  = Display,
             Comment  = _comment,
         };
     }

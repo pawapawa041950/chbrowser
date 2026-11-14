@@ -29,6 +29,9 @@ public enum ExpandOutcome
 /// Urls は Resolved の時のみ 1 件以上 (1 つの URL に複数の画像・動画がある場合は複数)。Url はその先頭。</summary>
 public readonly record struct ExpandResult(IReadOnlyList<string>? Urls, ExpandOutcome Outcome)
 {
+    /// <summary>求まった URL の出し方 (ルールの「表示のしかた」。<see cref="ThumbnailRule.DisplayAuto"/> 等)。</summary>
+    public string Display { get; init; } = ThumbnailRule.DisplayAuto;
+
     public string? Url         => Urls is { Count: > 0 } ? Urls[0] : null;
     public bool IsResolved     => Outcome == ExpandOutcome.Resolved;
     public bool IsNoMedia      => Outcome == ExpandOutcome.NoMedia;
@@ -132,12 +135,20 @@ public sealed class UrlExpander : IDisposable
         else if (result.IsNoMedia) trace.Add("結果: 画像なし (サムネイルの枠を出しません)");
         else if (result.IsResolved)
         {
-            trace.Add($"結果: {result.Urls!.Count} 件");
+            trace.Add($"結果: {result.Urls!.Count} 件 (表示のしかた: {DisplayLabel(result.Display)})");
             trace.AddRange(result.Urls!.Take(20).Select((u, i) => $"  {i + 1}. {u}"));
             if (result.Urls!.Count > 20) trace.Add($"  … 他 {result.Urls.Count - 20} 件");
         }
         return string.Join("\n", trace);
     }
+
+    private static string DisplayLabel(string display) => display switch
+    {
+        ThumbnailRule.DisplayImage    => "サムネイル",
+        ThumbnailRule.DisplayVideo    => "動画プレーヤー",
+        ThumbnailRule.DisplayExternal => "サムネイルを出して外部サイトへ誘導",
+        _                             => "自動 (拡張子が動画なら動画プレーヤー、それ以外はサムネイル)",
+    };
 
     /// <summary>ルールを 1 回実行する。<paramref name="trace"/> があれば経過 (どのルールか、取得先、HTTP の結果) を足す。
     /// 取れなかったときは理由の文面も返す (画像なしと確定した場合は理由なし)。</summary>
@@ -153,7 +164,7 @@ public sealed class UrlExpander : IDisposable
             {
                 var built = ThumbnailRule.Fill(rule.Result, m);
                 return Uri.TryCreate(built, UriKind.Absolute, out var bu) && (bu.Scheme == Uri.UriSchemeHttp || bu.Scheme == Uri.UriSchemeHttps)
-                    ? (ExpandResult.Of(bu.AbsoluteUri), null)
+                    ? (ExpandResult.Of(bu.AbsoluteUri) with { Display = rule.Display }, null)
                     : (ExpandResult.Unavailable, $"{rule.Name}: 組み立てた URL が不正です: {built}");
             }
 
@@ -174,7 +185,7 @@ public sealed class UrlExpander : IDisposable
             var content = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             var urls = ThumbnailRuleSet.ExtractUrls(rule, content, fu);
-            if (urls.Count > 0) return (ExpandResult.Of(urls), null);
+            if (urls.Count > 0) return (ExpandResult.Of(urls) with { Display = rule.Display }, null);
 
             // 何も取れなかった: ルールが「画像が無いと確定」としていれば NoMedia (JS がサムネイルの枠を消す)、
             // そうでなければ取得失敗 (ログインが要る・非公開等。後で取れるかもしれない)

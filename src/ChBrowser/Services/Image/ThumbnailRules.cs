@@ -24,6 +24,9 @@ public sealed record ThumbnailRuleData
     public IReadOnlyList<string> Extract { get; init; } = Array.Empty<string>();
     /// <summary>"unavailable" か "noMedia"。</summary>
     public string  Empty    { get; init; } = "unavailable";
+    /// <summary>取り出した URL の出し方: "auto" (拡張子で画像か動画かを決める) / "image" (サムネイル) / "video" (動画プレーヤー) /
+    /// "external" (サムネイルに再生マークを重ね、クリックで元の URL を既定のブラウザで開く)。</summary>
+    public string  Display  { get; init; } = "auto";
     /// <summary>ファイルでこのルールの直前に書いてあったコメント行 (# で始まる行・空行。書いてあるとおり)。保存のときにそのまま書き戻す。</summary>
     public string  Comment  { get; init; } = "";
 
@@ -53,8 +56,14 @@ public sealed record ThumbnailRuleData
             }
         }
 
+        var display = (Display ?? "").Trim().ToLowerInvariant();
+        if (display.Length == 0) display = ThumbnailRule.DisplayAuto;
+        if (display is not (ThumbnailRule.DisplayAuto or ThumbnailRule.DisplayImage or ThumbnailRule.DisplayVideo or ThumbnailRule.DisplayExternal))
+            throw new FormatException($"表示のしかた (display) \"{Display}\" は使えません (auto / image / video / external)");
+
         return new ThumbnailRule
         {
+            Display           = display,
             Name              = string.IsNullOrWhiteSpace(Name) ? "(名前なし)" : Name.Trim(),
             Match             = Match,
             Regex             = regex,
@@ -97,6 +106,14 @@ public sealed class ThumbnailRule
     /// <summary>何も取れなかったとき「画像が無い」と確定させるか (false = 取得失敗の扱い)。</summary>
     public bool EmptyMeansNoMedia { get; init; }
 
+    public const string DisplayAuto     = "auto";
+    public const string DisplayImage    = "image";
+    public const string DisplayVideo    = "video";
+    public const string DisplayExternal = "external";
+
+    /// <summary>取り出した URL の出し方 (<see cref="DisplayAuto"/> 等)。</summary>
+    public string Display { get; init; } = DisplayAuto;
+
     /// <summary>ひな形の <c>{名前}</c> / <c>{番号}</c> を、<paramref name="m"/> のグループの値 (URL 用にエスケープ) で埋める。</summary>
     public static string Fill(string template, Match m)
         => Regex.Replace(template, @"\{([A-Za-z0-9_]+)\}", t =>
@@ -119,8 +136,12 @@ public sealed class ThumbnailRuleSet
 
     public ThumbnailRuleSet(IReadOnlyList<ThumbnailRule> rules) => Rules = rules;
 
-    /// <summary>表示側 (thread.js) に渡す、対象 URL の正規表現の一覧。</summary>
-    public string[] JsPatterns => Rules.Select(r => r.Match).ToArray();
+    /// <summary>表示側 (thread.js) に渡すルールの一覧 (上から順): 対象 URL の正規表現・表示のしかた・
+    /// 取得せずに URL を組み立てるだけのルールならそのひな形 (表示側がその場で組み立てる。null = アプリに問い合わせる)。</summary>
+    public object[] JsRules => Rules.Select(r => (object)new { match = r.Match, result = r.Result, display = r.Display }).ToArray();
+
+    /// <summary><see cref="JsRules"/> を JSON にしたもの (表示側へ渡す形。ルールが変わったかの比較にも使う)。</summary>
+    public string JsRulesJson => System.Text.Json.JsonSerializer.Serialize(JsRules);
 
     public bool IsMatch(string url) => Find(url) is not null;
 
@@ -178,7 +199,7 @@ public sealed class ThumbnailRuleSet
     // ---------------------------------------------------------------
 
     /// <summary>列の並び (見出し行)。ファイルに見出し行があればその並びで読む (列を入れ替えてあっても読める)。</summary>
-    private static readonly string[] Columns = { "enabled", "name", "match", "result", "fetch_url", "headers", "format", "extract", "empty" };
+    private static readonly string[] Columns = { "enabled", "name", "match", "result", "fetch_url", "headers", "format", "extract", "empty", "display" };
 
     /// <summary>1 つの項目に複数の値 (ヘッダー・取り出し方の候補) を書くときの区切り。</summary>
     private const string ListSeparator = "||";
@@ -231,6 +252,7 @@ public sealed class ThumbnailRuleSet
                 Format   = Col("format") is { Length: > 0 } fm ? fm : "json",
                 Extract  = SplitList(Col("extract")).ToList(),
                 Empty    = Col("empty") is { Length: > 0 } em ? em : "unavailable",
+                Display  = Col("display") is { Length: > 0 } dp ? dp : "auto",
                 Comment  = leading,
             });
         }
@@ -265,6 +287,7 @@ public sealed class ThumbnailRuleSet
                 d.Format,
                 string.Join(" " + ListSeparator + " ", d.Extract),
                 d.Empty,
+                d.Display,
             };
             sb.Append(string.Join(",", cells.Select(CsvCell))).Append('\n');
         }

@@ -1141,91 +1141,95 @@ var CHB_SCRIPT_READY = 0;
         });
     }
 
-    // YouTube — watch / youtu.be / shorts / embed の各形を 11 桁 ID で受ける。
-    const YOUTUBE_RES = [
-        /^https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?(?:[^#]*&)?v=([A-Za-z0-9_-]{11})/i,
-        /^https?:\/\/youtu\.be\/([A-Za-z0-9_-]{11})/i,
-        /^https?:\/\/(?:www\.|m\.)?youtube\.com\/shorts\/([A-Za-z0-9_-]{11})/i,
-        /^https?:\/\/(?:www\.)?youtube\.com\/embed\/([A-Za-z0-9_-]{11})/i,
-    ];
-    function extractYouTubeId(url) {
-        if (!url) return null;
-        for (const re of YOUTUBE_RES) {
-            const m = re.exec(url);
-            if (m) return m[1];
-        }
-        return null;
-    }
-
     /**
-     * ページ URL を実体画像 URL に展開する変換器の配列。順に試して最初にマッチしたものを返す。
-     * 将来 x.com / pixiv 等を追加する場合はここに entry を増やす (それぞれ HTML スクレイピング
-     * や外部 API が必要なため、現状は imgur のみ JS だけで完結する単純展開を実装)。
+     * サムネイルルール: 画像・動画そのものではないページの URL (x.com の投稿、imgur のアルバム、YouTube 等) から
+     * サムネイルや動画プレーヤーを出すための規則。C# の ThumbnailRuleSet (既定 + 利用者のルール) で決まり、
+     * C# がこのスクリプトの前に window.__thumbRules として置く (WebView2Helper.LoadThreadShellHtml)。
+     * 設定画面でルールを変えたときは setConfig.thumbRules でも届く (それ以降に描くレスから効く)。
+     *   match   対象 URL の正規表現 (上から順に試し、最初に一致した 1 つを使う)
+     *   result  取得せずに URL を組み立てるだけのルールなら、そのひな形 ({id} 等を一致した部分で埋める)。ここでその場で組み立てる。
+     *           null なら C# に問い合わせて求める (非同期。応答は imageMeta.expanded)
+     *   display 求まった URL の出し方: auto (拡張子で画像か動画か) / image / video / external (サムネイル + クリックで既定のブラウザ)
+     * JavaScript で通らない書き方の正規表現のルールは飛ばす (そのルールの URL は何も出ないだけで、他には影響しない)。
      */
-    const URL_EXPANDERS = [
-        {
-            // imgur のシングル画像ページ: imgur.com/<id> → i.imgur.com/<id>.jpg
-            // a/ (album), gallery/, t/ (tag) などは複数画像を持つので対象外。
-            // i.imgur.com/<id>.<ext> は IMAGE_EXT_RE 側で先に拾われる。
-            pattern: /^https?:\/\/(?:www\.|m\.)?imgur\.com\/([a-zA-Z0-9]+)(?:[/?#].*)?$/i,
-            expand: function (m) {
-                const id = m[1];
-                if (id === 'a' || id === 'gallery' || id === 't') return null;
-                return 'https://i.imgur.com/' + id + '.jpg';
-            }
-        }
-    ];
-
-    function expandToImageUrl(url) {
-        for (const e of URL_EXPANDERS) {
-            const m = e.pattern.exec(url);
-            if (!m) continue;
-            const expanded = e.expand(m);
-            if (expanded) return expanded;
-        }
-        return null;
-    }
-
-    /** インラインサムネイルとして表示すべき画像 URL を返す。直リンクならそのまま、ページ URL なら展開結果を返す。 */
-    function getInlineImageSrc(url) {
-        if (isImageUrl(url)) return url;
-        return expandToImageUrl(url);
-    }
-
-    /**
-     * 同期では決められないが、非同期 (C# 側の HTML スクレイピング / API 呼び出し) で
-     * 実体画像 URL を解決できる可能性のある URL のパターン。
-     * 対象は C# のサムネイルルール (ThumbnailRuleSet。既定 + 利用者のルール) で決まり、その正規表現 (文字列の配列) を
-     * C# がこのスクリプトの前に window.__asyncExpandPatterns として置く (WebView2Helper.LoadThreadShellHtml)。
-     * 設定画面でルールを変えたときは setConfig.asyncExpandPatterns でも届く (それ以降に描くレスから効く)。
-     * JavaScript で通らない書き方のものは飛ばす (そのルールの URL はサムネイルが出ないだけで、他には影響しない)。
-     */
-    function compileAsyncExpandPatterns(patterns) {
+    function compileThumbRules(rules) {
         const list = [];
-        for (const p of (Array.isArray(patterns) ? patterns : [])) {
-            if (typeof p !== 'string' || !p) continue;
-            try { list.push(new RegExp(p, 'i')); }
-            catch (e) { console.warn('asyncExpandPatterns: この正規表現は使えません: ' + p + ' (' + e.message + ')'); }
+        for (const r of (Array.isArray(rules) ? rules : [])) {
+            if (!r || typeof r.match !== 'string' || !r.match) continue;
+            try {
+                list.push({
+                    re:      new RegExp(r.match, 'i'),
+                    result:  (typeof r.result === 'string' && r.result) ? r.result : null,
+                    display: (typeof r.display === 'string' && r.display) ? r.display : 'auto',
+                });
+            } catch (e) { console.warn('thumbRules: この正規表現は使えません: ' + r.match + ' (' + e.message + ')'); }
         }
         return list;
     }
-    let ASYNC_EXPANDER_RES = compileAsyncExpandPatterns(window.__asyncExpandPatterns);
-    let asyncExpandPatternsKey = JSON.stringify(Array.isArray(window.__asyncExpandPatterns) ? window.__asyncExpandPatterns : []);
+    let THUMB_RULES = compileThumbRules(window.__thumbRules);
+    let thumbRulesKey = JSON.stringify(Array.isArray(window.__thumbRules) ? window.__thumbRules : []);
 
-    /** 取得ルールで求まった実体の URL: ページの URL → 画像・動画の URL の配列 (1 つの URL に複数あることがある)。
+    /** url に一致する最初のルールと一致結果 ({ rule, m })。無ければ null。 */
+    function matchThumbRule(url) {
+        if (!url) return null;
+        for (const rule of THUMB_RULES) {
+            const m = rule.re.exec(url);
+            if (m) return { rule: rule, m: m };
+        }
+        return null;
+    }
+
+    /** URL を組み立てるだけのルールの URL (ひな形の {名前} / {番号} を一致した部分で埋める。C# の ThumbnailRule.Fill と同じ)。 */
+    function fillThumbRuleResult(template, m) {
+        return template.replace(/\{([A-Za-z0-9_]+)\}/g, function (all, key) {
+            const v = (m.groups && m.groups[key] !== undefined) ? m.groups[key] : (/^\d+$/.test(key) ? m[Number(key)] : undefined);
+            return v === undefined ? all : encodeURIComponent(v);
+        });
+    }
+
+    /** ルールで求まるメディアの出し方が動画 (動画プレーヤー / 外部サイトの動画) か。display が auto のときは URL の拡張子で決まる。 */
+    function thumbRuleIsVideo(hit, resolvedUrl) {
+        const d = hit.rule.display;
+        if (d === 'video' || d === 'external') return true;
+        if (d === 'image') return false;
+        return !!resolvedUrl && isVideoUrl(resolvedUrl);
+    }
+
+    /** インラインサムネイルとして表示すべき画像 URL を返す。直リンクならそのまま、URL を組み立てるだけのルール (imgur の単体画像等)
+     *  で画像になるものはその URL。それ以外 (動画・外部サイトへ誘導・問い合わせが要るもの) は null。 */
+    function getInlineImageSrc(url) {
+        if (isImageUrl(url)) return url;
+        const hit = matchThumbRule(url);
+        if (!hit || !hit.rule.result) return null;
+        const u = fillThumbRuleResult(hit.rule.result, hit.m);
+        return thumbRuleIsVideo(hit, u) ? null : u;
+    }
+
+    /** サムネイルルールで求まった実体の URL: ページの URL → { urls: 画像・動画の URL の配列 (1 つの URL に複数あることがある), display: 出し方 }。
      *  描き直し (表示モードの切り替え等) のときに、問い合わせ直さずにそのままサムネイルを出すために覚えておく。 */
     const expandedMediaCache = new Map();
     /** 1 つの URL から出すサムネイルの上限。これを超える分は「他 N 枚」とだけ出す。 */
     const MAX_EXPANDED_THUMBS = 4;
 
-    /** 求まった実体の URL (urls) のサムネイル。それぞれ、その URL が本文に直接書かれていたのと同じふつうのスロットにする
-     *  (data-url はページの URL のまま = 右クリックメニュー等は元のリンクを指す)。上限を超える分は「他 N 枚」の表示 1 つ。 */
-    function expandedSlotsHtml(href, urls) {
+    /** 求まった実体の URL (urls) のスロット。display (ルールの「表示のしかた」) に従って、それぞれ
+     *    image    → 画像のスロット (その URL が本文に直接書かれていたのと同じ)
+     *    video    → 動画プレーヤーのスロット
+     *    external → サムネイル + 再生マーク。クリックで元の URL を既定のブラウザで開く (クラス名 youtube はこの見た目・動作の名前)
+     *    auto     → URL の拡張子が動画なら video、それ以外は image
+     *  にする (data-url はページの URL のまま = 右クリックメニュー等は元のリンクを指す)。上限を超える分は「他 N 枚」の表示 1 つ。 */
+    function expandedSlotsHtml(href, urls, display) {
         let html = '';
         for (const u of urls.slice(0, MAX_EXPANDED_THUMBS)) {
-            html += isVideoUrl(u)
-                ? videoSlotHtml(u, href, null)
-                : '<span class="image-slot deferred" data-src="' + escapeHtml(u) + '" data-url="' + escapeHtml(href) + '"></span>';
+            const kind = (display === 'image' || display === 'video' || display === 'external') ? display
+                       : (isVideoUrl(u) ? 'video' : 'image');
+            if (kind === 'video') {
+                html += videoSlotHtml(u, href, null);
+            } else if (kind === 'external') {
+                html += '<span class="image-slot youtube deferred" data-src="' + escapeHtml(u) +
+                        '" data-url="' + escapeHtml(href) + '" data-media-type="youtube"></span>';
+            } else {
+                html += '<span class="image-slot deferred" data-src="' + escapeHtml(u) + '" data-url="' + escapeHtml(href) + '"></span>';
+            }
         }
         const more = urls.length - MAX_EXPANDED_THUMBS;
         if (more > 0) {
@@ -1235,37 +1239,24 @@ var CHB_SCRIPT_READY = 0;
     }
 
     /** C# からの展開結果 (imageMeta.expanded): 同じページ URL の展開待ちスロットを、求まった URL ごとのスロットに置き換える。 */
-    function applyExpandedMedia(url, urls) {
-        expandedMediaCache.set(url, urls);
+    function applyExpandedMedia(url, urls, display) {
+        expandedMediaCache.set(url, { urls: urls, display: display });
         document.querySelectorAll('.image-slot.async').forEach(function (slot) {
             if (slot.dataset.url !== url) return;
             const parent = slot.parentNode;
             if (!parent) return;
             const tpl = document.createElement('template');
-            tpl.innerHTML = expandedSlotsHtml(url, urls);
+            tpl.innerHTML = expandedSlotsHtml(url, urls, display);
             imageSlotObserver.unobserve(slot);
             slot.replaceWith(tpl.content);
             observeImageSlots(parent);
         });
     }
 
-    function isExpandableAsync(url) {
-        for (const re of ASYNC_EXPANDER_RES) if (re.test(url)) return true;
-        return false;
-    }
-
     /** URL に対応するメディアスロット HTML を返す。マッチしないなら空文字。
-     *  画像 (直リンク / imgur 等)、直リンク動画、YouTube、x.com/pixiv 非同期展開対象を扱う。 */
+     *  拡張子で決まる直リンク (画像 / 動画) はそのまま、それ以外はサムネイルルール (x.com / imgur のアルバム / YouTube 等) で決める。 */
     function buildMediaSlotForUrl(href) {
-        // 1) YouTube — サムネイル (i.ytimg.com) を画像スロットとしてロードし、クリックでデフォルトブラウザに開く
-        const ytId = extractYouTubeId(href);
-        if (ytId) {
-            const thumb = 'https://i.ytimg.com/vi/' + ytId + '/hqdefault.jpg';
-            return '<span class="image-slot youtube deferred" data-src="' + escapeHtml(thumb) +
-                   '" data-url="' + escapeHtml(href) + '" data-video-id="' + escapeHtml(ytId) +
-                   '" data-media-type="youtube"></span>';
-        }
-        // 2) 直リンク動画 (.mp4 .webm .mov)
+        // 1) 直リンク動画 (.mp4 .webm .mov)
         // Phase 5: スロットは「キャッシュ問い合わせ待ち」の初期状態で出す。
         //   - data-cache-state="unknown" → IntersectionObserver で材化時に C# に状態問い合わせ
         //   - C# 応答後、JS が data-cache-state を "thumb-only" / "cached" に更新し、
@@ -1273,7 +1264,7 @@ var CHB_SCRIPT_READY = 0;
         //   - クリック時の挙動は cache-state に応じて分岐 (= キャッシュ済みなら仮想ホスト URL で即時再生、
         //     未DLなら原URLストリーミング + 並列 DL kick)
         if (isVideoUrl(href)) return videoSlotHtml(href, href, null);
-        // 2b) reddit の動画ページ (v.redd.it/<id>): 再生できる URL が分かっていればそれで、まだなら問い合わせ待ちのスロット
+        // 1b) reddit の動画ページ (v.redd.it/<id>): 再生できる URL が分かっていればそれで、まだなら問い合わせ待ちのスロット
         if (V_REDDIT_RE.test(href)) {
             if (resolvedVideoUrls.has(href)) {
                 const r = resolvedVideoUrls.get(href);
@@ -1281,24 +1272,28 @@ var CHB_SCRIPT_READY = 0;
             }
             return videoSlotHtml(null, href, href);
         }
-        // 3) 同期で決まる画像 URL (直リンク / imgur 単純展開)
-        const imgSrc = getInlineImageSrc(href);
-        if (imgSrc) {
-            return '<span class="image-slot deferred" data-src="' + escapeHtml(imgSrc) +
+        // 2) 直リンク画像
+        if (isImageUrl(href)) {
+            return '<span class="image-slot deferred" data-src="' + escapeHtml(href) +
                    '" data-url="' + escapeHtml(href) + '"></span>';
         }
-        // 4) 非同期で展開する URL (x.com / pixiv 等)
-        if (isExpandableAsync(href)) {
-            // 既に「画像なし」と確定している URL (= 過去の imageMetaRequest で noMedia 返却済) はスロットを作らない。
-            // モード切替や再描画でこの関数が同じ URL に対して何度も呼ばれるが、サムネ枠を毎回作って毎回消すのは無駄。
-            const cached = imageMetaCache.get(href);
-            if (cached && cached.noMedia) return '';
-            // 既に実体の URL が求まっているなら、問い合わせ直さずにそのサムネイルを出す
-            if (expandedMediaCache.has(href)) return expandedSlotsHtml(href, expandedMediaCache.get(href));
-            return '<span class="image-slot deferred async" data-src="' + escapeHtml(href) +
-                   '" data-url="' + escapeHtml(href) + '" data-async-expand="1"></span>';
+        // 3) サムネイルルールの対象
+        const hit = matchThumbRule(href);
+        if (!hit) return '';
+        // 3a) URL を組み立てるだけのルール (YouTube のサムネイル、imgur の単体画像等): その場で決まる
+        if (hit.rule.result) {
+            return expandedSlotsHtml(href, [fillThumbRuleResult(hit.rule.result, hit.m)], hit.rule.display);
         }
-        return '';
+        // 3b) 取得して求めるルール (x.com / pixiv / imgur のアルバム等): C# に問い合わせる
+        // 既に「画像なし」と確定している URL (= 過去の imageMetaRequest で noMedia 返却済) はスロットを作らない。
+        // モード切替や再描画でこの関数が同じ URL に対して何度も呼ばれるが、サムネ枠を毎回作って毎回消すのは無駄。
+        const cached = imageMetaCache.get(href);
+        if (cached && cached.noMedia) return '';
+        // 既に実体の URL が求まっているなら、問い合わせ直さずにそのスロットを出す
+        const done = expandedMediaCache.get(href);
+        if (done) return expandedSlotsHtml(href, done.urls, done.display);
+        return '<span class="image-slot deferred async" data-src="' + escapeHtml(href) +
+               '" data-url="' + escapeHtml(href) + '" data-async-expand="1"></span>';
     }
 
     /** 指定 URL を data-url に持つ全 .image-slot を DOM から取り除く (= ツイートに画像なし等で
@@ -2654,12 +2649,14 @@ var CHB_SCRIPT_READY = 0;
             const u = normalizeBodyMediaUrl(m[0]);
             if (!u) continue;
             if (getInlineImageSrc(u)) return true;
-            if (isExpandableAsync(u)) return true;
+            // 取得して求めるルールの対象 (x.com 等) は、動画と決まっているもの以外を画像として数える (中身は取得するまで分からない)
+            const hit = matchThumbRule(u);
+            if (hit && !hit.rule.result && !thumbRuleIsVideo(hit, null)) return true;
         }
         return false;
     }
 
-    /** 本文中にインライン再生対象の動画 URL (mp4/webm/mov 直リンク or YouTube) があるか。 */
+    /** 本文中に動画の URL (mp4/webm/mov 直リンク、またはサムネイルルールで動画プレーヤー / 外部サイトの動画になるもの) があるか。 */
     function bodyContainsVideo(body) {
         if (!body) return false;
         BODY_URL_RE.lastIndex = 0;
@@ -2668,7 +2665,8 @@ var CHB_SCRIPT_READY = 0;
             const u = normalizeBodyMediaUrl(m[0]);
             if (!u) continue;
             if (isVideoUrl(u)) return true;
-            if (extractYouTubeId(u)) return true;
+            const hit = matchThumbRule(u);
+            if (hit && thumbRuleIsVideo(hit, hit.rule.result ? fillThumbRuleResult(hit.rule.result, hit.m) : null)) return true;
         }
         return false;
     }
@@ -3202,7 +3200,7 @@ var CHB_SCRIPT_READY = 0;
         }, { once: true });
         slot.appendChild(img);
 
-        // YouTube サムネイルには赤い再生アイコン + 右上「↗ ブラウザ」バッジを重ねる。
+        // 外部サイトへ誘導するサムネイル (YouTube 等。クラス youtube) には赤い再生アイコン + 「↗ ブラウザで開く」バッジを重ねる。
         // クリックすると内蔵ビューアではなく既定ブラウザで開くことを視覚的に伝える。
         if (slot.classList.contains('youtube')) {
             const icon = document.createElement('span');
@@ -5975,12 +5973,12 @@ var CHB_SCRIPT_READY = 0;
                     // ---- 掲示板提供者ごとの設定 (doc/multi-bbs-design.md) ----
                     if (typeof msg.postNumberDigits === 'number' && msg.postNumberDigits >= 1) NUM_JUMP_MAX_DIGITS = Math.min(12, msg.postNumberDigits);
                     if (Array.isArray(msg.threadLinkRules)) THREAD_LINK_RULES = compileThreadLinkRules(msg.threadLinkRules);
-                    if (Array.isArray(msg.asyncExpandPatterns)) {
+                    if (Array.isArray(msg.thumbRules)) {
                         // ルールが変わったら、覚えている展開結果も古いので捨てる (変わっていなければそのまま)
-                        const key = JSON.stringify(msg.asyncExpandPatterns);
-                        if (key !== asyncExpandPatternsKey) {
-                            asyncExpandPatternsKey = key;
-                            ASYNC_EXPANDER_RES = compileAsyncExpandPatterns(msg.asyncExpandPatterns);
+                        const key = JSON.stringify(msg.thumbRules);
+                        if (key !== thumbRulesKey) {
+                            thumbRulesKey = key;
+                            THUMB_RULES = compileThumbRules(msg.thumbRules);
                             expandedMediaCache.clear();
                         }
                     }
@@ -6009,7 +6007,8 @@ var CHB_SCRIPT_READY = 0;
                             removeMediaSlotsForUrl(msg.url);
                         } else if (Array.isArray(msg.expanded)) {
                             // 取得ルールで実体の URL が求まった (1 件以上): 展開待ちのスロットを URL ごとのスロットに置き換える
-                            applyExpandedMedia(msg.url, msg.expanded.filter(function (u) { return typeof u === 'string' && u; }));
+                            applyExpandedMedia(msg.url, msg.expanded.filter(function (u) { return typeof u === 'string' && u; }),
+                                               typeof msg.display === 'string' ? msg.display : 'auto');
                         } else {
                             applyImageMeta(msg.url, {
                                 ok:              !!msg.ok,

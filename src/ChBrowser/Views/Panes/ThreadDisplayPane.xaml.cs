@@ -1378,7 +1378,7 @@ public partial class ThreadDisplayPane : UserControl
                     }
                     if (expand.IsResolved)
                     {
-                        wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "imageMeta", url, expanded = expand.Urls }));
+                        wv.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "imageMeta", url, expanded = expand.Urls, display = expand.Display }));
                         return;
                     }
                     // Unavailable: tracker に記録 (= 次回以降の同 URL 描画で自動再試行しない)。
