@@ -511,10 +511,14 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     [NotifyPropertyChangedFor(nameof(IsPopularFilterOn), nameof(IsFilterOn))]
     private int _popularMinReplies;
 
-    /// <summary>表示するレスのイイネ数の下限 (0 = イイネ数では絞らない)。イイネの無い掲示板では使わない。</summary>
+    /// <summary>表示するレスのイイネ数の条件 (0 = イイネ数では絞らない)。正ならその値以上、負ならその値以下 (低評価のレス)。
+    /// イイネの無い掲示板では使わない。</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn), nameof(IsFilterOn))]
+    [NotifyPropertyChangedFor(nameof(IsPopularFilterOn), nameof(IsFilterOn), nameof(PopularLikesSuffix))]
     private int _popularMinLikes;
+
+    /// <summary>イイネ数の入力欄の後ろに出す文言 (負の指定は「以下」)。</summary>
+    public string PopularLikesSuffix => PopularMinLikes < 0 ? "件以下" : "件以上";
 
     /// <summary>条件の組み合わせ。false = どれかを満たせば表示 (OR、既定)、true = すべて満たすものだけ (AND)。</summary>
     [ObservableProperty]
@@ -537,7 +541,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
     public bool SupportsLikes => ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(Board.Host).Voting is not null;
 
     /// <summary>返信数かイイネ数の条件が効いているか。</summary>
-    public bool IsPopularFilterOn => PopularMinReplies > 0 || (SupportsLikes && PopularMinLikes > 0);
+    public bool IsPopularFilterOn => PopularMinReplies > 0 || (SupportsLikes && PopularMinLikes != 0);
 
     /// <summary>フィルターのどれかの条件が効いているか (フィルターボタンの押下状態 / 「クリア」の有効)。</summary>
     public bool IsFilterOn => IsPopularFilterOn || IsMediaFilterOn;
@@ -551,7 +555,7 @@ public sealed partial class ThreadTabViewModel : ObservableObject, IThreadDispla
 
     partial void OnPopularMinLikesChanged(int value)
     {
-        var v = Math.Clamp(value, 0, PopularMaxCount);
+        var v = Math.Clamp(value, -PopularMaxCount, PopularMaxCount);   // 負 = その値以下
         if (v != value) { PopularMinLikes = v; return; }
         RebuildFilter();
     }

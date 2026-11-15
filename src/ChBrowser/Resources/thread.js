@@ -173,7 +173,7 @@ var CHB_SCRIPT_READY = 0;
     // 現在のフィルタ条件 (= C# 側 ThreadFilter record の JSON 反映)。setFilter メッセージで上書きされる。
     // 評価ルール:
     //   - textQuery (= AND 条件): 本文に含まれていれば match (= 大文字小文字無視)。空なら本文条件なし。
-    //   - フィルターメニューの条件 (minReplies: 返信数 N 以上 / minLikes: イイネ数 M 以上 (0 は条件なし) / mediaOnly: 画像・動画):
+    //   - フィルターメニューの条件 (minReplies: 返信数 N 以上 / minLikes: イイネ数 (正 = M 以上、負 = M 以下、0 は条件なし) / mediaOnly: 画像・動画):
     //     使っている条件を matchAll=false なら OR (どれかを満たす)、true なら AND (すべて満たす) で合成する。
     //     全部 OFF なら条件なし (textQuery のみで判定)。
     let currentFilter = { textQuery: '', minReplies: 0, minLikes: 0, mediaOnly: false, matchAll: false };
@@ -184,7 +184,7 @@ var CHB_SCRIPT_READY = 0;
         return {
             textQuery:  typeof f.textQuery === 'string' ? f.textQuery : '',
             minReplies: n(f.minReplies),
-            minLikes:   n(f.minLikes),
+            minLikes:   (typeof f.minLikes === 'number' && isFinite(f.minLikes)) ? Math.trunc(f.minLikes) : 0,   // 負も可 (その値以下)
             mediaOnly:  f.mediaOnly === true,
             matchAll:   f.matchAll === true,
         };
@@ -194,12 +194,14 @@ var CHB_SCRIPT_READY = 0;
     function conditionFilterOn() { return popularFilterOn() || currentFilter.mediaOnly === true; }
 
     /** 人気のレスの条件があるか。 */
-    function popularFilterOn() { return currentFilter.minReplies > 0 || currentFilter.minLikes > 0; }
+    function popularFilterOn() { return currentFilter.minReplies > 0 || currentFilter.minLikes !== 0; }
 
     // popularOnly フィルタの「展開済み include 集合」キャッシュ。
     // tree / dedupTree モードでは popular レス自身 + その配下 (= 返信チェイン) を全て表示する仕様で、
     // この集合を毎レス毎に計算するのは無駄なので、setFilter / appendPosts 時に一括計算してキャッシュする。
     let popularIncludeCache = null;
+    // フィルターメニューの条件そのものに合うレス (配下として一緒に出ているだけのレスは含まない)。該当の印 (黄色の縦線) 用。
+    let popularDirectCache = null;
 
     /** 現在のフィルタが「全レス可視」(= フィルタなし) と等価か。短絡判定用。 */
     function isFilterEmpty() {
@@ -213,7 +215,7 @@ var CHB_SCRIPT_READY = 0;
      *     (画像・動画だけの絞り込みでは配下を広げない = 従来の 🖼 と同じ) */
     function rebuildPopularIncludeSet() {
         const set = new Set();
-        if (!conditionFilterOn()) { popularIncludeCache = set; return; }
+        if (!conditionFilterOn()) { popularIncludeCache = set; popularDirectCache = null; return; }
         const minR = currentFilter.minReplies, minL = currentFilter.minLikes;
         const media = currentFilter.mediaOnly === true, all = currentFilter.matchAll === true;
 
@@ -225,12 +227,14 @@ var CHB_SCRIPT_READY = 0;
         for (const p of allPosts) {
             const results = [];
             if (minR > 0) { const refs = reverseIdx.get(p.number); results.push(!!refs && refs.length >= minR); }
-            if (minL > 0) results.push((displayScore(p) || 0) >= minL);   // 評価値の無いレス (ふたばの 0 件等) は 0
+            // 評価値の無いレス (ふたばの 0 件等) は 0。正の指定は「その値以上」、負の指定は「その値以下」(低評価のレスを探す)
+            if (minL !== 0) { const sc = displayScore(p) || 0; results.push(minL > 0 ? sc >= minL : sc <= minL); }
             if (media)    results.push(bodyContainsImage(p.body) || bodyContainsVideo(p.body));
             const ok = all ? results.every(Boolean) : results.some(Boolean);
             if (ok) popularNums.push(p.number);
         }
         for (const n of popularNums) set.add(n);
+        popularDirectCache = new Set(popularNums);
 
         // tree 系では配下 (= 返信チェイン) を BFS で展開 (戦略の expandsPopularChain で切替)。返信数 / イイネ数の条件があるときだけ
         if (popularFilterOn() && vm().expandsPopularChain()) {
@@ -299,6 +303,7 @@ var CHB_SCRIPT_READY = 0;
         rebuildPopularIncludeSet();
         if (isFilterEmpty()) {
             root.querySelectorAll('.filter-hidden').forEach(function (el) { el.classList.remove('filter-hidden'); });
+            root.querySelectorAll('.filter-hit').forEach(function (el) { el.classList.remove('filter-hit'); });
             applySearchHighlightToAll();
             reportPostStats();
             return;
@@ -325,6 +330,9 @@ var CHB_SCRIPT_READY = 0;
                     : true);
             el.classList.add('filter-hidden');
             if (matched) matchedEls.push(el);
+            // 該当の印 (左端の黄色の縦線): 条件そのものに合うレスだけ。ツリーで一緒に出る親や配下のレスには付けない
+            const hit = !!post && matched && (!conditionFilterOn() || (!!popularDirectCache && popularDirectCache.has(post.number)));
+            el.classList.toggle('filter-hit', hit);
         });
         // 2nd pass: match 要素自身と、それを内包する祖先 .post (= 親レス) を可視化する。
         //   子レスが hit したら親レスも表示することで、ツリーの文脈ごと検索結果に残す。

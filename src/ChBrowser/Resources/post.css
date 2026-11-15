@@ -143,6 +143,16 @@
     box-shadow: inset 3px 0 0 #2e7d32;
 }
 
+/* フィルター (検索欄 / フィルターメニュー) に該当しているレスを示す、左端の黄色の縦線 (thread.js が filter-hit を付ける)。
+ * ツリー表示では該当レスの親や配下のレスも一緒に出るので、どれが該当かを見分けるための印。新着の緑の線と同じ作り。
+ * 新着と重なるときは、緑の線の右隣に黄色の線を並べる (先に書いた影が手前)。 */
+.post.filter-hit {
+    box-shadow: inset 3px 0 0 #f9c21a;
+}
+.post.is-new.filter-hit {
+    box-shadow: inset 3px 0 0 #2e7d32, inset 6px 0 0 #f9c21a;
+}
+
 /* 同一ワッチョイが複数ある場合、name 内の `xxxx-yyyy` 部分にこのリンク風装飾が付く (Phase 22)。
  * ホバーで該当ワッチョイの全レスがポップアップ表示。 */
 .watchoi-link {

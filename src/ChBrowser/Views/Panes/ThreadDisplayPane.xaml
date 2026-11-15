@@ -321,14 +321,14 @@
                                             </Style>
                                         </StackPanel.Style>
                                         <TextBlock Text="イイネ数" Width="56" VerticalAlignment="Center" />
-                                        <TextBox Width="48" VerticalAlignment="Center" HorizontalContentAlignment="Right" Padding="2,1" MaxLength="4"
+                                        <TextBox Width="48" VerticalAlignment="Center" HorizontalContentAlignment="Right" Padding="2,1" MaxLength="5"
                                                  Text="{Binding SelectedTab.PopularMinLikes, UpdateSourceTrigger=PropertyChanged}"
                                                  Validation.ErrorTemplate="{x:Null}"
-                                                 PreviewTextInput="PopularCountBox_PreviewTextInput"
-                                                 DataObject.Pasting="PopularCountBox_Pasting"
+                                                 PreviewTextInput="PopularSignedCountBox_PreviewTextInput"
+                                                 DataObject.Pasting="PopularSignedCountBox_Pasting"
                                                  GotKeyboardFocus="PopularCountBox_GotKeyboardFocus"
-                                                 ToolTip="件数を入力 (0 = この条件を使わない)" />
-                                        <TextBlock Text="件以上" Margin="4,0,8,0" VerticalAlignment="Center" />
+                                                 ToolTip="件数を入力 (0 = この条件を使わない)。マイナスの値にすると、その値以下 (低評価) のレスを表示" />
+                                        <TextBlock Text="{Binding SelectedTab.PopularLikesSuffix, FallbackValue=件以上}" Margin="4,0,8,0" VerticalAlignment="Center" />
                                         <RepeatButton Content="＋" Width="24" Height="22" Margin="0,0,2,0" Delay="400" Interval="60"
                                                       Command="{Binding SelectedTab.StepPopularMinCommand}" CommandParameter="likes+1" ToolTip="1 増やす (押し続けると連続)" />
                                         <RepeatButton Content="－" Width="24" Height="22" Delay="400" Interval="60"

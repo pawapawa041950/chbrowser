@@ -114,6 +114,19 @@ public partial class ThreadDisplayPane : UserControl
         if (e.DataObject.GetData(typeof(string)) is not string s || !s.Trim().All(char.IsAsciiDigit)) e.CancelCommand();
     }
 
+    /// <summary>イイネ数の入力欄: 数字と、先頭の「-」1 つ (マイナスの値 = その値以下)。</summary>
+    private void PopularSignedCountBox_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+        var after = tb.Text.Remove(tb.SelectionStart, tb.SelectionLength).Insert(tb.SelectionStart, e.Text);
+        e.Handled = !System.Text.RegularExpressions.Regex.IsMatch(after, @"^-?\d*$");
+    }
+
+    private void PopularSignedCountBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (e.DataObject.GetData(typeof(string)) is not string s || !System.Text.RegularExpressions.Regex.IsMatch(s.Trim(), @"^-?\d+$")) e.CancelCommand();
+    }
+
     /// <summary>入力欄に入ったら全選択 (= そのまま打ち直せる)。</summary>
     private void PopularCountBox_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
     {
