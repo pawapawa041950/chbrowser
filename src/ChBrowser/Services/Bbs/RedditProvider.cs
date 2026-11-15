@@ -878,9 +878,9 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
             lines.Add("[" + flair + "]");
             mdLines.Add(ChBrowser.Services.Render.MarkdownBodyRenderer.EscapeText("[" + flair + "]"));
         }
-        var self = RedditBodyConverter.Convert(Str(d, "selftext_html"));
+        var self = WithGiphyImages(RedditBodyConverter.Convert(Str(d, "selftext_html")), d);
         if (self.Length > 0) lines.Add(self);
-        var selfMd = Str(d, "selftext");
+        var selfMd = Str(d, "selftext") is { } rawSelfMd ? WithGiphyMarkdown(rawSelfMd, d) : null;
         if (self.Length > 0 && !string.IsNullOrWhiteSpace(selfMd)) mdLines.Add(selfMd);
 
         // ギャラリー: gallery_data の順に media_metadata の元画像
@@ -945,6 +945,56 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
                 Markdown:    !string.IsNullOrWhiteSpace(selfMd) && self.Length > 0 ? string.Join("\n\n", mdLines) : null));
     }
 
+    private static readonly Regex ImageUrlRe = new(@"\.(?:gif|webp|png|jpe?g)(?:[?#]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>GIPHY の GIF (書き込み欄の GIF ボタンで貼るもの。Markdown では <c>![gif](giphy|&lt;ID&gt;)</c>) を画像として出せるようにする。
+    /// <c>body_html</c> ではリンク先が GIPHY のページ (<c>https://giphy.com/gifs/&lt;ID&gt;</c>。画像ではない) になっていて、
+    /// そのままだとサムネイルが出ず、整形表示 (Markdown) でも画像の埋め込みは消すので、GIF だけの書き込みが空に見える。
+    /// <c>media_metadata["giphy|&lt;ID&gt;"]</c> の GIF の URL (無ければ GIPHY の配信 URL) に置き換える。本文に無ければ末尾に足す。</summary>
+    private static string WithGiphyImages(string body, JsonElement d)
+    {
+        foreach (var (gid, gif) in GiphyImages(d))
+        {
+            if (body.Contains(gif, StringComparison.Ordinal)) continue;
+            var page = new Regex(@"https?://(?:www\.)?giphy\.com/gifs/(?:[^\s/""<>]*-)?" + Regex.Escape(gid) + @"(?![A-Za-z0-9_-])", RegexOptions.IgnoreCase);
+            body = page.IsMatch(body) ? page.Replace(body, gif.Replace("$", "$$"), 1)
+                 : body.Length == 0 ? gif : body + "\n" + gif;
+        }
+        return body;
+    }
+
+    /// <summary>整形表示用の Markdown の中の GIPHY の埋め込み (<c>![gif](giphy|&lt;ID&gt;)</c>) を、GIF の URL (裸の URL = 自動リンク) に書き換える。
+    /// 整形表示は画像の埋め込みを消すので、そのままだと本文に何も出ない (<see cref="WithGiphyImages"/> と同じ URL にそろえる)。</summary>
+    private static string WithGiphyMarkdown(string markdown, JsonElement d)
+    {
+        foreach (var (gid, gif) in GiphyImages(d))
+        {
+            var embed = new Regex(@"!\[[^\]]*\]\(giphy\|" + Regex.Escape(gid) + @"(?:\|[^)\s]*)?\)");
+            markdown = embed.Replace(markdown, gif.Replace("$", "$$"));
+        }
+        return markdown;
+    }
+
+    /// <summary><c>media_metadata</c> の GIPHY の項目 (キーが <c>giphy|&lt;ID&gt;</c> か <c>giphy|&lt;ID&gt;|downsized</c>) の ID と GIF の URL。
+    /// URL は <c>s.gif</c> (画像の URL のときだけ)、無ければ GIPHY の配信 URL。</summary>
+    private static List<(string Id, string Gif)> GiphyImages(JsonElement d)
+    {
+        var list = new List<(string, string)>();
+        if (!d.TryGetProperty("media_metadata", out var mm) || mm.ValueKind != JsonValueKind.Object) return list;
+        foreach (var p in mm.EnumerateObject())
+        {
+            if (!p.Name.StartsWith("giphy|", StringComparison.Ordinal)) continue;
+            var gid = p.Name.Split('|')[1];
+            if (gid.Length == 0 || !Regex.IsMatch(gid, "^[A-Za-z0-9_-]+$")) continue;
+            var gif = p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("s", out var sv) && sv.ValueKind == JsonValueKind.Object
+                ? Str(sv, "gif") : null;
+            if (gif is null || !gif.StartsWith("http", StringComparison.OrdinalIgnoreCase) || !ImageUrlRe.IsMatch(gif))
+                gif = $"https://media.giphy.com/media/{gid}/giphy.gif";
+            list.Add((gid, gif));
+        }
+        return list;
+    }
+
     private static SnapshotPost ToComment(JsonElement d)
     {
         var id      = Str(d, "id") ?? "";
@@ -954,8 +1004,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         if (Bool(d, "is_submitter")) flags.Add("OP");
         AddDistinguished(d, flags);
         if (Bool(d, "stickied")) flags.Add("固定");
-        var body = RedditBodyConverter.Convert(Str(d, "body_html"));
-        var markdown = body.Length > 0 && Str(d, "body") is { Length: > 0 } md ? md : null;   // 整形表示用の元の Markdown
+        var body = WithGiphyImages(RedditBodyConverter.Convert(Str(d, "body_html")), d);
+        var markdown = body.Length > 0 && Str(d, "body") is { Length: > 0 } md ? WithGiphyMarkdown(md, d) : null;   // 整形表示用の元の Markdown
         if (body.Length == 0) body = (Str(d, "body") ?? "").Replace("<", "＜");
         var permalink = Str(d, "permalink") is { } pl ? Origin + pl : null;
         return new SnapshotPost(
