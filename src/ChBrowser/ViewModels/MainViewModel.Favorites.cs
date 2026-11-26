@@ -491,7 +491,9 @@ public sealed partial class MainViewModel
             try
             {
                 var noProgress = new Progress<IReadOnlyList<Post>>(_ => { });
-                result = await _datClient.FetchStreamingAsync(board, info.Key, noProgress).ConfigureAwait(false);
+                // 新着があるか分からないまま取るスレ (reddit) は、新着が無いと分かったら追加の要求 (続きの展開) をしない
+                using (onlyIfNew ? ChBrowser.Services.Bbs.ProviderRequestContext.LightCheck() : null)
+                    result = await _datClient.FetchStreamingAsync(board, info.Key, noProgress).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -547,25 +549,28 @@ public sealed partial class MainViewModel
 
         async Task CheckBoardAsync((string, string) key, Board board)
         {
-            IReadOnlyList<ThreadInfo> infos;
-            var ok = false;
-            await sem.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                infos = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(false);
-                ok = true;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Favorites] subject {key} 失敗: {ex.Message}");
-                infos = Array.Empty<ThreadInfo>();
-            }
-            finally
-            {
-                sem.Release();
-            }
-
             var provider = ChBrowser.Services.Bbs.BbsRegistry.ResolveOrDefault(board.Host);
+            IReadOnlyList<ThreadInfo> infos = Array.Empty<ThreadInfo>();
+            var ok = false;
+            // 一覧が板の一部だけで、載っていないスレを 1 件ずつ確かめる掲示板 (reddit) は、一覧を取らずにスレを直接確かめる。
+            // reddit の一覧は板のページを表示して読む重い取得で、読めるのは先頭の数件だけ (お気に入りのスレはまず載っていない) ため
+            if (provider.ThreadListIsComplete || !provider.ChecksUnlistedFavoritesOneByOne)
+            {
+                await sem.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    infos = await _subjectClient.FetchAndSaveAsync(board).ConfigureAwait(false);
+                    ok = true;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Favorites] subject {key} 失敗: {ex.Message}");
+                }
+                finally
+                {
+                    sem.Release();
+                }
+            }
 
             // 新着の判定: 一覧のレス数が「前回取得したレス数」と「前回取得時に一覧に載っていたレス数」の大きい方より多いか。
             // reddit 等は一覧のコメント数に削除済み・取得しきれないコメントが含まれるので、取得数とだけ比べると毎回開いてしまう。
@@ -660,6 +665,7 @@ public sealed partial class MainViewModel
             // 差分境界は dat 連番ベースの件数 (= FetchedPostCount) を使う。existing.Posts.Count は NG 透明化分を
             // 含まないので、これを境界にすると NG で消した件数ぶん既出レスが新着扱いで再 append される (= 二重表示)。
             var prevCount = existing.FetchedPostCount > 0 ? existing.FetchedPostCount : existing.Posts.Count;
+            var hadNew    = result.Posts.Count > prevCount;
             existing.LastFetchHadPosts = result.Posts.Count > prevCount;   // タブの青丸 (新着が無ければ出さない)
             if (result.Posts.Count > prevCount)
             {
@@ -685,7 +691,8 @@ public sealed partial class MainViewModel
             existing.State = finalState;
             if (dropped) existing.StatusMessage = $"{existing.Header}{DroppedNote}";
             UpdateTruncatedNote(existing);   // 取り切れなかったら「続きあり」(reddit)
-            _ = LoadAuthorProfilesAsync(existing, fetchStale: !dropped);   // 投稿者のアイコン (reddit。新着の投稿者の分)
+            // 投稿者のアイコン (reddit。新着の投稿者の分)。新着が無ければ取りに行かない (保存済みの分だけ当てる)
+            _ = LoadAuthorProfilesAsync(existing, fetchStale: !dropped && hadNew);
             if (existing.IsTranslationOn) _ = TranslateMissingAsync(existing);   // スレ全体の翻訳が ON なら新着も訳す
             return;
         }

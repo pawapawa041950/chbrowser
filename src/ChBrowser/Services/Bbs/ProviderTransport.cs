@@ -82,6 +82,19 @@ public static class ProviderRequestContext
 {
     private static readonly AsyncLocal<bool> _background = new();
     private static readonly AsyncLocal<bool> _optional   = new();
+    private static readonly AsyncLocal<bool> _lightCheck = new();
+
+    /// <summary>新着の有無を確かめるだけの取得 (お気に入りチェックの巡回) か。スナップショット方式の掲示板は、新着が無いと分かったら
+    /// 追加の要求 (reddit の続きの展開) をしない。</summary>
+    public static bool IsLightCheck => _lightCheck.Value;
+
+    /// <summary><c>using (ProviderRequestContext.LightCheck()) { … }</c> の範囲を「新着の有無を確かめるだけの取得」として扱う。</summary>
+    public static IDisposable LightCheck()
+    {
+        var previous = _lightCheck.Value;
+        _lightCheck.Value = true;
+        return new Scope(_lightCheck, previous);
+    }
 
     public static bool IsBackground => _background.Value || _optional.Value;
 

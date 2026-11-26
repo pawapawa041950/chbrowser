@@ -35,6 +35,8 @@ public sealed class ThreadMeta
     /// <summary>取りに行っても取れなかったもの (reddit: 大きな枝・スレの真ん中のコメント ID、中身の無い「continue this thread」)。
     /// 提供者が返し、次の取得で続きの判定から外す (= 取れない分を毎回取りに行かない)。取れたものは外す。</summary>
     public HashSet<string> Unreachable { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>直近の取得で掲示板が報告したスレ全体のコメント数 (reddit の num_comments)。巡回で「前回から変わっていない」の判定に使う。</summary>
+    public int? TotalCount { get; set; }
 
     /// <summary>ログから読んだレスに最新の評価値 (<see cref="Scores"/>) を当てる。</summary>
     public IReadOnlyList<Post> ApplyScores(IReadOnlyList<Post> posts)
@@ -243,7 +245,9 @@ internal static class SnapshotThreadFetcher
         var snapshot = await snapshotProvider.FetchSnapshotAsync(
             http, board, threadKey,
             new SnapshotFetchOptions(new HashSet<string>(meta.IdToNumber.Keys, StringComparer.Ordinal), maxExpansions, parentIds,
-                                     OnPartial: ConsumeAsync, UnreachableIds: new HashSet<string>(meta.Unreachable, StringComparer.Ordinal)),
+                                     OnPartial: ConsumeAsync, UnreachableIds: new HashSet<string>(meta.Unreachable, StringComparer.Ordinal),
+                                     PreviousTotalCount: meta.TotalCount,
+                                     SkipExpansionsIfUnchanged: ProviderRequestContext.IsLightCheck && existing.Count > 0),
             ct).ConfigureAwait(false);
 
         // 塊で渡されなかった残り (OnPartial を使わない提供者ならここで全部) を処理する。採番済みの ID は飛ばされる。
@@ -270,8 +274,13 @@ internal static class SnapshotThreadFetcher
         }
 
         meta.LastFetchedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        meta.Truncated        = snapshot.Truncated;
-        meta.TruncatedReason  = snapshot.Truncated ? snapshot.TruncatedReason : null;
+        // 続きの展開を省いた取得 (巡回で新着なし) では、取り切れたかどうかは分からないので前回の状態を残す
+        if (!snapshot.ExpansionSkipped)
+        {
+            meta.Truncated        = snapshot.Truncated;
+            meta.TruncatedReason  = snapshot.Truncated ? snapshot.TruncatedReason : null;
+        }
+        if (snapshot.TotalCount is int total) meta.TotalCount = total;
         if (snapshot.Unreachable is { } unreachable) meta.Unreachable.UnionWith(unreachable);
         meta.Unreachable.RemoveWhere(k => meta.IdToNumber.ContainsKey(k[(k.IndexOf(':') + 1)..]));   // 「種類:ID」の形 (種類は提供者が決める)
         if (snapshot.Notice is not null) meta.Notice = snapshot.Notice;

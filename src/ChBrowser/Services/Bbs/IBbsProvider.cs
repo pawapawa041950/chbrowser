@@ -401,7 +401,11 @@ public sealed record SnapshotFetchOptions(
     int                                         MaxExpansions  = 10,
     IReadOnlySet<string>?                       KnownParentIds = null,
     Func<IReadOnlyList<SnapshotPost>, Task>?    OnPartial      = null,
-    IReadOnlySet<string>?                       UnreachableIds = null);
+    IReadOnlySet<string>?                       UnreachableIds = null,
+    // 巡回 (お気に入りチェック) 用: 前回の取得時のスレ全体のコメント数 (ThreadSnapshot.TotalCount) と、
+    // 「それから変わっておらず最初の応答にも新着が無ければ、続きの展開をしない」指定。
+    int?                                        PreviousTotalCount = null,
+    bool                                        SkipExpansionsIfUnchanged = false);
 
 /// <summary>レスの最新の評価値 (いいね数) と、その時点の自分の評価 (1 / -1 / null)。</summary>
 public sealed record PostScore(long Score, int? MyVote);
@@ -430,4 +434,12 @@ public sealed record SnapshotPost(
 /// (受け手が meta に足して、次回 <see cref="SnapshotFetchOptions.UnreachableIds"/> で渡す)。
 /// <see cref="TruncatedReason"/> は取り切れなかった理由を利用者に伝える文 (レート制限で中断した等。無ければ通常の「続きあり」)。</summary>
 public sealed record ThreadSnapshot(IReadOnlyList<SnapshotPost> Posts, bool Truncated = false, string? ProviderCursor = null, string? Notice = null,
-                                    IReadOnlyCollection<string>? Unreachable = null, string? TruncatedReason = null);
+                                    IReadOnlyCollection<string>? Unreachable = null, string? TruncatedReason = null)
+{
+    /// <summary>掲示板が報告したスレ全体のコメント数 (reddit の num_comments。取得できた数とは限らない)。分からなければ null。</summary>
+    public int? TotalCount { get; init; }
+
+    /// <summary>新着が無いと分かったので続きの展開をしなかった (<see cref="SnapshotFetchOptions.SkipExpansionsIfUnchanged"/>)。
+    /// このとき <see cref="Truncated"/> は意味を持たない (受け手は前回の状態を残す)。</summary>
+    public bool ExpansionSkipped { get; init; }
+}

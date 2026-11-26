@@ -566,6 +566,16 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         }
         await ReportPartialAsync().ConfigureAwait(false);
 
+        // 巡回 (お気に入りチェック): スレ全体のコメント数が前回の取得から変わっておらず、最初の応答にも未保存のコメントが無ければ、
+        // 新着は無いとみなして続きの展開をしない (新着の無いスレに要求を使わない。続きは、開いて更新したときに取る)
+        if (options.SkipExpansionsIfUnchanged && tree.NumComments is int nowTotal && options.PreviousTotalCount == nowTotal
+            && tree.Comments.All(c => options.KnownExternalIds.Contains(c.ExternalId)))
+        {
+            ChBrowser.Services.Logging.LogService.Instance.Write(
+                $"[reddit] snapshot r/{board.DirectoryName}/{threadKey}: 新着なし (コメント数 {nowTotal} のまま)。続きの展開を省略");
+            return new ThreadSnapshot(posts) { TotalCount = nowTotal, ExpansionSkipped = true };
+        }
+
         // 続き (more) の展開。取り方 (要求 1 回ずつ、上から優先):
         //   1. 新しい順 (sort=new) のスレ: トップレベルに未取得があるとき。新着が入る
         //   2. 評価の高い順 (sort=top) のスレ: 初回の取得だけ。スレの真ん中のうち評価の高いコメントが入る
@@ -723,7 +733,8 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         ChBrowser.Services.Logging.LogService.Instance.Write(
             $"[reddit] snapshot r/{board.DirectoryName}/{threadKey}: posts={posts.Count}, more calls={calls}, truncated={truncated}, " +
             $"取れない分 前回まで={unreachable.Count} 今回={newlyUnreachable.Count}");
-        return new ThreadSnapshot(posts, truncated, Unreachable: newlyUnreachable, TruncatedReason: truncated ? truncatedReason : null);
+        return new ThreadSnapshot(posts, truncated, Unreachable: newlyUnreachable, TruncatedReason: truncated ? truncatedReason : null)
+            { TotalCount = tree.NumComments };
     }
 
     /// <summary>直近の応答の「レート制限が回復するまでの秒数」(x-ratelimit-reset) と受け取った時刻。</summary>
@@ -757,7 +768,11 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
     /// <summary>「続き」1 つ。<see cref="Children"/> は t1 の id (接頭辞なし)。</summary>
     public sealed record MoreRef(string ParentId, int Count, IReadOnlyList<string> Children);
 
-    public sealed record CommentTree(SnapshotPost? Submission, List<SnapshotPost> Comments, List<MoreRef> Mores, List<string> Continues);
+    public sealed record CommentTree(SnapshotPost? Submission, List<SnapshotPost> Comments, List<MoreRef> Mores, List<string> Continues)
+    {
+        /// <summary>スレ全体のコメント数 (投稿の num_comments)。無ければ null。</summary>
+        public int? NumComments { get; init; }
+    }
 
     /// <summary>comments API の 2 要素配列 → 投稿 + コメント (木を平坦化、深さ優先) + 続き。</summary>
     public static CommentTree ParseCommentsResponse(byte[] bytes)
@@ -766,16 +781,22 @@ public sealed class RedditProvider : IBbsProvider, ISnapshotThreadProvider
         var mores    = new List<MoreRef>();
         var conts    = new List<string>();
         SnapshotPost? submission = null;
+        int? numComments = null;
         if (!TryParse(bytes, out var doc)) return new CommentTree(null, comments, mores, conts);
         using (doc)
         {
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() < 2) return new CommentTree(null, comments, mores, conts);
             foreach (var c in Children(root[0]))
-                if (Str(c, "kind") == "t3" && c.TryGetProperty("data", out var d)) { submission = ToSubmission(d); break; }
+                if (Str(c, "kind") == "t3" && c.TryGetProperty("data", out var d))
+                {
+                    submission = ToSubmission(d);
+                    if (d.TryGetProperty("num_comments", out var nc) && nc.ValueKind == JsonValueKind.Number && nc.TryGetInt32(out var ncv)) numComments = ncv;
+                    break;
+                }
             WalkListing(root[1], comments, mores, conts);
         }
-        return new CommentTree(submission, comments, mores, conts);
+        return new CommentTree(submission, comments, mores, conts) { NumComments = numComments };
     }
 
     private static void WalkListing(JsonElement listing, List<SnapshotPost> comments, List<MoreRef> mores, List<string> conts)
